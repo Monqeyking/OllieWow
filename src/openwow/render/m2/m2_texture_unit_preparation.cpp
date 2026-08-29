@@ -625,7 +625,12 @@ M2TextureUnitPreparationResult NormalizeSkinTextureLookupIndices(
             break;
           }
         }
-        texture_unit.texture_index = pos;
+        // Classic embedded views keep the original texture-combo index in
+        // the batch.  Preserve an out-of-range combo so the resolver can
+        // reject it safely; using lookup.size() would alias it to a real,
+        // unrelated texture record.
+        texture_unit.texture_index =
+            model.header.version == 256u && pos == model.tex_lookup.size() ? target : pos;
       }
 
       if (!model.uv_anim_lookup.empty()) {
@@ -687,6 +692,33 @@ M2ResolvedSkinTextureUnitCombos ResolveM2SkinTextureUnitCombos(
     return out;
   }
   if (texture_unit.mode == kM2TextureUnitModeNoTexture) {
+    return out;
+  }
+
+  if (model.header.version == 256u) {
+    const auto resolve_classic_texture_index =
+        [&model](const std::size_t combo_index) -> std::optional<std::uint16_t> {
+      if (combo_index >= model.tex_lookup.size()) {
+        return std::nullopt;
+      }
+      const auto texture_index = model.tex_lookup[combo_index];
+      if (texture_index >= model.textures.size()) {
+        return std::nullopt;
+      }
+      return texture_index;
+    };
+
+    const auto primary = resolve_classic_texture_index(texture_unit.texture_index);
+    if (!primary.has_value()) {
+      out.primary_texture_valid = false;
+      return out;
+    }
+    out.primary_texture_index = *primary;
+    if (texture_unit.mode == kM2TextureUnitModeDualLayer) {
+      out.secondary_texture_index = resolve_classic_texture_index(
+          static_cast<std::size_t>(texture_unit.texture_index) + 1u);
+    }
+    out.primary_uv_animation_index = resolve_uv_lookup_or_identity(texture_unit.uv_anim_index);
     return out;
   }
 

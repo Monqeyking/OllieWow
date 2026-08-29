@@ -1,7 +1,8 @@
 #include "openwow/render/m2/m2_gpu_resources.h"
 
 #include "openwow/render/backend/bgfx/bgfx_texture_lease.h"
-#include "openwow/foundation/diagnostics/logging.h"
+
+#include <vector>
 
 namespace openwow::render::m2 {
 namespace {
@@ -68,10 +69,32 @@ M2ResourcePreparationResult M2GpuResources::Commit(
     return Failure(M2ResultReason::kMissingTexture,
                    "texture manager is not bound");
   }
+  std::vector<bool> required(resource.model_data.textures.size(), false);
+  const auto require_batch_textures = [&required](
+      const std::vector<detail::M2ModelResource::RenderBatch>& batches) {
+    for (const auto& batch : batches) {
+      if (batch.texture_count > 0 && batch.texture0_index < required.size()) {
+        required[batch.texture0_index] = true;
+      }
+      if (batch.texture_count > 1 && batch.texture1_index < required.size()) {
+        required[batch.texture1_index] = true;
+      }
+    }
+  };
+  require_batch_textures(resource.render_batches);
+  require_batch_textures(resource.projected_batches);
+  for (const auto& emitter : resource.model_data.particle_emitters) {
+    if (emitter.texture < required.size()) required[emitter.texture] = true;
+  }
+  for (const auto& ribbon : resource.model_data.ribbon_emitters) {
+    for (const auto texture : ribbon.texture_indices) {
+      if (texture < required.size()) required[texture] = true;
+    }
+  }
   for (std::size_t index = 0; index < resource.model_data.textures.size();
        ++index) {
     const auto& texture = resource.model_data.textures[index];
-    if (texture.type != 0u) {
+    if (texture.type != 0u || !required[index]) {
       continue;
     }
     TextureLease lease = texture_manager_->AcquireTextureStrict(texture.name_text);

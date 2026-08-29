@@ -10,6 +10,7 @@ namespace openwow::render::m2 {
 
 struct M2ResolvedSkinTextureUnitCombos {
   std::uint16_t primary_texture_index{0};
+  bool primary_texture_valid{true};
   std::optional<std::uint16_t> secondary_texture_index;
   std::optional<std::uint16_t> primary_uv_animation_index;
   std::optional<std::uint16_t> secondary_uv_animation_index;

@@ -5,6 +5,7 @@
 #include "openwow/data/formats/m2/model_path.h"
 #include "openwow/data/model/m2_model.h"
 #include "openwow/data/texture_cache.h"
+#include "openwow/foundation/diagnostics/logging.h"
 #include "openwow/render/backend/bgfx/renderer_context_services.h"
 
 #include <algorithm>
@@ -54,6 +55,15 @@ M2PreparedResourceBundle PrepareM2ResourceBundle(
                       : TextureManager::PrepareTextureUploadFromLoader(
                             dependency.texture_path, loader);
     if (!upload.valid) {
+      openwow::diagnostics::Log(
+          openwow::diagnostics::LogLevel::kWarn,
+          "Glue M2 shared texture resolve failed: "
+          "func=PrepareM2ResourceBundle "
+          "model=" + model_path +
+              " dependency_index=" +
+              std::to_string(bundle.texture_dependencies.size() - 1u) +
+              " embedded_name=" + dependency.texture_path +
+              " source=" + (texture_preparer ? "texture-preparer" : "file-loader"));
       bundle.status = M2ResultStatus::kFailed;
       bundle.reason = M2ResultReason::kMissingTexture;
       bundle.detail = dependency.texture_path;

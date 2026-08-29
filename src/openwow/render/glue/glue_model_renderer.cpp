@@ -828,7 +828,9 @@ void GlueModelRenderer::PumpSharedModelResources(const bool loading_boost) {
       record.phase = LoadPhase::kFailed;
       openwow::diagnostics::Log(
           openwow::diagnostics::LogLevel::kWarn,
-          "Glue model load failed: path=" + path +
+          "Glue model load failed: "
+          "func=GlueModelRenderer::PumpSharedModelResources "
+          "path=" + path +
               " state=" + std::to_string(static_cast<int>(query.state)) +
               " status=" + std::to_string(static_cast<int>(query.status)) +
               " reason=" + std::to_string(static_cast<int>(query.reason)) +

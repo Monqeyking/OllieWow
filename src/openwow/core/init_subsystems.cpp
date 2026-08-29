@@ -226,18 +226,4 @@ void RenderBootstrap_FpsCleanup() {
 
 }
 
-std::string RaceId_ToModelName(int race_id) {
-    switch (race_id) {
-        case 1: return "Human";
-        case 2: return "Orc";
-        case 3: return "Dwarf";
-        case 4: return "NightElf";
-        case 5: return "Undead";
-        case 6: return "Tauren";
-        case 7: return "Gnome";
-        case 8: return "Troll";
-        default: return {};
-    }
-}
-
 }

@@ -2,6 +2,7 @@
 
 #include "openwow/render/m2/m2_model_repository.h"
 #include "openwow/render/m2/m2_skin_profile.h"
+#include "openwow/render/m2/m2_texture_unit_preparation.h"
 
 #include <algorithm>
 #include <cmath>
@@ -178,6 +179,7 @@ M2ModelPrepareResult PrepareM2ModelPackage(
               .reason = M2ResultReason::kParseFailed,
               .detail = skin_path + ": " + skin.error};
     }
+
     const M2ResourcePreparationResult built =
         build_cpu(resource.model_data, skin.skin, resource);
     if (built.status != M2ResultStatus::kReady) {
@@ -202,13 +204,61 @@ M2ModelPrepareResult PrepareM2ModelPackage(
   }
 
   std::vector<M2ModelTextureDependency> textures;
-  for (std::size_t index = 0; index < resource.model_data.textures.size();
-       ++index) {
+  std::vector<std::uint16_t> seen_texture_indices;
+  const auto add_texture_index = [&](const std::uint16_t index) {
+    if (index >= resource.model_data.textures.size() ||
+        std::find(seen_texture_indices.begin(), seen_texture_indices.end(), index) !=
+            seen_texture_indices.end()) {
+      return;
+    }
     const auto& texture = resource.model_data.textures[index];
-    if (texture.type == 0u && !texture.name_text.empty() &&
-        index <= std::numeric_limits<std::uint16_t>::max()) {
-      textures.push_back({.texture_index = static_cast<std::uint16_t>(index),
-                          .texture_path = texture.name_text});
+    if (texture.type != 0u || texture.name_text.empty()) {
+      return;
+    }
+    seen_texture_indices.push_back(index);
+    textures.push_back({.texture_index = index, .texture_path = texture.name_text});
+  };
+
+  if (!resource.skin_data.texture_units.empty()) {
+    // The render-batch cache is populated after this package is prepared.
+    // Classic models already expose their authoritative texture combos in the
+    // embedded skin data, so use those combos even during the initial pass.
+    // Falling back to every raw texture record here would make an unused
+    // malformed record (for example "inter") abort the whole model.
+    for (const auto& unit : resource.skin_data.texture_units) {
+      const auto shader = ResolveM2SkinTextureUnitShader(resource.model_data, unit);
+      if (!shader.valid || !shader.draws || shader.texture_count == 0u) continue;
+      const auto combos = ResolveM2SkinTextureUnitCombos(resource.model_data, unit);
+      if (!combos.primary_texture_valid) continue;
+      add_texture_index(combos.primary_texture_index);
+      if (shader.texture_count > 1u && combos.secondary_texture_index.has_value()) {
+        add_texture_index(*combos.secondary_texture_index);
+      }
+    }
+  } else if (!resource.IsReadyForRender()) {
+    for (std::size_t index = 0; index < resource.model_data.textures.size(); ++index) {
+      if (index > std::numeric_limits<std::uint16_t>::max()) break;
+      add_texture_index(static_cast<std::uint16_t>(index));
+    }
+  } else {
+    // Benilla/Vanilla resolves M2 texture filenames from the texture-combo
+    // records used by render batches. Do not make an unused or malformed
+    // filename record fail an otherwise drawable model.
+    for (const auto& unit : resource.skin_data.texture_units) {
+      const auto shader = ResolveM2SkinTextureUnitShader(resource.model_data, unit);
+      if (!shader.valid || !shader.draws || shader.texture_count == 0u) continue;
+      const auto combos = ResolveM2SkinTextureUnitCombos(resource.model_data, unit);
+      if (!combos.primary_texture_valid) continue;
+      add_texture_index(combos.primary_texture_index);
+      if (shader.texture_count > 1u && combos.secondary_texture_index.has_value()) {
+        add_texture_index(*combos.secondary_texture_index);
+      }
+    }
+    for (const auto& emitter : resource.model_data.particle_emitters) {
+      add_texture_index(emitter.texture);
+    }
+    for (const auto& ribbon : resource.model_data.ribbon_emitters) {
+      for (const auto index : ribbon.texture_indices) add_texture_index(index);
     }
   }
   const M2ModelSpatialInfo spatial_info = BuildM2ModelSpatialInfo(resource);

@@ -87,6 +87,4 @@ RenderBootstrapFpsOverlayPaintOutput RenderBootstrap_FpsOverlayPaint(
 
 void RenderBootstrap_FpsCleanup();
 
-std::string RaceId_ToModelName(int race_id);
-
 }

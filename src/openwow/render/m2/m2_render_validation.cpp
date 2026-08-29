@@ -470,6 +470,12 @@ bool ValidateM2TextureUnitForRender(
     return true;
   }
   const auto combos = ResolveM2SkinTextureUnitCombos(model, texture_unit);
+  if (!combos.primary_texture_valid) {
+    SetIssue(issue, M2ResultReason::kMissingTexture,
+             label + " texture combo index out of range: " +
+                 std::to_string(texture_unit.texture_index));
+    return false;
+  }
   if (!ValidateTextureIndex(model, combos.primary_texture_index, "primary", issue)) {
     if (issue != nullptr) issue->detail = label + " " + issue->detail;
     return false;
@@ -572,6 +578,16 @@ M2RenderPreparationResult PrepareM2RenderPackage(
   for (std::size_t index = 0; index < render_batch_texture_unit_count; ++index) {
     const auto& texture_unit = render_skin.texture_units[index];
     const auto shader = ResolveM2SkinTextureUnitShader(render_model, texture_unit);
+    const auto combos = ResolveM2SkinTextureUnitCombos(render_model, texture_unit);
+    if (shader.draws && shader.texture_count != 0u && !combos.primary_texture_valid) {
+      diagnostics::Log(
+          diagnostics::LogLevel::kWarn,
+          "M2System: skipped Classic texture batch: model=" + resource.model_path +
+              " batch=" + std::to_string(index) +
+              " combo=" + std::to_string(texture_unit.texture_index) +
+              " lookup_count=" + std::to_string(render_model.tex_lookup.size()));
+      continue;
+    }
     issue = {};
     if (!ValidateM2TextureUnitForRender(render_model, render_skin, texture_unit, index,
                                         &issue)) {
@@ -596,7 +612,6 @@ M2RenderPreparationResult PrepareM2RenderPackage(
     batch.render_pass_order_key =
         static_cast<std::uint32_t>(texture_unit.render_flags_index)
         << kM2RenderPassOrderKeyShift;
-    const auto combos = ResolveM2SkinTextureUnitCombos(render_model, texture_unit);
     batch.texture0_index = combos.primary_texture_index;
     batch.texture1_index = combos.secondary_texture_index.value_or(0u);
     const auto uv_index = [&render_model](const std::optional<std::uint16_t> value) {

@@ -84,7 +84,7 @@ public:
   void SetBackgroundZoneState(int zone_id, int param);
   void SetMapId(std::uint32_t map_id);
   void SetMapChunkFocus(int chunk_y, int chunk_x);
-  void SetSelectedRace(int race_id);
+  void SetSelectedRace(int race_id, std::string model_name = {});
   int GetSelectedRace();
   bool IsCurrentRaceReadyForLoading();
   bool IsStartRaceCommonComplete();
@@ -134,7 +134,7 @@ void SetDataPreloadConvertedTrialFlag(bool converted);
 void SetDataPreloadBackgroundZoneState(int zone_id, int param);
 void SetDataPreloadMapId(std::uint32_t map_id);
 void SetDataPreloadMapChunkFocus(int chunk_y, int chunk_x);
-void SetDataPreloadSelectedRace(int race_id);
+void SetDataPreloadSelectedRace(int race_id, std::string model_name = {});
 int GetDataPreloadSelectedRace();
 bool IsCurrentDataPreloadRaceReadyForLoading();
 bool IsStartRaceCommonDataPreloadComplete();

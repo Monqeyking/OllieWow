@@ -1986,6 +1986,11 @@ std::string_view LookupGlueRaceClientFileString(lua_State *state, const int race
   return {};
 }
 
+void SetDataPreloadSelectedRaceFromGlue(lua_State *state, const int race_id) {
+  const std::string_view model_name = LookupGlueRaceClientFileString(state, race_id);
+  openwow::vfs::SetDataPreloadSelectedRace(race_id, std::string(model_name));
+}
+
 std::string_view LookupGlueRaceTag(lua_State *state, const int race_id) {
   if (const std::string_view race_tag = LookupGlueRaceClientFileString(state, race_id);
       !race_tag.empty()) {
@@ -2215,7 +2220,7 @@ void ResetCharCustomizeState(lua_State *state, GlueGameState &game_state, Legacy
       continue;
     }
     game_state.create_race = race_id;
-    openwow::vfs::SetDataPreloadSelectedRace(game_state.create_race);
+    SetDataPreloadSelectedRaceFromGlue(state, game_state.create_race);
     break;
   }
 
@@ -2701,7 +2706,7 @@ static void SelectCharacterCreationRace(lua_State *state,
     auto &rng = RequireGlueCustomizationRandom(state);
     PickRandomAllowedCreateClassForRace(state, game_state, rng);
   }
-  openwow::vfs::SetDataPreloadSelectedRace(game_state.create_race);
+  SetDataPreloadSelectedRaceFromGlue(state, game_state.create_race);
   NormalizeCreateCustomizationStateWithDbc(state, game_state);
   RefreshCreateCustomizationDisplay(game_state);
   if (game_state.background_controller != nullptr) {
@@ -2788,7 +2793,7 @@ int LuaSetSelectedSex(lua_State *state) {
             CharacterCustomizationRandomizationOrder::SetupModel);
       }
 
-      openwow::vfs::SetDataPreloadSelectedRace(gs->create_race);
+      SetDataPreloadSelectedRaceFromGlue(state, gs->create_race);
       NormalizeCreateCustomizationStateWithDbc(state, *gs);
       RefreshCreateCustomizationDisplay(*gs);
       if (gs->background_controller != nullptr) {
@@ -3170,7 +3175,7 @@ int LuaCustomizeExistingCharacter(lua_State *s) {
 
   const auto &ch = gs->characters[static_cast<std::size_t>(idx)];
   ApplyCharacterSummaryToCreateSelection(*gs, ch);
-  openwow::vfs::SetDataPreloadSelectedRace(gs->create_race);
+  SetDataPreloadSelectedRaceFromGlue(s, gs->create_race);
   NormalizeCreateCustomizationStateWithDbc(s, *gs);
   RefreshCreateCustomizationDisplay(*gs);
   return 0;
@@ -3589,32 +3594,44 @@ int LuaPaidChange_GetCurrentClassIndex(lua_State *s) {
 }
 
 int LuaGetCreateBackgroundModel(lua_State *s) {
-  if (openwow::data::IsOnlineModeActive()) {
-    lua_pushstring(s, "CharacterSelect");
-    return 1;
-  }
-
   const auto *gs = GetGameState(s);
-  if (gs == nullptr) {
-    lua_pushstring(s, "");
-    return 1;
+  std::string_view result;
+  std::string_view source = "empty";
+  if (openwow::data::IsOnlineModeActive()) {
+    result = "CharacterSelect";
+    source = "online-mode";
+  } else if (gs != nullptr && gs->create_class == 6) {
+    result = LookupGlueBackgroundClassToken(s, gs->create_class);
+    if (!result.empty()) {
+      source = "dbc-class-token";
+    }
   }
-
-  if (gs->create_class == 6) {
-    const std::string_view class_tag = LookupGlueBackgroundClassToken(s, gs->create_class);
-    if (!class_tag.empty()) {
-      PushLuaStringView(s, class_tag);
-      return 1;
+  if (result.empty() && gs != nullptr) {
+    result = LookupGlueBackgroundRaceToken(s, gs->create_race);
+    if (!result.empty()) {
+      source = "dbc-race-token";
     }
   }
 
-  const std::string_view race_tag = LookupGlueBackgroundRaceToken(s, gs->create_race);
-  if (!race_tag.empty()) {
-    PushLuaStringView(s, race_tag);
-    return 1;
-  }
+  openwow::diagnostics::Log(
+      openwow::diagnostics::LogLevel::kInfo,
+      "Glue CharacterCreate background resolve: "
+      "func=LuaGetCreateBackgroundModel "
+      "screen=" + (gs == nullptr || gs->current_screen.empty()
+                        ? "<none>"
+                        : gs->current_screen) +
+          " race_id=" +
+          std::to_string(gs == nullptr ? 0 : gs->create_race) +
+          " class_id=" +
+          std::to_string(gs == nullptr ? 0 : gs->create_class) +
+          " source=" + std::string(source) +
+          " result=" + (result.empty() ? "<empty>" : std::string(result)));
 
-  lua_pushstring(s, "");
+  if (!result.empty()) {
+    PushLuaStringView(s, result);
+  } else {
+    lua_pushstring(s, "");
+  }
   return 1;
 }
 

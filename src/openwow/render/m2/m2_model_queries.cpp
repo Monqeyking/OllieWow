@@ -363,6 +363,7 @@ M2ModelTextureDependenciesQuery M2ModelQueries::QueryTextureDependencies(
     const auto shader = ResolveM2SkinTextureUnitShader(model, unit);
     if (!shader.valid || !shader.draws || shader.texture_count == 0u) continue;
     const auto refs = ResolveM2SkinTextureUnitCombos(model, unit);
+    if (!refs.primary_texture_valid) continue;
     add_index(refs.primary_texture_index);
     if (shader.texture_count > 1u && refs.secondary_texture_index.has_value()) {
       add_index(*refs.secondary_texture_index);

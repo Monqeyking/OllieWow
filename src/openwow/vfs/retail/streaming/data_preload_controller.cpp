@@ -1,11 +1,11 @@
 #include "openwow/vfs/retail/streaming/data_preload_controller.h"
 #include "openwow/vfs/retail/sfile_archive.h"
 
-#include "openwow/core/init_subsystems.h"
 #include "openwow/core/md5.h"
 #include "openwow/core/storm_thread.h"
 #include "openwow/core/streaming_storage.h"
 #include "openwow/data/streaming_init.h"
+#include "openwow/foundation/diagnostics/logging.h"
 
 #include <algorithm>
 #include <array>
@@ -51,6 +51,7 @@ struct ControlState {
   int selected_race = -1;
   std::int32_t map_chunk_focus_key = -1;
   std::int32_t map_tile_focus_key = -1;
+  std::map<int, std::string> race_model_names;
   bool dirty = true;
 };
 
@@ -70,7 +71,6 @@ struct BlockingRequestWaitState {
   bool completed = false;
 };
 
-constexpr std::array<int, 8> kBackgroundRaceSweep = {1, 4, 5, 6, 2, 7, 3, 8};
 constexpr std::array<int, 7> kBackgroundZoneSweep = {10, 44, 267, 331, 400, 406, 11};
 constexpr std::array<const char *, 8> kArchiveListFiles = {
     "terrain.MPQ", "wmo.MPQ",   "model.MPQ",     "texture.MPQ",
@@ -120,12 +120,6 @@ std::vector<std::string> ParseListEntries(const std::string &contents) {
     cursor = delimiter + 2;
   }
   return entries;
-}
-
-std::string BuildStartRacePath(int race_id) {
-  const std::string race_name = openwow::core::RaceId_ToModelName(race_id);
-  return race_name.empty() ? "TrialLists/StartRaceCommon.lst"
-                           : "TrialLists/Start" + race_name + ".lst";
 }
 
 bool IsThreadActive(const std::shared_ptr<ThreadHandle> &handle) {
@@ -204,6 +198,29 @@ struct DataPreloadController::RuntimeState {
 
 namespace {
 
+std::string BuildStartRacePath(const ControlState &control, const int race_id) {
+  const auto it = control.race_model_names.find(race_id);
+  return it == control.race_model_names.end() || it->second.empty()
+             ? "TrialLists/StartRaceCommon.lst"
+             : "TrialLists/Start" + it->second + ".lst";
+}
+
+std::string BuildStartBackgroundPath(const ControlState &control, const int race_id) {
+  const auto it = control.race_model_names.find(race_id);
+  return it == control.race_model_names.end() || it->second.empty()
+             ? std::string{}
+             : "TrialLists/StartBackground" + it->second + ".lst";
+}
+
+std::vector<int> KnownRaceIds(const ControlState &control) {
+  std::vector<int> ids;
+  ids.reserve(control.race_model_names.size());
+  for (const auto &[race_id, model_name] : control.race_model_names) {
+    if (!model_name.empty()) ids.push_back(race_id);
+  }
+  return ids;
+}
+
 bool ReadSource(DataPreloadController::RuntimeState &runtime, const SourceSpec &source,
                 std::string *contents) {
   if (runtime.test_list_loader) {
@@ -223,23 +240,20 @@ std::optional<SourceSpec> BuildSourceSpec(const ControlState &control, int worke
   case 0: return MakeListSource("TrialLists/StartClient.lst");
   case 1: return MakeListSource("TrialLists/StartCharacter.lst");
   case 2: return MakeListSource("TrialLists/StartRaceCommon.lst");
-  case 3: return MakeListSource(BuildStartRacePath(control.selected_race));
+  case 3: return MakeListSource(BuildStartRacePath(control, control.selected_race));
   case 4:
     if (control.background_zone_id <= 0) return std::nullopt;
     return MakeListSource("TrialLists/StartBackgroundZone" +
                           std::to_string(control.background_zone_id) + ".lst");
   case 5: {
-    const std::string race = openwow::core::RaceId_ToModelName(control.selected_race);
-    return race.empty() ? std::nullopt
-                        : std::optional<SourceSpec>(MakeListSource("TrialLists/StartBackground" +
-                                                                  race + ".lst"));
+    const std::string path = BuildStartBackgroundPath(control, control.selected_race);
+    return path.empty() ? std::nullopt : std::optional<SourceSpec>(MakeListSource(path));
   }
   case 6: {
-    if (iteration >= kBackgroundRaceSweep.size()) return std::nullopt;
-    const std::string race = openwow::core::RaceId_ToModelName(kBackgroundRaceSweep[iteration]);
-    return race.empty() ? std::nullopt
-                        : std::optional<SourceSpec>(MakeListSource("TrialLists/StartBackground" +
-                                                                  race + ".lst"));
+    const auto known_races = KnownRaceIds(control);
+    if (iteration >= known_races.size()) return std::nullopt;
+    const std::string path = BuildStartBackgroundPath(control, known_races[iteration]);
+    return path.empty() ? std::nullopt : std::optional<SourceSpec>(MakeListSource(path));
   }
   case 7:
     if (iteration >= kBackgroundZoneSweep.size()) return std::nullopt;
@@ -256,7 +270,8 @@ std::optional<SourceSpec> BuildSourceSpec(const ControlState &control, int worke
   }
 }
 
-void AdvanceWorkerState(int &worker_state, std::size_t &iteration, bool converted_trial) {
+void AdvanceWorkerState(ControlState &control, int &worker_state, std::size_t &iteration,
+                        bool converted_trial) {
   switch (worker_state) {
   case 0: worker_state = 1; return;
   case 1:
@@ -265,7 +280,7 @@ void AdvanceWorkerState(int &worker_state, std::size_t &iteration, bool converte
   case 2: worker_state = 6; return;
   case 4: worker_state = 5; return;
   case 6:
-    if (iteration == kBackgroundRaceSweep.size()) { worker_state = 7; iteration = 0; }
+    if (iteration >= control.race_model_names.size()) { worker_state = 7; iteration = 0; }
     return;
   case 7:
     if (iteration == kBackgroundZoneSweep.size()) {
@@ -478,7 +493,8 @@ void SelectNextNodeLocked(DataPreloadController::RuntimeState &runtime, bool adv
   std::size_t iteration = 0;
   while (runtime.control.worker_state != 11 && runtime.control.worker_state != 12) {
     if (advance) {
-      AdvanceWorkerState(runtime.control.worker_state, iteration, runtime.control.converted_trial);
+      AdvanceWorkerState(runtime.control, runtime.control.worker_state, iteration,
+                         runtime.control.converted_trial);
       if (runtime.control.worker_state == 11 || runtime.control.worker_state == 12) break;
     }
     const int worker_state = runtime.control.worker_state;
@@ -858,10 +874,24 @@ void DataPreloadController::SetMapChunkFocus(int chunk_y, int chunk_x) {
   runtime_->control.map_chunk_focus_key = chunk_key;
 }
 
-void DataPreloadController::SetSelectedRace(int race_id) {
+void DataPreloadController::SetSelectedRace(int race_id, std::string model_name) {
   std::lock_guard lock(runtime_->mutex);
+  if (!model_name.empty()) {
+    runtime_->control.race_model_names[race_id] = std::move(model_name);
+  }
   if (runtime_->control.selected_race == race_id) return;
   runtime_->control.selected_race = race_id;
+  const auto model_it = runtime_->control.race_model_names.find(race_id);
+  const std::string resolved_model_name =
+      model_it == runtime_->control.race_model_names.end() ? std::string{} : model_it->second;
+  openwow::diagnostics::Log(
+      openwow::diagnostics::LogLevel::kInfo,
+      "Glue CharacterCreate preload race: "
+      "func=DataPreloadController::SetSelectedRace "
+      "race_id=" + std::to_string(race_id) +
+          " source=dbc-client-file-string " +
+          "model_name=" + (resolved_model_name.empty() ? "<none>" : resolved_model_name) +
+          " list=" + BuildStartRacePath(runtime_->control, race_id));
   runtime_->control.dirty = true;
   SignalWorkerLocked(*runtime_);
 }
@@ -873,8 +903,8 @@ int DataPreloadController::GetSelectedRace() {
 
 double DataPreloadController::GetStartRaceProgress(int race_id) {
   const std::string common = "TrialLists/StartRaceCommon.lst";
-  const std::string race = BuildStartRacePath(race_id);
   std::lock_guard lock(runtime_->mutex);
+  const std::string race = BuildStartRacePath(runtime_->control, race_id);
   double common_progress = 0.0;
   const double common_half = QueryCachedProgressLocked(*runtime_, common, &common_progress)
                                  ? common_progress * 0.5
@@ -890,8 +920,12 @@ bool DataPreloadController::IsCurrentRaceReadyForLoading() {
   if (!openwow::data::IsOnlineModeActive()) return true;
   const int race = GetSelectedRace();
   if (race <= 0) return false;
-  const std::string race_path = BuildStartRacePath(race);
   EnsureListMaterialized(*runtime_, "TrialLists/StartRaceCommon.lst");
+  std::string race_path;
+  {
+    std::lock_guard lock(runtime_->mutex);
+    race_path = BuildStartRacePath(runtime_->control, race);
+  }
   EnsureListMaterialized(*runtime_, race_path);
   std::lock_guard lock(runtime_->mutex);
   return IsCachedResolvableLocked(*runtime_, "TrialLists/StartRaceCommon.lst") &&
@@ -906,7 +940,10 @@ bool DataPreloadController::IsStartRaceCommonComplete() {
 
 bool DataPreloadController::IsStartRaceComplete(int race_id) {
   if (!IsStartRaceCommonComplete()) return false;
-  const std::string race = BuildStartRacePath(race_id);
+  const std::string race = [&] {
+    std::lock_guard lock(runtime_->mutex);
+    return BuildStartRacePath(runtime_->control, race_id);
+  }();
   EnsureListMaterialized(*runtime_, race);
   std::lock_guard lock(runtime_->mutex);
   return IsCachedResolvableLocked(*runtime_, race);
@@ -1103,7 +1140,9 @@ void SetDataPreloadMapId(std::uint32_t map) { RetailDataPreloadController().SetM
 void SetDataPreloadMapChunkFocus(int y, int x) {
   RetailDataPreloadController().SetMapChunkFocus(y, x);
 }
-void SetDataPreloadSelectedRace(int race) { RetailDataPreloadController().SetSelectedRace(race); }
+void SetDataPreloadSelectedRace(int race, std::string model_name) {
+  RetailDataPreloadController().SetSelectedRace(race, std::move(model_name));
+}
 int GetDataPreloadSelectedRace() { return RetailDataPreloadController().GetSelectedRace(); }
 bool IsCurrentDataPreloadRaceReadyForLoading() {
   return RetailDataPreloadController().IsCurrentRaceReadyForLoading();

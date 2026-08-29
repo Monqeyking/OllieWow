@@ -5,6 +5,7 @@
 
 #include "openwow/render/models/characters/character_model_path.h"
 #include "openwow/render/m2/m2_system.h"
+#include "openwow/foundation/diagnostics/logging.h"
 #include "openwow/ui/glue/character_customization_randomizer.h"
 #include "openwow/ui/glue/glue_game_state.h"
 
@@ -416,6 +417,7 @@ void GlueCharSelectScene::Reset() {
   prop_model_path_.reset();
   selected_character_display_initialized_ = false;
   character_display_preloads_.clear();
+  last_create_model_resolution_trace_.clear();
 
   RebuildAttachments();
   ApplySelectFacing(0.0f);
@@ -1057,9 +1059,69 @@ void GlueCharSelectScene::SyncCreateCharacter(const GlueGameState &gs) {
       static_cast<std::uint8_t>(std::max(gs.create_facial_hair, 0));
   PopulateCreatePreviewEquipment(appearance, gs);
 
+  std::string resolution_source = "fallback-no-dbc";
+  std::string dbc_token;
+  std::string expected_model_path;
+  bool expected_model_exists = false;
+  bool enumerated_model_exists = false;
+  if (chr_races_ != nullptr) {
+    const auto *entry = chr_races_->LookupEntry(appearance.race);
+    if (entry == nullptr) {
+      resolution_source = "fallback-dbc-entry-missing";
+    } else {
+      const std::string_view client_prefix =
+          !entry->client_file_string.empty() ? entry->client_file_string
+                                             : entry->model_client_prefix;
+      dbc_token = std::string(client_prefix);
+      if (client_prefix.empty()) {
+        resolution_source = "dbc-empty-token";
+      } else if (vfs_ == nullptr) {
+        resolution_source = "dbc-no-vfs";
+      } else {
+        expected_model_path =
+            std::string("Character\\") + std::string(client_prefix) +
+            (appearance.gender == 0u ? "\\Male\\" : "\\Female\\") +
+            std::string(client_prefix) +
+            (appearance.gender == 0u ? "Male.m2" : "Female.m2");
+        expected_model_exists = vfs_->Exists(expected_model_path);
+        if (expected_model_exists) {
+          resolution_source = "dbc-direct";
+        } else {
+          enumerated_model_exists =
+              !FindCharacterModelPath(*vfs_, client_prefix, appearance.gender).empty();
+          resolution_source = enumerated_model_exists
+                                  ? "dbc-enumerated"
+                                  : "dbc-model-missing";
+        }
+      }
+    }
+  }
+
   const std::string model_path =
       NormalizeM2Path(CharacterModelPathForRace(appearance.race,
                                                 appearance.gender));
+  const std::string trace_key =
+      std::to_string(appearance.race) + ":" +
+      std::to_string(appearance.gender) + ":" + resolution_source + ":" +
+      dbc_token + ":" + expected_model_path + ":" + model_path + ":" +
+      (expected_model_exists ? "1" : "0") + ":" +
+      (enumerated_model_exists ? "1" : "0");
+  if (trace_key != last_create_model_resolution_trace_) {
+    last_create_model_resolution_trace_ = trace_key;
+    openwow::diagnostics::Log(
+        openwow::diagnostics::LogLevel::kInfo,
+        "Glue CharacterCreate model resolve: "
+        "func=GlueCharSelectScene::CharacterModelPathForRace "
+        "race_id=" + std::to_string(appearance.race) +
+            " gender=" + std::to_string(appearance.gender) +
+            " source=" + resolution_source +
+            " dbc_token=" + (dbc_token.empty() ? "<nil>" : dbc_token) +
+            " expected=" +
+            (expected_model_path.empty() ? "<none>" : expected_model_path) +
+            " expected_exists=" + (expected_model_exists ? "1" : "0") +
+            " enumerated_exists=" + (enumerated_model_exists ? "1" : "0") +
+            " result=" + (model_path.empty() ? "<empty>" : model_path));
+  }
   if (model_path.empty() || !HasValidBaseSkinSelection(appearance)) {
     // Keep the last valid preview while the new DBC/model/texture selection
     // is unavailable. Selection code must not turn a temporary asset miss
