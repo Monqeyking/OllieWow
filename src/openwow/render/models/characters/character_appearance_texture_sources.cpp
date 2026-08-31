@@ -2,14 +2,16 @@
 
 #include "openwow/data/formats/dbc/dbc_loader.h"
 
+#include <cstdint>
 #include <string_view>
+#include <vector>
 
 namespace openwow::render {
 namespace {
 
 constexpr std::size_t kBackEquipmentSlot = 14u;
 
-const openwow::data::dbc::CharSectionsEntry *FindSection(
+const openwow::data::dbc::CharSectionsEntry *FindNormalSection(
     const openwow::data::dbc::DbcStore<openwow::data::dbc::CharSectionsEntry>
         &char_sections,
     const CharacterAppearanceSelection &selection,
@@ -17,24 +19,55 @@ const openwow::data::dbc::CharSectionsEntry *FindSection(
     const std::uint32_t variation) {
 
   const auto &entries = char_sections.entries();
-  const openwow::data::dbc::CharSectionsEntry *extra_section = nullptr;
   for (auto it = entries.rbegin(); it != entries.rend(); ++it) {
     if (it->race_id == selection.race && it->sex_id == selection.gender &&
         it->base_section == base_section && it->type == type &&
-        it->variation == variation) {
-      // Benilla's Classic loader gives the normal row precedence over an
-      // optional/extra row (CharSections flags bit 0), regardless of file
-      // order. Keep the reverse scan for the legacy last-row behavior among
-      // rows of the same kind, but never let an extra row mask the normal one.
-      if ((it->flags & 1u) == 0u) {
-        return &*it;
-      }
-      if (extra_section == nullptr) {
-        extra_section = &*it;
-      }
+        it->variation == variation && (it->flags & 1u) == 0u) {
+      return &*it;
     }
   }
-  return extra_section;
+  return nullptr;
+}
+
+const openwow::data::dbc::CharSectionsEntry *FindSkinSection(
+    const openwow::data::dbc::DbcStore<openwow::data::dbc::CharSectionsEntry>
+        &char_sections,
+    const CharacterAppearanceSelection &selection,
+    const std::uint32_t skin_slot) {
+  // Classic's client does not serialize CharSections.Flags in PLAYER_BYTES.
+  // It builds one index space per (race, sex, section, variation): normal
+  // rows occupy ColorIndex [0, base_count), then Flags&1 rows occupy the
+  // following slots at base_count + ColorIndex. The skin byte indexes that
+  // combined space. Keep the two row classes separate so a custom skin such
+  // as skin slot 9 resolves to the first flagged row rather than to the row
+  // whose DBC ColorIndex happens to be 9.
+  std::vector<const openwow::data::dbc::CharSectionsEntry *> normal_rows;
+  std::vector<const openwow::data::dbc::CharSectionsEntry *> extra_rows;
+  for (const auto &entry : char_sections.entries()) {
+    if (entry.race_id != selection.race || entry.sex_id != selection.gender ||
+        entry.base_section != 0u || entry.type != 0u) {
+      continue;
+    }
+    if ((entry.flags & 1u) == 0u) {
+      normal_rows.push_back(&entry);
+    } else {
+      extra_rows.push_back(&entry);
+    }
+  }
+
+  const auto *rows = &normal_rows;
+  std::uint32_t color_index = skin_slot;
+  if (static_cast<std::size_t>(skin_slot) >= normal_rows.size()) {
+    rows = &extra_rows;
+    color_index = skin_slot - static_cast<std::uint32_t>(normal_rows.size());
+  }
+
+  for (auto it = rows->rbegin(); it != rows->rend(); ++it) {
+    if ((*it)->variation == color_index) {
+      return *it;
+    }
+  }
+  return nullptr;
 }
 
 std::string CopyTexture(const openwow::data::dbc::CharSectionsEntry *entry,
@@ -80,18 +113,16 @@ CharacterAppearanceTextureSources BuildCharacterAppearanceTextureSources(
     return sources;
   }
 
-  const auto *base = FindSection(*char_sections, selection, 0u, 0u,
-                                 selection.skin_color);
-  const auto *face = FindSection(*char_sections, selection, 1u, selection.face,
-                                 selection.skin_color);
-  const auto *facial_hair = FindSection(*char_sections, selection, 2u,
-                                        selection.facial_hair,
-                                        selection.hair_color);
-  const auto *hair = FindSection(*char_sections, selection, 3u,
-                                 selection.hair_style,
-                                 selection.hair_color);
-  const auto *underwear = FindSection(*char_sections, selection, 4u, 0u,
-                                      selection.skin_color);
+  const auto *base = FindSkinSection(*char_sections, selection,
+                                     selection.skin_color);
+  const auto *face = FindNormalSection(*char_sections, selection, 1u,
+                                       selection.face, selection.skin_color);
+  const auto *facial_hair = FindNormalSection(
+      *char_sections, selection, 2u, selection.facial_hair, selection.hair_color);
+  const auto *hair = FindNormalSection(*char_sections, selection, 3u,
+                                       selection.hair_style, selection.hair_color);
+  const auto *underwear = FindNormalSection(*char_sections, selection, 4u, 0u,
+                                            selection.skin_color);
 
   sources.base_skin = CopyTexture(base, 0u);
   sources.extra_skin = CopyTexture(base, 1u);
@@ -109,7 +140,8 @@ CharacterAppearanceTextureSources BuildCharacterAppearanceTextureSources(
         race != nullptr &&
         (race->flags & kChrRacesBaldHairSubstituteFlag) != 0u) {
       const auto *substitute =
-          FindSection(*char_sections, selection, 3u, 1u, selection.hair_color);
+          FindNormalSection(*char_sections, selection, 3u, 1u,
+                            selection.hair_color);
       sources.hair = CopyTexture(substitute, 0u);
     }
   }
