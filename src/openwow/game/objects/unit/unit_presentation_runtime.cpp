@@ -1239,8 +1239,11 @@ bool UnitPresentationRuntime::InitPlayerDisplayCollisionBounds(const bool growin
   float raw_scale = 1.0f;
   const float effective_scale = ScaledModelHeight(cdi, cmd, &raw_scale);
 
-  if (std::fabs(cmd->collision_width) < kRetailFloatEpsilon ||
-      std::fabs(cmd->collision_height) < kRetailFloatEpsilon) {
+  // Classic/Turtle CreatureModelData keeps field 14 reserved; unlike later
+  // clients it does not provide a usable collision width there. Keep the
+  // model-specific height from field 15, but use the client's standard player
+  // width instead of rejecting the bounds because collision_width is zero.
+  if (std::fabs(cmd->collision_height) < kRetailFloatEpsilon) {
     return true;
   }
 
@@ -1250,7 +1253,7 @@ bool UnitPresentationRuntime::InitPlayerDisplayCollisionBounds(const bool growin
 
   if (!growing && owner_.IsActivePlayer()) {
     const auto position = owner_.GetPosition();
-    const float half_width = cmd->collision_width * effective_scale * 0.5f;
+    const float half_width = kDefaultCollisionWidth * effective_scale * 0.5f;
     const float height = cmd->collision_height * effective_scale;
     const float aabb[6] = {
         position.x - half_width,
@@ -1267,7 +1270,7 @@ bool UnitPresentationRuntime::InitPlayerDisplayCollisionBounds(const bool growin
   }
 
   auto &move_data = owner_.Movement().Data();
-  move_data.InitCollisionBounds(cmd->collision_width, cmd->collision_height,
+  move_data.InitCollisionBounds(kDefaultCollisionWidth, cmd->collision_height,
                                 effective_scale, raw_scale, forced,
                                 owner_.Movement().IsNavigableAsPlayer());
   return true;

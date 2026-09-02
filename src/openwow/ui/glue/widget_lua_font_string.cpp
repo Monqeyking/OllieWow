@@ -36,6 +36,7 @@
 
 #include "openwow/ui/glue/widget_lua_adapter_support.h"
 #include "openwow/ui/glue/widget_lua_bindings.h"
+#include "openwow/foundation/diagnostics/logging.h"
 
 namespace openwow::ui::glue::detail {
 
@@ -310,6 +311,9 @@ int LuaWidget_SetText(lua_State* state) {
   const char* text = lua_tostring(state, 2);
   if (auto* runtime = GetWidgetRuntime(state); runtime != nullptr) {
     const std::string next = ExpandSimpleRenderScriptText(text);
+    const bool is_character_create_name =
+        openwow::text::EqualsIgnoreCaseAscii(widget.name, "CharacterCreateNameEdit");
+    const std::string before = is_character_create_name ? runtime->GetText(widget.name) : "";
     if (openwow::text::EqualsIgnoreCaseAscii(widget.kind, "EditBox")) {
       if (auto* glue_runtime = GetGlueRuntime(state); glue_runtime != nullptr) {
         (void)glue_runtime->SetEditBoxTextProgrammatically(widget.name, next);
@@ -318,6 +322,16 @@ int LuaWidget_SetText(lua_State* state) {
       }
     } else {
       runtime->SetText(widget.name, next);
+    }
+    if (is_character_create_name) {
+      openwow::diagnostics::Log(
+          openwow::diagnostics::LogLevel::kInfo,
+          "Glue CharacterCreate random-name: func=SetText widget=" + widget.name +
+              " before=" + (before.empty() ? "<empty>" : before) +
+              " requested=" + (next.empty() ? "<empty>" : next) +
+              " after=" +
+              (runtime->GetText(widget.name).empty() ? "<empty>"
+                                                      : runtime->GetText(widget.name)));
     }
   }
   return 0;

@@ -29,13 +29,13 @@ BEGIN
         // 040904b0 = U.S. English, Unicode.
         BLOCK "040904b0"
         BEGIN
-            VALUE "CompanyName", "OpenWoW contributors"
-            VALUE "FileDescription", "OpenWoW client (World of Warcraft 3.3.5a reimplementation)"
+            VALUE "CompanyName", "OllieWoW contributors"
+            VALUE "FileDescription", "OllieWoW (client)"
             VALUE "FileVersion", "@OPENWOW_VERSION_RC@"
             VALUE "InternalName", "openwow-client"
-            VALUE "LegalCopyright", "OpenWoW contributors"
+            VALUE "LegalCopyright", "OllieWoW contributors"
             VALUE "OriginalFilename", "OllieWoW.exe"
-            VALUE "ProductName", "OpenWoW"
+            VALUE "ProductName", "OllieWoW"
             VALUE "ProductVersion", "@OPENWOW_VERSION_RC@"
         END
     END

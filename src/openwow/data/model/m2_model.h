@@ -109,6 +109,14 @@ struct M2TrackSegment {
 };
 static_assert(sizeof(M2TrackSegment) == 16, "M2TrackSegment expected to be 16 bytes.");
 
+// Classic stores one shared key timeline and gives each animation a range that
+// brackets its keys.  The range is not itself a standalone key set.
+struct M2ClassicTrackRange {
+  std::uint32_t first_key{0};
+  std::uint32_t last_key{0};
+  std::uint32_t sequence_start_ms{0};
+};
+
 template <typename T> struct M2Track {
   std::uint16_t interpolation{0};
   std::int16_t global_sequence{-1};
@@ -118,6 +126,14 @@ template <typename T> struct M2Track {
   std::vector<std::uint32_t> key_times_ms;
 
   std::vector<T> key_values;
+
+  // These arrays are populated for Classic tracks with one shared timeline.
+  // The legacy per-segment arrays above remain available for external-sequence
+  // publication and for non-Classic tracks.
+  bool classic_range_brackets{false};
+  std::vector<M2ClassicTrackRange> classic_ranges;
+  std::vector<std::uint32_t> classic_key_times_ms;
+  std::vector<T> classic_key_values;
 
   [[nodiscard]] std::size_t SetCount() const noexcept { return segments.size(); }
 
@@ -264,6 +280,7 @@ struct M2AnimationSequenceRecord {
 
   std::uint16_t animation_id{0};
   std::uint16_t sub_animation_id{0};
+  std::uint32_t start_ms{0};
   std::uint32_t length_ms{0};
   float move_speed{0.0f};
   std::uint32_t flags{0};
@@ -285,6 +302,8 @@ inline constexpr std::uint32_t kM2SequenceFlagAlias = 0x40u;
 
 inline constexpr std::uint32_t kM2SequenceFlagBlendSourceClampedAtEnd = 0x80u;
 
+struct M2Model;
+
 [[nodiscard]] std::vector<std::uint16_t> BuildM2FirstSequenceIndexByAnimationId(
     const std::vector<M2AnimationSequenceRecord> &animation_sequences);
 [[nodiscard]] bool M2SequenceUsesExternalData(
@@ -296,6 +315,7 @@ inline constexpr std::uint32_t kM2SequenceFlagBlendSourceClampedAtEnd = 0x80u;
     std::string_view model_path,
     const std::vector<M2AnimationSequenceRecord> &animation_sequences,
     std::size_t sequence_index);
+void FinalizeM2ClassicTrackRanges(M2Model &model);
 
 template <typename T> struct M2ParticleLifetimeTrack {
   std::vector<std::uint16_t> times;

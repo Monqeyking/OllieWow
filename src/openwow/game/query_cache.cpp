@@ -1628,6 +1628,7 @@ net::wotlk::WorldPacket QueryCache::BuildGameObjectQuery(std::uint32_t entry, st
 net::wotlk::WorldPacket QueryCache::BuildItemQuery(std::uint32_t entry) {
   net::wotlk::WorldPacket pkt(net::wotlk::Opcode::CMSG_ITEM_QUERY_SINGLE);
   pkt.AppendU32(entry);
+  pkt.AppendU64(0);
   return pkt;
 }
 

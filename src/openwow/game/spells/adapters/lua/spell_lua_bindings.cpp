@@ -49,6 +49,7 @@ int LuaFindSpellBookSlotByID(lua_State* L);
 int LuaGetKnownSlotFromHighestRankSlot(lua_State* L);
 int LuaSpellTargetItem(lua_State* L);
 int LuaIsSelectedSpell(lua_State* L);
+int LuaIsCurrentCast(lua_State* L);
 
 }
 
@@ -78,6 +79,7 @@ constexpr openwow::ui::LuaGlobalBinding kSpellLuaBindings[] = {
     {"GetSpellLink", LuaGetSpellLink},
     {"GetSpellName", LuaGetSpellName},
     {"GetSpellTexture", LuaGetSpellTexture},
+    {"IsSpellPassive", LuaIsPassiveSpell},
     {"GetSpellCritChanceFromIntellect", LuaGetSpellCritChanceFromIntellect},
     {"IsUsableSpell", LuaIsUsableSpell},
     {"IsPassiveSpell", LuaIsPassiveSpell},
@@ -116,6 +118,7 @@ constexpr openwow::ui::LuaGlobalBinding kSpellLuaBindings[] = {
     {"GetKnownSlotFromHighestRankSlot", LuaGetKnownSlotFromHighestRankSlot},
     {"SpellTargetItem", LuaSpellTargetItem},
     {"IsSelectedSpell", LuaIsSelectedSpell},
+    {"IsCurrentCast", LuaIsCurrentCast},
 };
 
 }

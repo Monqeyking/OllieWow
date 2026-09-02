@@ -158,15 +158,11 @@ public:
 
   static WorldPacket BuildPlayerLogin(std::uint64_t guid);
 
-  static WorldPacket BuildVoiceChatEnable(bool voice_enabled, bool microphone_enabled);
-
   static WorldPacket BuildPing(std::uint32_t ping, std::uint32_t latency);
 
   static WorldPacket BuildLogoutRequest();
 
   static WorldPacket BuildLogoutCancel();
-
-  static WorldPacket BuildKeepAlive();
 
   static WorldPacket BuildMovement(Opcode opcode, const game::ObjectGuid &mover,
                                    const game::MovementInfo &info);
@@ -304,8 +300,6 @@ public:
   static WorldPacket BuildQuestQuery(std::uint32_t quest_id);
 
   static WorldPacket BuildQuestgiverStatusQuery(std::uint64_t guid);
-
-  static WorldPacket BuildQuestgiverStatusMultipleQuery();
 
   static WorldPacket BuildQuestPoiQuery(const std::vector<std::uint32_t> &quest_ids);
 
@@ -647,10 +641,6 @@ public:
   static WorldPacket BuildHearthAndResurrect();
 
   static WorldPacket BuildCompleteMovie();
-
-  static WorldPacket BuildReadyForAccountDataTimes();
-
-  static WorldPacket BuildRealmSplit(std::uint32_t split_state);
 
   static WorldPacket BuildInspect(std::uint64_t target_guid);
 

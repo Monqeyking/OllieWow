@@ -88,7 +88,9 @@ class AddonManager {
   [[nodiscard]] size_t GetAddonMemoryUsage(const std::string& name) const;
   [[nodiscard]] size_t GetTotalMemoryUsage() const;
 
-  static constexpr uint32_t kClientInterfaceVersion = kRetailInterfaceVersion;
+  // Addon metadata follows the Classic/Turtle glue contract even though the
+  // executable and renderer are based on the WotLK codebase.
+  static constexpr uint32_t kClientInterfaceVersion = 11200;
 
   void Reset();
 

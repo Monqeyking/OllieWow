@@ -87,7 +87,7 @@ bool CharacterAppearanceGeosetState::IsVisible(
   if (section_id < 100u) {
     return section_id == hair;
   }
-  for (std::size_t index = 0u; index < 4u; ++index) {
+  for (std::size_t index = 0u; index < facial_hair.size(); ++index) {
     if (facial_hair[index] != 0u && facial_hair[index] == section_id) {
       return true;
     }
@@ -145,6 +145,8 @@ CharacterAppearanceGeosetState BuildCharacterAppearanceGeosetState(
     state.facial_hair[0] = static_cast<std::uint16_t>(facial.group100);
     state.facial_hair[1] = static_cast<std::uint16_t>(facial.group300);
     state.facial_hair[2] = static_cast<std::uint16_t>(facial.group200);
+    state.facial_hair[3] = static_cast<std::uint16_t>(facial.group1600);
+    state.facial_hair[4] = static_cast<std::uint16_t>(facial.group1700);
     state.facial_accessory =
         static_cast<std::uint16_t>(facial.accessory702);
   }

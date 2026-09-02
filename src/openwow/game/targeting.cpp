@@ -24,6 +24,7 @@
 #include "openwow/render/scene/world_frame.h"
 #include "openwow/ui/game/cvar_system.h"
 #include "openwow/ui/surfaces/game/runtime/system_message_dispatch.h"
+#include "openwow/foundation/diagnostics/logging.h"
 
 #include <algorithm>
 #include <chrono>
@@ -76,6 +77,25 @@ constexpr int kAttackSwingNotInRangeMessageId = 231;
 constexpr float kAttackStopDistancePadding = 1.3333334f;
 
 constexpr float kMinAttackStopCombinedReach = 5.0f;
+
+const char* AttackStartResultName(const AttackStartResult result) {
+  switch (result) {
+  case AttackStartResult::kStarted: return "started";
+  case AttackStartResult::kNoAction: return "no_action";
+  case AttackStartResult::kInvalidTarget: return "invalid_target";
+  case AttackStartResult::kStunned: return "stunned";
+  case AttackStartResult::kPacified: return "pacified";
+  case AttackStartResult::kMounted: return "mounted";
+  case AttackStartResult::kFleeing: return "fleeing";
+  case AttackStartResult::kConfused: return "confused";
+  case AttackStartResult::kCharmed: return "charmed";
+  case AttackStartResult::kChanneling: return "channeling";
+  case AttackStartResult::kDead: return "dead";
+  case AttackStartResult::kClientLockedOut: return "client_locked_out";
+  case AttackStartResult::kRangeRejected: return "range_rejected";
+  }
+  return "unknown";
+}
 
 float NormalizePositiveRadians(float angle) {
   while (angle < 0.0f) {
@@ -1232,8 +1252,16 @@ AttackStartOutcome TargetingSystem::StartAttack(std::uint64_t guid, bool keep_fo
                                                 std::uint32_t spell_id) {
   const auto no_action = AttackStartOutcome{AttackStartResult::kNoAction};
   if (guid == 0) guid = target_guid_;
+  const auto trace_outcome = [guid](const AttackStartOutcome outcome) {
+    openwow::diagnostics::Log(
+        openwow::diagnostics::LogLevel::kInfo,
+        "CombatTrace: attack_start target=" + std::to_string(guid) +
+            " result=" + AttackStartResultName(outcome.result) +
+            " mechanic=" + std::to_string(outcome.blocking_mechanic));
+    return outcome;
+  };
   const ObjectManager* mgr = Objects();
-  if (guid == 0 || !mgr) return no_action;
+  if (guid == 0 || !mgr) return trace_outcome(no_action);
 
   CancelAutoRepeatSpellIfActive();
   if (const auto* const player_for_stand = mgr->GetLocalPlayerTyped();
@@ -1245,17 +1273,17 @@ AttackStartOutcome TargetingSystem::StartAttack(std::uint64_t guid, bool keep_fo
   }
 
   SetTarget(guid);
-  if (target_guid_ != guid) return no_action;
+  if (target_guid_ != guid) return trace_outcome(no_action);
 
   const auto attack_precondition = ValidateAttackStart();
   if (attack_precondition.result != AttackStartResult::kNoAction) {
-    return attack_precondition;
+    return trace_outcome(attack_precondition);
   }
 
   const auto* player = mgr->GetLocalPlayerTyped();
   if (!player) {
     StopAttackInternal(false);
-    return no_action;
+    return trace_outcome(no_action);
   }
 
   const auto* target = mgr->Get(ObjectGuid(guid));
@@ -1265,19 +1293,20 @@ AttackStartOutcome TargetingSystem::StartAttack(std::uint64_t guid, bool keep_fo
       !player->Interaction().CanAttackSpellTarget(
           static_cast<const CGUnit_C&>(*target))) {
     StopAttackInternal(false);
-    return {AttackStartResult::kInvalidTarget};
+    return trace_outcome({AttackStartResult::kInvalidTarget});
   }
 
   if (RejectInteractionIfWarningDistanceExceeded(static_cast<const CGUnit_C&>(*player), *target,
                                                  kAttackFollowInteractionActionType)) {
-    return {AttackStartResult::kRangeRejected};
+    return trace_outcome({AttackStartResult::kRangeRejected});
   }
 
   const auto& target_unit = static_cast<const CGUnit_C&>(*target);
   if (!IsInAttackRange(target_unit)) {
     StopAttackFollow();
-    return suppress_range_error ? no_action
-                                : AttackStartOutcome{AttackStartResult::kRangeRejected};
+    return trace_outcome(suppress_range_error
+                             ? no_action
+                             : AttackStartOutcome{AttackStartResult::kRangeRejected});
   }
 
   const bool was_active = IsAttackActive();
@@ -1298,7 +1327,7 @@ AttackStartOutcome TargetingSystem::StartAttack(std::uint64_t guid, bool keep_fo
     attack_swing_active_ = true;
     attack_swing_target_guid_ = guid;
   }
-  return {AttackStartResult::kStarted};
+  return trace_outcome({AttackStartResult::kStarted});
 }
 
 void TargetingSystem::StopAttack(bool send_packet) {
@@ -1719,6 +1748,9 @@ void TargetingSystem::SendSetSelection(uint64_t guid) {
 void TargetingSystem::SendAttackSwing(std::uint64_t guid) {
   net::wotlk::WorldPacket pkt(net::wotlk::Opcode::CMSG_ATTACKSWING);
   pkt.AppendU64(guid);
+  openwow::diagnostics::Log(
+      openwow::diagnostics::LogLevel::kInfo,
+      "CombatTrace: CMSG_ATTACKSWING target=" + std::to_string(guid));
   if (session_ != nullptr) {
     session_->Send(pkt);
   }

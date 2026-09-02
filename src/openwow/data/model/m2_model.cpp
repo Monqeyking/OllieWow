@@ -305,6 +305,10 @@ bool ReadTrackData(const BinaryReader &r, const M2TrackHeader &h,
   out->segments.clear();
   out->key_times_ms.clear();
   out->key_values.clear();
+  out->classic_range_brackets = false;
+  out->classic_ranges.clear();
+  out->classic_key_times_ms.clear();
+  out->classic_key_values.clear();
 
   if (h.times.count == 0 || h.values.count == 0) {
     return true;
@@ -374,21 +378,65 @@ bool ReadTrackData(const BinaryReader &r, const M2TrackHeader &h,
       return true;
     }
 
+    // Vanilla also accepts a sequence-timeline track without a ranges array.
+    // Benilla treats that form as one whole-timeline key set; leaving the
+    // segment list empty makes the animator fall back to its scalar default.
+    if (range_count == 0u) {
+      const std::size_t key_count =
+          std::min(times->size(), static_cast<std::size_t>(h.values.count));
+      if (key_count > std::numeric_limits<std::size_t>::max() / values_per_key) {
+        if (error) *error = "M2: Classic track key count overflows";
+        return false;
+      }
+      const std::size_t value_count = key_count * values_per_key;
+      if (value_count > values.size()) {
+        if (error) *error = "M2: Classic track values out of bounds";
+        return false;
+      }
+      out->AppendSet(std::span<const std::uint32_t>(times->data(), key_count),
+                     std::span<const T>(values.data(), value_count));
+      return true;
+    }
+
     const auto ranges = r.ReadSpan<M2Range>(static_cast<std::size_t>(h.ranges.offset), range_count);
     if (!ranges.has_value()) {
       if (error) *error = "M2: Classic track ranges out of bounds";
       return false;
     }
 
+    // Keep the shared Classic timeline in addition to the legacy sliced
+    // segments.  Vanilla/Benilla uses each range as a bracket into this full
+    // timeline; it is not a self-contained list of keys.
+    if (values_per_key == 1u) {
+      const std::size_t key_count =
+          std::min(times->size(), static_cast<std::size_t>(h.values.count));
+      if (key_count > std::numeric_limits<std::size_t>::max() / values_per_key) {
+        if (error) *error = "M2: Classic bracket key count overflows";
+        return false;
+      }
+      const std::size_t value_count = key_count * values_per_key;
+      if (value_count > values.size()) {
+        if (error) *error = "M2: Classic bracket values out of bounds";
+        return false;
+      }
+      out->classic_range_brackets = true;
+      out->classic_key_times_ms.assign(times->begin(), times->begin() + key_count);
+      out->classic_key_values.assign(values.begin(), values.begin() + value_count);
+      out->classic_ranges.reserve(range_count);
+    }
+
     out->segments.reserve(range_count);
     for (std::size_t i = 0; i < range_count; ++i) {
       const M2Range &range = (*ranges)[i];
-      if (range.start > range.end || range.end > h.times.count || range.end > h.values.count) {
+      // The Vanilla range end is inclusive.  Benilla's sampler explicitly
+      // evaluates the window through `hi`, including the collapsed start==end
+      // one-key case.
+      if (range.start > range.end || range.end >= h.times.count || range.end >= h.values.count) {
         if (error) *error = "M2: Classic track range out of bounds";
         return false;
       }
       const std::size_t start = static_cast<std::size_t>(range.start);
-      const std::size_t count = static_cast<std::size_t>(range.end - range.start);
+      const std::size_t count = static_cast<std::size_t>(range.end - range.start) + 1u;
       const std::size_t value_start = start * values_per_key;
       const std::size_t value_count = count * values_per_key;
       if (value_start > values.size() || value_count > values.size() - value_start) {
@@ -397,6 +445,12 @@ bool ReadTrackData(const BinaryReader &r, const M2TrackHeader &h,
       }
       out->AppendSet(std::span<const std::uint32_t>(times->data() + start, count),
                      std::span<const T>(values.data() + value_start, value_count));
+      if (out->classic_range_brackets) {
+        out->classic_ranges.push_back(M2ClassicTrackRange{
+            .first_key = range.start,
+            .last_key = range.end,
+        });
+      }
     }
     return true;
   }
@@ -1077,10 +1131,12 @@ M2LoadResult LoadM2FromBytes(const std::vector<std::uint8_t> &bytes,
       sequence.sub_animation_id = *sub_animation_id;
       if (classic) {
         const auto start = r.ReadU32(entry + 4u);
+        sequence.start_ms = start.value_or(0u);
         sequence.length_ms = (start.has_value() && *length_or_end >= *start)
                                  ? (*length_or_end - *start)
                                  : *length_or_end;
       } else {
+        sequence.start_ms = 0u;
         sequence.length_ms = *length_or_end;
       }
       sequence.move_speed = *move_speed;
@@ -1934,10 +1990,78 @@ M2LoadResult LoadM2FromBytes(const std::vector<std::uint8_t> &bytes,
     return out;
   }
 
+  FinalizeM2ClassicTrackRanges(out.model);
   RebuildM2BonePoseIndex(out.model);
 
   out.ok = true;
   return out;
+}
+
+void FinalizeM2ClassicTrackRanges(M2Model &model) {
+  const auto finalize = [&](auto &track) {
+    if (!track.classic_range_brackets) {
+      return;
+    }
+    for (std::size_t index = 0; index < track.classic_ranges.size(); ++index) {
+      track.classic_ranges[index].sequence_start_ms =
+          index < model.animation_sequences.size()
+              ? model.animation_sequences[index].start_ms
+              : 0u;
+    }
+  };
+
+  for (auto &bone : model.bones) {
+    finalize(bone.translation);
+    finalize(bone.rotation);
+    finalize(bone.scaling);
+  }
+  for (auto &color : model.colors) {
+    finalize(color.color);
+    finalize(color.alpha);
+  }
+  for (auto &transparency : model.transparencies) {
+    finalize(transparency.alpha);
+  }
+  for (auto &uv : model.uv_animations) {
+    finalize(uv.translation);
+    finalize(uv.rotation);
+    finalize(uv.scaling);
+  }
+  for (auto &camera : model.cameras) {
+    finalize(camera.position);
+    finalize(camera.target);
+    finalize(camera.roll);
+  }
+  for (auto &light : model.lights) {
+    finalize(light.ambient_color);
+    finalize(light.ambient_intensity);
+    finalize(light.diffuse_color);
+    finalize(light.diffuse_intensity);
+    finalize(light.attenuation_start);
+    finalize(light.attenuation_end);
+    finalize(light.visibility);
+  }
+  for (auto &ribbon : model.ribbon_emitters) {
+    finalize(ribbon.color);
+    finalize(ribbon.alpha);
+    finalize(ribbon.height_above);
+    finalize(ribbon.height_below);
+    finalize(ribbon.tex_slot);
+    finalize(ribbon.visibility);
+  }
+  for (auto &emitter : model.particle_emitters) {
+    finalize(emitter.emission_speed);
+    finalize(emitter.speed_variation);
+    finalize(emitter.vertical_range);
+    finalize(emitter.horizontal_range);
+    finalize(emitter.gravity);
+    finalize(emitter.lifespan);
+    finalize(emitter.emission_rate);
+    finalize(emitter.emission_area_length);
+    finalize(emitter.emission_area_width);
+    finalize(emitter.z_source);
+    finalize(emitter.enabled_in);
+  }
 }
 
 M2LoadResult LoadM2FromBytes(const std::vector<std::uint8_t> &bytes) {
@@ -1974,6 +2098,12 @@ void RebuildM2BonePoseIndex(M2Model &model) {
                                    const std::size_t animation_index) noexcept {
     if (track.SetCount() == 0u) {
       return true;
+    }
+    if (track.classic_range_brackets) {
+      // A Classic range is a bracket into the shared timeline.  An empty
+      // in-band portion can still resolve to an authored value from either
+      // side of the bracket, so it is not keyless for that animation.
+      return track.classic_key_times_ms.empty() || track.classic_key_values.empty();
     }
     std::size_t set_index = track.global_sequence < 0 ? animation_index : 0u;
     if (set_index >= track.SetCount()) {
@@ -2230,11 +2360,16 @@ SkinLoadResult LoadClassicEmbeddedSkinFromM2Bytes(const std::vector<std::uint8_t
     unit.color_index = r.ReadU16(o + 8u).value_or(0u);
     unit.render_flags_index = r.ReadU16(o + 10u).value_or(0u);
     unit.tex_unit_number = 0;
-    unit.mode = r.ReadU16(o + 14u).value_or(0u);
-    unit.texture_index = r.ReadU16(o + 16u).value_or(0u);
-    unit.tex_unit_lookup = r.ReadU16(o + 18u).value_or(0u);
-    unit.transparency_index = 0;
-    unit.uv_anim_index = 0;
+    // The Classic embedded batch keeps the combo references in the fields
+    // that later .skin readers call texture_count/texture_combo_index/
+    // texture_coord_combo_index/weight_combo_index/texture_transform_combo_index.
+    // Adapt those fields into the shared renderer representation without
+    // applying the later packed-combo encoding used by WotLK .skin files.
+    unit.mode = r.ReadU16(o + 14u).value_or(0u);  // textureCount
+    unit.texture_index = r.ReadU16(o + 16u).value_or(0u);  // textureComboIndex
+    unit.tex_unit_lookup = r.ReadU16(o + 18u).value_or(0u);  // textureCoordComboIndex
+    unit.transparency_index = r.ReadU16(o + 20u).value_or(0u);  // weightComboIndex
+    unit.uv_anim_index = r.ReadU16(o + 22u).value_or(0u);  // textureTransformComboIndex
     out.skin.texture_units.push_back(unit);
   }
 

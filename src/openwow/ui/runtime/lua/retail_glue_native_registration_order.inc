@@ -57,6 +57,8 @@
     {"core", "PatchDownloadCancel"},
     {"core", "PatchDownloadApply"},
     {"core", "GetNumAddOns"},
+    {"core", "GetScriptMemory"},
+    {"core", "SetScriptMemory"},
     {"core", "GetAddOnInfo"},
     {"core", "LaunchAddOnURL"},
     {"core", "GetAddOnDependencies"},

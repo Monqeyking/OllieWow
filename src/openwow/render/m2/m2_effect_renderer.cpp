@@ -12,11 +12,18 @@
 #include <algorithm>
 #include <bx/math.h>
 #include <limits>
+#include <string_view>
 
 namespace openwow::render::m2 {
 namespace {
 
 constexpr float kRenderableOpacityThreshold = 0.0001f;
+constexpr std::string_view kGlueLoginModelPath =
+    "/Interface/Glues/Models/UI_MainMenu/UI_MainMenu.m2";
+
+[[nodiscard]] bool IsGlueLoginModelPath(const std::string_view path) {
+  return path == kGlueLoginModelPath || path.ends_with("/UI_MainMenu.m2");
+}
 
 [[nodiscard]] const M2RenderInstanceResult* SelectTerminalResult(
     const M2RenderInstanceResult& first,
@@ -203,6 +210,9 @@ void M2EffectRenderer::Shutdown() {
   }
 
   particle_shader_once_.emplace();
+  effect_gate_diagnostics_logged_instances_.clear();
+  effect_simulation_diagnostics_logged_instances_.clear();
+  particle_diagnostics_logged_keys_.clear();
 }
 
 bool M2EffectRenderer::WarmUpParticleProgram() { return EnsureParticleProgram(); }
@@ -290,7 +300,8 @@ void M2EffectRenderer::AdvanceRibbonEmitters(
 }
 
 void M2EffectRenderer::SimulateEffects(
-    detail::M2Instance& instance, detail::M2ModelResource& resource,
+    const std::uint32_t instance_id, detail::M2Instance& instance,
+    detail::M2ModelResource& resource,
     const RenderMatrix4x4& model_matrix,
     const std::optional<RenderMatrix4x4View>& view_matrix,
     const int animation_index, const std::uint32_t animation_time_ms,
@@ -304,6 +315,51 @@ void M2EffectRenderer::SimulateEffects(
 
   if (!resource.model_data.particle_emitters.empty()) {
     BindParticleSystem(instance, resource);
+
+    if (IsGlueLoginModelPath(resource.model_path) &&
+        !effect_simulation_diagnostics_logged_instances_.contains(instance_id)) {
+      std::size_t sampled_emitters = 0;
+      std::size_t enabled_emitters = 0;
+      double total_emission_rate = 0.0;
+      double total_lifespan = 0.0;
+      std::string emitter_summary;
+      for (std::size_t index = 0;
+           index < resource.model_data.particle_emitters.size(); ++index) {
+        const auto sample =
+            animator.SampleParticleEmitter(index, animation_index, animation_time_ms);
+        if (!sample.has_value()) {
+          continue;
+        }
+        ++sampled_emitters;
+        if (sample->enabled) {
+          ++enabled_emitters;
+        }
+        total_emission_rate += sample->emission_rate;
+        total_lifespan += sample->lifespan;
+        if (!emitter_summary.empty()) {
+          emitter_summary += ",";
+        }
+        emitter_summary += std::to_string(index) + ":e=" +
+                           std::to_string(sample->enabled ? 1 : 0) + ":r=" +
+                           std::to_string(sample->emission_rate) + ":life=" +
+                           std::to_string(sample->lifespan);
+      }
+      openwow::diagnostics::Log(
+          openwow::diagnostics::LogLevel::kInfo,
+          "GlueRenderDiagnostics: effect_simulation model=" + resource.model_path +
+              " instance=" + std::to_string(instance_id) +
+              " animation=" + std::to_string(animation_index) + "/" +
+              std::to_string(animation_time_ms) +
+              " delta_ms=" +
+              std::to_string(static_cast<std::uint32_t>(
+                  std::max(0.0f, frame_delta_seconds) * 1000.0f)) +
+              " sampled_emitters=" + std::to_string(sampled_emitters) +
+              " enabled_emitters=" + std::to_string(enabled_emitters) +
+              " total_emission_rate=" + std::to_string(total_emission_rate) +
+              " total_lifespan=" + std::to_string(total_lifespan) +
+              " emitter_map=" + emitter_summary);
+      effect_simulation_diagnostics_logged_instances_.insert(instance_id);
+    }
 
     std::optional<bx::Vec3> camera_world_position;
     if (view_matrix.has_value()) {
@@ -336,8 +392,26 @@ M2RenderInstanceResult M2EffectRenderer::Submit(
     const int animation_index, const std::uint32_t animation_time_ms,
     const std::vector<float>& bone_matrices,
     const std::optional<RenderSubmitTraceBinding>& submit_trace,
-    const M2DrawEncoder draw) {
+  const M2DrawEncoder draw) {
   const std::size_t bone_count = bone_matrices.size() / 16u;
+
+  if (IsGlueLoginModelPath(resource.model_path) &&
+      !effect_gate_diagnostics_logged_instances_.contains(instance_id)) {
+    openwow::diagnostics::Log(
+        openwow::diagnostics::LogLevel::kInfo,
+        "GlueRenderDiagnostics: effect_gate model=" + resource.model_path +
+            " instance=" + std::to_string(instance_id) +
+            " enabled=" +
+            std::to_string(instance.effect_emitters_enabled ? 1 : 0) +
+            " has_effect_data=" +
+            std::to_string(resource.HasEffectData() ? 1 : 0) +
+            " particles=" +
+            std::to_string(resource.model_data.particle_emitters.size()) +
+            " ribbons=" +
+            std::to_string(resource.model_data.ribbon_emitters.size()) +
+            " textures=" + std::to_string(textures.size()));
+    effect_gate_diagnostics_logged_instances_.insert(instance_id);
+  }
 
   if (!instance.effect_emitters_enabled) {
     return {.status = M2ResultStatus::kNotReady,
@@ -417,13 +491,72 @@ M2RenderInstanceResult M2EffectRenderer::SubmitParticles(
                                   .detail = std::move(detail),
                                   .submitted_draw_count = draw_count};
   };
+  const auto log_particle_diagnostics =
+      [&](const std::string_view stage, const std::string_view detail,
+          const std::uint32_t draw_count) {
+        if (!IsGlueLoginModelPath(resource.model_path)) {
+          return;
+        }
+        const std::string diagnostic_key =
+            std::to_string(instance_id) + ":" + std::string(stage);
+        if (!particle_diagnostics_logged_keys_.insert(diagnostic_key).second) {
+          return;
+        }
+        std::size_t active_emitters = 0;
+        std::size_t particle_count = 0;
+        std::uint32_t render_vertex_count = 0;
+        std::size_t invalid_textures = 0;
+        std::string emitter_summary;
+        for (std::size_t index = 0; index < emitters.size(); ++index) {
+          const auto particles = instance.particle_system.emitter_particle_count(index);
+          const auto vertices =
+              instance.particle_system.emitter_render_vertex_count(index);
+          const auto& emitter = emitters[index];
+          const bool texture_valid =
+              emitter.texture < textures.size() &&
+              bgfx::isValid(textures[emitter.texture]);
+          if (particles != 0u) {
+            ++active_emitters;
+          }
+          particle_count += particles;
+          render_vertex_count += vertices;
+          if (vertices != 0u && !texture_valid) {
+            ++invalid_textures;
+          }
+          if (!emitter_summary.empty()) {
+            emitter_summary += ",";
+          }
+          emitter_summary += std::to_string(index) + ":p=" +
+                             std::to_string(particles) + ":v=" +
+                             std::to_string(vertices) + ":t=" +
+                             std::to_string(emitter.texture) + ":tv=" +
+                             std::to_string(texture_valid ? 1 : 0);
+        }
+        openwow::diagnostics::Log(
+            openwow::diagnostics::LogLevel::kInfo,
+            "GlueRenderDiagnostics: particles stage=" + std::string(stage) +
+                " instance=" + std::to_string(instance_id) +
+                " emitters=" + std::to_string(emitters.size()) +
+                " active_emitters=" + std::to_string(active_emitters) +
+                " particles=" + std::to_string(particle_count) +
+                " vertices=" + std::to_string(render_vertex_count) +
+                " draw_count=" + std::to_string(draw_count) +
+                " invalid_textures=" + std::to_string(invalid_textures) +
+                " density=" + std::to_string(particle_density_) +
+                " animation=" + std::to_string(animation_index) + "/" +
+                std::to_string(animation_time_ms) +
+                " detail=" + std::string(detail) +
+                " emitter_map=" + emitter_summary);
+      };
   if (!EnsureParticleProgram()) {
+    log_particle_diagnostics("shader_not_ready", "particle shader", 0u);
     return status("m2.particle.shader", M2ResultStatus::kFailed,
                   M2ResultReason::kShaderNotReady, "particle shader");
   }
 
   const float model_alpha = instance.alpha * instance.tint_color[3];
   if (model_alpha < kRenderableOpacityThreshold) {
+    log_particle_diagnostics("alpha_zero", "model alpha", 0u);
     return status("m2.particle.billboard", M2ResultStatus::kNotReady,
                   M2ResultReason::kNoDrawableGeometry, resource.model_path);
   }
@@ -448,6 +581,7 @@ M2RenderInstanceResult M2EffectRenderer::SubmitParticles(
   const auto& vertices = instance.particle_system.BuildVertices(
       camera_right, camera_up, &particle_lighting);
   if (vertices.empty()) {
+    log_particle_diagnostics("no_vertices", "BuildVertices returned empty", 0u);
     return status("m2.particle.billboard", M2ResultStatus::kNotReady,
                   M2ResultReason::kNoDrawableGeometry, resource.model_path);
   }
@@ -455,6 +589,8 @@ M2RenderInstanceResult M2EffectRenderer::SubmitParticles(
 
   if (bgfx::getAvailTransientVertexBuffer(vertex_count, ParticleVertex::layout) <
       vertex_count) {
+    log_particle_diagnostics("vertex_buffer_unavailable",
+                             "particle transient vertex buffer", 0u);
     return status("m2.particle.geometry", M2ResultStatus::kNotReady,
                   M2ResultReason::kGpuGeometryNotReady,
                   "particle transient vertex buffer");
@@ -464,6 +600,8 @@ M2RenderInstanceResult M2EffectRenderer::SubmitParticles(
 
   if (vertex_buffer.stride == 0u ||
       vertex_buffer.size / vertex_buffer.stride < vertex_count) {
+    log_particle_diagnostics("vertex_buffer_invalid",
+                             "particle transient vertex buffer", 0u);
     return status("m2.particle.geometry", M2ResultStatus::kNotReady,
                   M2ResultReason::kGpuGeometryNotReady,
                   "particle transient vertex buffer");
@@ -484,6 +622,9 @@ M2RenderInstanceResult M2EffectRenderer::SubmitParticles(
     const auto count = instance.particle_system.emitter_render_vertex_count(index);
     if (count > 0u &&
         (emitter.texture >= textures.size() || !bgfx::isValid(textures[emitter.texture]))) {
+      log_particle_diagnostics(
+          "texture_not_ready", "particle texture=" + std::to_string(emitter.texture),
+          0u);
       return status("m2.particle.texture", M2ResultStatus::kNotReady,
                     M2ResultReason::kTextureNotReady,
                     "particle texture=" + std::to_string(emitter.texture));
@@ -498,6 +639,7 @@ M2RenderInstanceResult M2EffectRenderer::SubmitParticles(
   const auto ranges =
       BuildM2ParticleDrawRanges(draw_inputs, batch_particles, force_additive_sort);
   if (!ranges.has_value()) {
+    log_particle_diagnostics("unsupported_ranges", "particle draw ranges", 0u);
     return status("m2.particle.material", M2ResultStatus::kUnsupported,
                   M2ResultReason::kUnsupportedBlendMode, resource.model_path);
   }
@@ -506,6 +648,10 @@ M2RenderInstanceResult M2EffectRenderer::SubmitParticles(
 
     const auto base_state = M2ParticleSystem::BlendStateForType(range.material_blend_index);
     if (!base_state.has_value()) {
+      log_particle_diagnostics(
+          "unsupported_blend", "particle blend=" +
+                                  std::to_string(range.material_blend_index),
+          draw_count);
       return status("m2.particle.material", M2ResultStatus::kUnsupported,
                     M2ResultReason::kUnsupportedBlendMode,
                     "particle blend=" + std::to_string(range.material_blend_index), draw_count);
@@ -561,11 +707,14 @@ M2RenderInstanceResult M2EffectRenderer::SubmitParticles(
     draw.submit(static_cast<bgfx::ViewId>(view_id), particle_shader_->program);
     ++draw_count;
   }
-  return draw_count > 0u
-             ? M2RenderInstanceResult{.status = M2ResultStatus::kReady,
-                                      .submitted_draw_count = draw_count}
-             : status("m2.particle.billboard", M2ResultStatus::kNotReady,
-                      M2ResultReason::kNoDrawableGeometry, resource.model_path);
+  if (draw_count > 0u) {
+    log_particle_diagnostics("submitted", "particle draws submitted", draw_count);
+    return {.status = M2ResultStatus::kReady,
+            .submitted_draw_count = draw_count};
+  }
+  log_particle_diagnostics("no_draws", "draw ranges produced no draws", 0u);
+  return status("m2.particle.billboard", M2ResultStatus::kNotReady,
+                M2ResultReason::kNoDrawableGeometry, resource.model_path);
 }
 
 M2RenderInstanceResult M2EffectRenderer::SubmitRibbons(

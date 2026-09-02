@@ -6,6 +6,7 @@
 #include "openwow/core/storm_string.h"
 #include "openwow/core/storm_thread.h"
 #include "openwow/data/streaming_init.h"
+#include "openwow/foundation/diagnostics/logging.h"
 #include "openwow/game/account_msg.h"
 #include "openwow/game/account_data.h"
 #include "openwow/game/battlenet_login.h"
@@ -50,6 +51,7 @@
 #include "openwow/foundation/text/ascii.h"
 #include "openwow/vfs/sfile_core.h"
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cmath>
@@ -59,7 +61,9 @@
 #include <limits>
 #include <optional>
 #include <span>
+#include <string>
 #include <utility>
+#include <vector>
 
 namespace openwow::ui::glue::detail {
 
@@ -309,10 +313,7 @@ void QuitGameAndRunLauncherImpl() {
   (void)QuitGameAndRunLauncherSpawnProcess()(kRetailLauncherApplication, nullptr, 0, 0);
 }
 
-void SendRealmSplitPacket(lua_State *state, const std::uint32_t split_state) {
-  (void)SendGlueRealmPacket(
-      state, openwow::net::wotlk::PacketSender::BuildRealmSplit(split_state));
-}
+void SendRealmSplitPacket(lua_State *, const std::uint32_t) {}
 
 struct RealmLoadStats {
   double mean{1.0};
@@ -1024,6 +1025,19 @@ int LuaSelectCharacter(lua_State *state) {
     }
   }
 
+  // CharacterSelect.lua calls SetBackgroundModel before SelectCharacter.  At
+  // that point the background resolver still sees the previous character, so
+  // replay the same data-driven request after the native selection index has
+  // been updated.  This keeps the Lua ABI and the existing race/token mapping
+  // intact while fixing the ordering mismatch.
+  if (gs->background_controller != nullptr &&
+      !gs->char_select_requested_background.empty()) {
+    if (auto *runtime = GetWidgetRuntime(state); runtime != nullptr) {
+      gs->background_controller->SetCharSelectBackground(
+          *gs, *runtime, gs->char_select_requested_background);
+    }
+  }
+
   if (gs->fire_event) {
     gs->fire_event("UPDATE_SELECTED_CHARACTER",
                    {openwow::ui::glue::MakeLuaNumber(static_cast<double>(idx + 1))});
@@ -1050,10 +1064,7 @@ int LuaGetCharacterListUpdate(lua_State *state) {
   return 0;
 }
 
-int LuaReadyForAccountDataTimes(lua_State *state) {
-  (void)SendGlueRealmPacket(
-      state,
-      openwow::net::wotlk::PacketSender::BuildReadyForAccountDataTimes());
+int LuaReadyForAccountDataTimes(lua_State *) {
   return 0;
 }
 
@@ -1207,6 +1218,23 @@ int LuaGetNumAddOns(lua_State *state) {
   return 1;
 }
 
+int LuaGetScriptMemory(lua_State *state) {
+  const int script_memory_kb =
+      openwow::ui::game::CVarSystem::Instance().GetCVarInt("scriptMemory");
+  lua_pushnumber(state, static_cast<lua_Number>(script_memory_kb > 0
+                                                    ? (script_memory_kb + 1023) / 1024
+                                                    : 0));
+  return 1;
+}
+
+int LuaSetScriptMemory(lua_State *state) {
+  const int memory_mb = std::max(0, openwow::ui::TruncateLuaNumberToI32(lua_tonumber(state, 1)));
+  const auto memory_kb = static_cast<std::int64_t>(memory_mb) * 1024;
+  openwow::ui::game::CVarSystem::Instance().SetCVar(
+      "scriptMemory", std::to_string(memory_kb), true);
+  return 0;
+}
+
 int LuaGetAddOnInfo(lua_State *state) {
   auto &addons_data = openwow::ui::AddOnsData::Get();
   const std::string &addon_name =
@@ -1214,7 +1242,10 @@ int LuaGetAddOnInfo(lua_State *state) {
           state, "Usage: GetAddOnInfo(index)");
   const char *title = addons_data.GetMetadata(addon_name.c_str(), "Title");
   const char *notes = addons_data.GetMetadata(addon_name.c_str(), "Notes");
-  const auto loadability = addons_data.EvaluateLoadability(addon_name.c_str(), false, nullptr);
+  // Glue uses the non-demand-only flavour: LoadOnDemand addons are still
+  // loadable from the AddOn list.  The native helper's flag is named for the
+  // opposite perspective, so pass true here.
+  const auto loadability = addons_data.EvaluateLoadability(addon_name.c_str(), true, nullptr);
 
   lua_pushstring(state, addon_name.c_str());
   if (title != nullptr) {
@@ -2226,26 +2257,22 @@ void ResetCharCustomizeState(lua_State *state, GlueGameState &game_state, Legacy
 
   game_state.create_class = 0;
   ResetCreateCustomizationState(game_state);
-  RandomizeCreateCustomizationAppearance(state, game_state, rng, 0, true,
-                                         CharacterCustomizationRandomizationOrder::SetupModel);
 
-  std::vector<int> available_class_ids;
-  const auto available_classes = GetAvailableCreateClassesForRace(state, game_state.create_race);
-  available_class_ids.reserve(available_classes.size());
-  for (const auto &cls : available_classes) {
-    if (!cls.has_definition) {
-      continue;
-    }
-    if (LookupGlueClassRequiredExpansionLevel(state, cls.class_id) > expansion_level) {
-      continue;
-    }
-    available_class_ids.push_back(cls.class_id);
+  const auto available_classes =
+      GetGlueEnumeratedCreateClassesForRace(state, game_state.create_race);
+  if (!available_classes.empty()) {
+    // CharacterCreate.lua selects the first enumerated class on show via
+    // SetCharacterClass(1). Keep the native selection in the same slot so the
+    // checked class, preview outfit, and GetSelectedClass() agree.
+    game_state.create_class = available_classes.front().class_id;
   }
 
-  if (!available_class_ids.empty()) {
-    const auto ordinal = static_cast<std::size_t>(rng.SelectOrdinal(available_class_ids.size()));
-    game_state.create_class = available_class_ids[ordinal];
-  }
+  // The initial appearance must use the class selected above.  Generating it
+  // while create_class is still zero leaves a random class with a Warrior/
+  // default outfit until the next explicit class or customization update.
+  RandomizeCreateCustomizationAppearance(
+      state, game_state, rng, game_state.create_class, true,
+      CharacterCustomizationRandomizationOrder::SetupModel);
 
   RefreshCreateCustomizationDisplay(game_state);
 }
@@ -2367,17 +2394,9 @@ std::vector<int> GetExpansionEligibleCreateClassIds(lua_State *state, const int 
   return class_ids;
 }
 
-void PickRandomAllowedCreateClassForRace(lua_State *state, GlueGameState &game_state,
-                                         LegacyAdlerRandom &rng) {
-  if (IsValidRaceClass(state, game_state.create_race, game_state.create_class)) {
-    return;
-  }
-
+void SelectFirstAllowedCreateClassForRace(lua_State *state, GlueGameState &game_state) {
   const auto allowed_class_ids = GetExpansionEligibleCreateClassIds(state, game_state.create_race);
-  const auto class_id = PickRandomAllowedClass(allowed_class_ids, rng);
-  if (class_id.has_value()) {
-    game_state.create_class = *class_id;
-  }
+  game_state.create_class = allowed_class_ids.empty() ? 0 : allowed_class_ids.front();
 }
 
 void NormalizeCreateCustomizationStateWithDbc(lua_State *state, GlueGameState &game_state) {
@@ -2633,8 +2652,13 @@ int LuaGetSelectedClass(lua_State *state) {
     return 0;
   }
 
-  const auto classes = GetGlueEnumeratedCreateClassesForRace(state, gs->create_race);
-  const int class_index = FindAvailableCreateClassIndex(classes, gs->create_class);
+  // CharacterCreate.lua enumerates GetAvailableClasses() into the global
+  // class-button slots, then passes that same slot index to SetCharacterClass
+  // and SetSelectedClass.  Do not return an index from the race-filtered
+  // GetClassesForRace() list here: that makes a valid Mage appear as button 1
+  // (Warrior) after a race change while the preview still uses Mage.
+  const auto class_ids = GetGlueEnumeratedClassIds(state);
+  const int class_index = FindClassIndex(class_ids, gs->create_class);
   if (class_index < 0) {
     return 0;
   }
@@ -2694,7 +2718,7 @@ static void SelectCharacterCreationRace(lua_State *state,
     ApplyCreateCustomizationAppearanceFromCache(game_state, *cached);
   } else {
     auto &rng = RequireGlueCustomizationRandom(state);
-    PickRandomAllowedCreateClassForRace(state, game_state, rng);
+    SelectFirstAllowedCreateClassForRace(state, game_state);
     ResetCreateCustomizationState(game_state);
     RandomizeCreateCustomizationAppearance(
         state, game_state, rng, game_state.create_class, true,
@@ -2703,8 +2727,7 @@ static void SelectCharacterCreationRace(lua_State *state,
   }
 
   if (!rebuilt_from_scratch) {
-    auto &rng = RequireGlueCustomizationRandom(state);
-    PickRandomAllowedCreateClassForRace(state, game_state, rng);
+    SelectFirstAllowedCreateClassForRace(state, game_state);
   }
   SetDataPreloadSelectedRaceFromGlue(state, game_state.create_race);
   NormalizeCreateCustomizationStateWithDbc(state, game_state);
@@ -2740,13 +2763,16 @@ int LuaSetSelectedClass(lua_State *state) {
     return 0;
 
   const std::uint32_t index = LuaNumberToZeroBasedU32Index(lua_tonumber(state, 1));
-  const auto classes = GetGlueEnumeratedCreateClassesForRace(state, gs->create_race);
+  const auto class_ids = GetGlueEnumeratedClassIds(state);
 
-  if (static_cast<std::size_t>(index) >= classes.size()) {
+  if (static_cast<std::size_t>(index) >= class_ids.size()) {
     return 0;
   }
 
-  const int class_id = classes[static_cast<std::size_t>(index)].class_id;
+  const int class_id = class_ids[static_cast<std::size_t>(index)];
+  if (!IsValidRaceClass(state, gs->create_race, class_id)) {
+    return 0;
+  }
   gs->create_class = class_id;
   NormalizeCreateCustomizationStateWithDbc(state, *gs);
   RefreshCreateCustomizationDisplay(*gs);
@@ -2969,27 +2995,6 @@ int LuaSetCharSelectBackground(lua_State *s) {
 
   const char *raw = lua_tostring(s, 1);
   auto *gs = GetGameState(s);
-  std::string selection_diagnostic = " selected_index=<none>";
-  if (gs != nullptr) {
-    selection_diagnostic =
-        " selected_index=" + std::to_string(gs->selected_character_index);
-    const int selected_index = gs->selected_character_index;
-    if (selected_index >= 0 &&
-        static_cast<std::size_t>(selected_index) < gs->characters.size()) {
-      const auto &character = gs->characters[static_cast<std::size_t>(selected_index)];
-      const auto token = LookupGlueRaceClientFileString(
-          s, static_cast<int>(character.race_id));
-      selection_diagnostic +=
-          " race_id=" + std::to_string(character.race_id) +
-          " class_id=" + std::to_string(character.class_id) +
-          " dbc_token=" +
-          (token.empty() ? std::string("<nil>") : std::string(token));
-    }
-  }
-  openwow::diagnostics::Log(
-      openwow::diagnostics::LogLevel::kInfo,
-      "Glue CharacterSelect background request: path=" +
-          std::string(raw != nullptr ? raw : "<null>") + selection_diagnostic);
   if (gs != nullptr) {
     if (auto *runtime = GetWidgetRuntime(s);
         runtime != nullptr && gs->background_controller != nullptr) {
@@ -3538,13 +3543,37 @@ int LuaGetRandomName(lua_State *s) {
   cache.RebuildIfNeeded(dbc, race_id, sex);
 
   std::string name;
+  std::size_t attempts = 0u;
+  bool accepted = false;
   if (!cache.dictionary.empty()) {
     auto &rng = RequireGlueCustomizationRandom(s);
-    do {
+    constexpr std::size_t kMaxAttempts = 64u;
+    for (attempts = 1u; attempts <= kMaxAttempts; ++attempts) {
       name = cache.dictionary.Generate(
           [&rng](const std::uint32_t count) { return rng.SelectOrdinal(count); }, 14u);
-    } while (!IsRandomNameAcceptedByGlue(name));
+      if (IsRandomNameAcceptedByGlue(name)) {
+        accepted = true;
+        break;
+      }
+    }
+    if (!accepted) {
+      name.clear();
+    }
   }
+
+  openwow::diagnostics::Log(
+      openwow::diagnostics::LogLevel::kInfo,
+      "Glue CharacterCreate random-name: func=GetRandomName "
+      "race_id=" + std::to_string(race_id) +
+          " sex_zero_based=" + std::to_string(sex) +
+          " dbc=" + (dbc == nullptr ? std::string("missing") : "ready") +
+          " namegen_rows=" +
+          (dbc == nullptr ? std::string("0")
+                          : std::to_string(dbc->name_gen().entries().size())) +
+          " dictionary_names=" + std::to_string(cache.dictionary.size()) +
+          " attempts=" + std::to_string(attempts) +
+          " accepted=" + (accepted ? "1" : "0") +
+          " result=" + (name.empty() ? "<empty>" : name));
 
   lua_pushstring(s, name.c_str());
   return 1;
@@ -3596,36 +3625,14 @@ int LuaPaidChange_GetCurrentClassIndex(lua_State *s) {
 int LuaGetCreateBackgroundModel(lua_State *s) {
   const auto *gs = GetGameState(s);
   std::string_view result;
-  std::string_view source = "empty";
   if (openwow::data::IsOnlineModeActive()) {
     result = "CharacterSelect";
-    source = "online-mode";
   } else if (gs != nullptr && gs->create_class == 6) {
     result = LookupGlueBackgroundClassToken(s, gs->create_class);
-    if (!result.empty()) {
-      source = "dbc-class-token";
-    }
   }
   if (result.empty() && gs != nullptr) {
     result = LookupGlueBackgroundRaceToken(s, gs->create_race);
-    if (!result.empty()) {
-      source = "dbc-race-token";
-    }
   }
-
-  openwow::diagnostics::Log(
-      openwow::diagnostics::LogLevel::kInfo,
-      "Glue CharacterCreate background resolve: "
-      "func=LuaGetCreateBackgroundModel "
-      "screen=" + (gs == nullptr || gs->current_screen.empty()
-                        ? "<none>"
-                        : gs->current_screen) +
-          " race_id=" +
-          std::to_string(gs == nullptr ? 0 : gs->create_race) +
-          " class_id=" +
-          std::to_string(gs == nullptr ? 0 : gs->create_class) +
-          " source=" + std::string(source) +
-          " result=" + (result.empty() ? "<empty>" : std::string(result)));
 
   if (!result.empty()) {
     PushLuaStringView(s, result);
@@ -3985,13 +3992,6 @@ int LuaGetSelectBackgroundModel(lua_State *state) {
   };
 
   if (gs == nullptr || idx < 0 || static_cast<std::uint64_t>(idx) >= gs->characters.size()) {
-    openwow::diagnostics::Log(
-        openwow::diagnostics::LogLevel::kWarn,
-        "Glue CharacterSelect token: index=" + std::to_string(idx) +
-            " count=" +
-            (gs == nullptr ? std::string("<no-game-state>")
-                           : std::to_string(gs->characters.size())) +
-            " token=<nil>");
     push_token_or_nil({});
     return 1;
   }
@@ -3999,21 +3999,9 @@ int LuaGetSelectBackgroundModel(lua_State *state) {
   const auto &character = gs->characters[static_cast<std::size_t>(idx)];
   if (character.class_id == 6) {
     const auto token = LookupGlueBackgroundClassToken(state, character.class_id);
-    openwow::diagnostics::Log(
-        openwow::diagnostics::LogLevel::kInfo,
-        "Glue CharacterSelect token: index=" + std::to_string(idx) +
-            " race=" + std::to_string(character.race_id) +
-            " class=" + std::to_string(character.class_id) +
-            " token=" + (token.empty() ? std::string("<nil>") : std::string(token)));
     push_token_or_nil(token);
   } else {
     const auto token = LookupGlueBackgroundRaceToken(state, character.race_id);
-    openwow::diagnostics::Log(
-        openwow::diagnostics::LogLevel::kInfo,
-        "Glue CharacterSelect token: index=" + std::to_string(idx) +
-            " race=" + std::to_string(character.race_id) +
-            " class=" + std::to_string(character.class_id) +
-            " token=" + (token.empty() ? std::string("<nil>") : std::string(token)));
     push_token_or_nil(token);
   }
   return 1;

@@ -243,8 +243,6 @@ public:
   void SendGuildRemove(const std::string &name);
   void SendGuildSetPublicNote(const std::string &name, const std::string &note);
   void SendGuildSetOfficerNote(const std::string &name, const std::string &note);
-  void SendGuildPermissionsQuery();
-  void SendGuildBankMoneyWithdrawnQuery();
   void SendGuildBankDepositMoney(std::uint64_t banker_guid, std::uint32_t amount);
   void SendGuildBankWithdrawMoney(std::uint64_t banker_guid, std::uint32_t amount);
   void SendGuildBankerActivate(std::uint64_t guid);
@@ -457,8 +455,6 @@ public:
   void SendLfgLeave();
   void SendLfgSetRoles(std::uint8_t roles);
   void SendLfgSetComment(const std::string &comment);
-  void SendLfgGetStatus();
-  void SendLfdPlayerLockInfoRequest();
   void SendLfgSearchJoin(std::uint32_t packed_search_id);
   void SendLfgSearchLeave();
 

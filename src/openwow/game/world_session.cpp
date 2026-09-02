@@ -3305,12 +3305,6 @@ void WorldSession::Update(float dt_seconds, std::uint32_t client_time_ms) {
     RefreshRuneUsability(*this);
   }
 
-  keep_alive_timer_ += dt_seconds;
-  if (keep_alive_timer_ >= kKeepAliveInterval) {
-    keep_alive_timer_ -= kKeepAliveInterval;
-    Send(net::wotlk::PacketSender::BuildKeepAlive());
-  }
-
   latency_tracker_.Update(dt_seconds);
 
   ScriptEvents_FlushPendingUnitEvents();

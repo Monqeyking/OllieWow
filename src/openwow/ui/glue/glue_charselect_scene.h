@@ -307,6 +307,7 @@ private:
   const openwow::vfs::VirtualFileSystem *vfs_{nullptr};
   mutable std::unordered_map<std::uint16_t, std::string> character_model_path_cache_;
   std::string last_create_model_resolution_trace_;
+  std::string last_create_appearance_trace_;
   std::string selected_character_model_path_;
   openwow::render::CharacterAppearance selected_character_appearance_{};
   openwow::render::CharacterAppearanceTextureSources appearance_texture_sources_{};

@@ -236,7 +236,10 @@ constexpr std::array<const char *, 10> kAddonStatusLabels = {
     "SECURE",
 };
 
-constexpr std::uint32_t kMinCompatibleInterfaceVersion = 20000;
+// Classic/Turtle's glue client contract.  The executable remains based on the
+// WotLK renderer, but addon compatibility is determined by the Classic UI
+// interface version, not by the renderer's build number.
+constexpr std::uint32_t kClassicAddonInterfaceVersion = AddonManager::kClientInterfaceVersion;
 const char *GetAddonStatusLabel(const AddonStatusLabel label) {
   return kAddonStatusLabels.at(static_cast<std::size_t>(label));
 }
@@ -295,15 +298,7 @@ AddonLoadabilityResult EvaluateLoadabilityRecursive(const AddOnsData &data, cons
     };
   }
 
-  if (addon->interface_version < kMinCompatibleInterfaceVersion) {
-    return {
-        .loadable = false,
-        .reason = AddonStatusLabel::Incompatible,
-        .dependency_reason = AddonStatusLabel::Loadable,
-    };
-  }
-
-  if (addon->interface_version != openwow::ui::kRetailInterfaceVersion &&
+  if (addon->interface_version != kClassicAddonInterfaceVersion &&
       openwow::ui::game::CVarSystem::Instance().GetCVarBool("checkAddonVersion")) {
     return {
         .loadable = false,

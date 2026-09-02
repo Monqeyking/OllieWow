@@ -7,6 +7,8 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <string>
+#include <unordered_set>
 
 namespace openwow::render::m2 {
 
@@ -24,7 +26,8 @@ class M2EffectRenderer {
 
   [[nodiscard]] bool WarmUpParticleProgram();
 
-  void SimulateEffects(detail::M2Instance& instance,
+  void SimulateEffects(std::uint32_t instance_id,
+                       detail::M2Instance& instance,
                        detail::M2ModelResource& resource,
                        const RenderMatrix4x4& model_matrix,
                        const std::optional<RenderMatrix4x4View>& view_matrix,
@@ -83,6 +86,9 @@ class M2EffectRenderer {
   float particle_density_ = 1.0f;
 
   std::optional<std::once_flag> particle_shader_once_{std::in_place};
+  std::unordered_set<std::uint32_t> effect_gate_diagnostics_logged_instances_;
+  std::unordered_set<std::uint32_t> effect_simulation_diagnostics_logged_instances_;
+  std::unordered_set<std::string> particle_diagnostics_logged_keys_;
 };
 
 }

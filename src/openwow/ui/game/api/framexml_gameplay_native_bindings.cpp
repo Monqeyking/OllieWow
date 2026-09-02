@@ -50,6 +50,7 @@ int LuaApi_SetLayoutMode(lua_State* L);
 int LuaSetSelectedDisplayChannel(lua_State* L);
 int LuaApi_SetTaxiBenchmarkMode(lua_State* L);
 int LuaApi_SetUIVisibility(lua_State* L);
+int LuaShowNameplates(lua_State* L);
 int LuaHideNameplates(lua_State* L);
 int LuaHideFriendNameplates(lua_State* L);
 int LuaSilenceMember(lua_State* L);
@@ -112,6 +113,7 @@ constexpr openwow::ui::LuaGlobalBinding kGameplayLuaBindings[] = {
     {"SetSelectedDisplayChannel", LuaSetSelectedDisplayChannel},
     {"SetTaxiBenchmarkMode", LuaApi_SetTaxiBenchmarkMode},
     {"SetUIVisibility", LuaApi_SetUIVisibility},
+    {"ShowNameplates", LuaShowNameplates},
     {"HideNameplates", LuaHideNameplates},
     {"HideFriendNameplates", LuaHideFriendNameplates},
     {"SilenceMember", LuaSilenceMember},

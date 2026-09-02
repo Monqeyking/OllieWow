@@ -33,6 +33,7 @@ int LuaUnitIsPVP(lua_State* L);
 int LuaUnitIsPVPFreeForAll(lua_State* L);
 int LuaUnitPlayerControlled(lua_State* L);
 int LuaUnitCanAttack(lua_State* L);
+int LuaUnitIsCivilian(lua_State* L);
 int LuaUnitCanCooperate(lua_State* L);
 int LuaUnitBuff(lua_State* L);
 int LuaUnitDebuff(lua_State* L);
@@ -160,6 +161,7 @@ constexpr openwow::ui::LuaGlobalBinding kUnitLuaBindings[] = {
     {"UnitIsPVP", LuaUnitIsPVP},
     {"UnitIsPVPFreeForAll", LuaUnitIsPVPFreeForAll},
     {"UnitPlayerControlled", LuaUnitPlayerControlled},
+    {"UnitIsCivilian", LuaUnitIsCivilian},
     {"UnitCanAttack", LuaUnitCanAttack},
     {"UnitCanCooperate", LuaUnitCanCooperate},
     {"UnitBuff", LuaUnitBuff},

@@ -277,11 +277,30 @@ int LuaRemoveMulti(lua_State* state) {
   return 0;
 }
 
+int LuaLoggingErrorHandler(lua_State* state) {
+  const char* message = lua_tostring(state, 1);
+  openwow::diagnostics::Log(
+      openwow::diagnostics::LogLevel::kWarn,
+      std::string("Lua error: ") +
+          (message != nullptr ? message : "non-string error object"));
+
+  const int top = lua_gettop(state);
+  lua_pushvalue(state, lua_upvalueindex(1));
+  lua_pushvalue(state, 1);
+  if (lua_pcall(state, 1, LUA_MULTRET, 0) != 0) {
+    return lua_error(state);
+  }
+  return lua_gettop(state) - top;
+}
+
 int LuaSetErrorHandler(lua_State* state) {
   luaL_checktype(state, 1, LUA_TFUNCTION);
   const auto profile = static_cast<FrameScriptGlobalProfile>(
       lua_tointeger(state, lua_upvalueindex(1)));
   lua_pushvalue(state, 1);
+  if (profile != FrameScriptGlobalProfile::Glue) {
+    lua_pushcclosure(state, LuaLoggingErrorHandler, 1);
+  }
   lua_setfield(state, LUA_REGISTRYINDEX, ErrorHandlerRegistryKey(profile));
   return 0;
 }
@@ -301,8 +320,9 @@ int LuaDefaultMessageErrorHandler(lua_State* state) {
   return 0;
 }
 
-int LuaNoOpErrorHandler(lua_State*) {
-  return 0;
+int LuaPreserveErrorHandler(lua_State* state) {
+  lua_pushvalue(state, 1);
+  return 1;
 }
 
 int LuaGetErrorHandler(lua_State* state) {
@@ -314,7 +334,7 @@ int LuaGetErrorHandler(lua_State* state) {
     lua_pop(state, 1);
     lua_pushcfunction(state, profile == FrameScriptGlobalProfile::Glue
                                  ? LuaDefaultMessageErrorHandler
-                                 : LuaNoOpErrorHandler);
+                                 : LuaPreserveErrorHandler);
   }
   return 1;
 }

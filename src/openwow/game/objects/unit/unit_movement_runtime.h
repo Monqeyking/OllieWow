@@ -377,6 +377,7 @@ public:
   bool has_movement_parent_matrix_{false};
 
   std::uint32_t last_transport_solve_bail_log_ms_{0};
+  std::uint32_t last_movement_step_trace_log_ms_{0};
   std::uint32_t update_flags_{0};
   std::int32_t move_sequence_{0};
   std::array<float, 6> speed_bounds_{};

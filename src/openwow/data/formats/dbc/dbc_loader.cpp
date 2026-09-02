@@ -46,11 +46,21 @@ std::string BuildVfsPath(const std::string &root, const RetailDbcDescriptor &des
   return path;
 }
 
+bool IsClassicSpellbookDbc(const std::string_view filename) {
+  static constexpr std::array<std::string_view, 3> kSpellbookTables = {
+      "DBFilesClient\\SkillLine.dbc",
+      "DBFilesClient\\SkillLineAbility.dbc",
+      "DBFilesClient\\SkillRaceClassInfo.dbc",
+  };
+  return std::find(kSpellbookTables.begin(), kSpellbookTables.end(), filename) !=
+         kSpellbookTables.end();
+}
+
 bool IsClassicMvpDbc(const std::string_view filename) {
   // Keep this list tied to the current Classic world-entry MVP. The full
   // catalog remains available for later Classic feature work, but loading it
   // eagerly retains a large amount of data that the MVP never reads.
-  static constexpr std::array<std::string_view, 72> kClassicMvpTables = {
+  static constexpr std::array<std::string_view, 78> kClassicMvpTables = {
       "DBFilesClient\\AreaTable.dbc",
       "DBFilesClient\\AnimationData.dbc",
       "DBFilesClient\\CharBaseInfo.dbc",
@@ -71,6 +81,7 @@ bool IsClassicMvpDbc(const std::string_view filename) {
       "DBFilesClient\\EmotesText.dbc",
       "DBFilesClient\\EmotesTextData.dbc",
       "DBFilesClient\\EmotesTextSound.dbc",
+      "DBFilesClient\\Exhaustion.dbc",
       "DBFilesClient\\FactionGroup.dbc",
       "DBFilesClient\\FactionTemplate.dbc",
       "DBFilesClient\\GameObjectArtKit.dbc",
@@ -94,12 +105,17 @@ bool IsClassicMvpDbc(const std::string_view filename) {
       "DBFilesClient\\Map.dbc",
       "DBFilesClient\\Material.dbc",
       "DBFilesClient\\NPCSounds.dbc",
+      "DBFilesClient\\NameGen.dbc",
       "DBFilesClient\\ObjectEffect.dbc",
       "DBFilesClient\\ObjectEffectGroup.dbc",
       "DBFilesClient\\ObjectEffectModifier.dbc",
       "DBFilesClient\\ObjectEffectPackage.dbc",
       "DBFilesClient\\ObjectEffectPackageElem.dbc",
+      "DBFilesClient\\PaperDollItemFrame.dbc",
       "DBFilesClient\\Resistances.dbc",
+      "DBFilesClient\\SkillLine.dbc",
+      "DBFilesClient\\SkillLineAbility.dbc",
+      "DBFilesClient\\SkillRaceClassInfo.dbc",
       "DBFilesClient\\SoundAmbience.dbc",
       "DBFilesClient\\SoundEntries.dbc",
       "DBFilesClient\\SoundEntriesAdvanced.dbc",
@@ -218,7 +234,8 @@ template <typename T>
 bool LoadRetailOptionalDbcStore(DbcStore<T> &store,
                                 const openwow::vfs::VirtualFileSystem &vfs,
                                 const std::string &path,
-                                const DbcTableSchema<T> &schema) {
+                                const DbcTableSchema<T> &schema,
+                                const bool require_declared_schema) {
   if (!store.empty()) {
     return true;
   }
@@ -230,6 +247,20 @@ bool LoadRetailOptionalDbcStore(DbcStore<T> &store,
 
   DbcFile probe{openwow::data::loading::CurrentDbcLocale()};
   if (probe.LoadFromBytes(*bytes) != DbcError::kOk) {
+    return false;
+  }
+
+  if (require_declared_schema &&
+      (probe.field_count() != schema.field_count ||
+       probe.record_size() != schema.record_size)) {
+    using openwow::diagnostics::Log;
+    using openwow::diagnostics::LogLevel;
+    Log(LogLevel::kWarn,
+        "DBC: Skipping " + std::string(schema.retail_path) +
+            " because its Classic header is " + std::to_string(probe.field_count()) +
+            " fields/" + std::to_string(probe.record_size()) +
+            " bytes; expected " + std::to_string(schema.field_count) +
+            " fields/" + std::to_string(schema.record_size) + " bytes.");
     return false;
   }
 
@@ -261,14 +292,15 @@ template <typename T>
 bool DbcLoader::LoadOneOptional(DbcStore<T> &store,
                                 const openwow::vfs::VirtualFileSystem &vfs,
                                 const std::string &path,
-                                const RetailDbcDescriptor &descriptor) {
+                                const RetailDbcDescriptor &descriptor,
+                                const bool require_declared_schema) {
   const DbcTableSchema<T> schema{
       .retail_path = descriptor.retail_path,
       .field_count = descriptor.field_count,
       .record_size = descriptor.record_size,
       .decode = &T::Load,
   };
-  return LoadRetailOptionalDbcStore(store, vfs, path, schema);
+  return LoadRetailOptionalDbcStore(store, vfs, path, schema, require_declared_schema);
 }
 
 int DbcLoader::LoadAll(const openwow::vfs::VirtualFileSystem &vfs,
@@ -289,7 +321,8 @@ int DbcLoader::LoadAll(const openwow::vfs::VirtualFileSystem &vfs,
     if (profile == DbcLoadProfile::kClassicMvp && !IsClassicMvpDbc(descriptor.retail_path)) {
       return;
     }
-    if (LoadOneOptional(store, vfs, BuildVfsPath(dbc_root_path, descriptor), descriptor)) {
+    if (LoadOneOptional(store, vfs, BuildVfsPath(dbc_root_path, descriptor), descriptor,
+                        IsClassicSpellbookDbc(descriptor.retail_path))) {
       ++loaded;
     }
   };

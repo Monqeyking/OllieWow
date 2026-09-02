@@ -109,6 +109,8 @@ int LuaDisconnectFromServer(lua_State *state);
 int LuaCancelLogin(lua_State *state);
 int LuaQuitGameAndRunLauncher(lua_State *state);
 int LuaGetNumAddOns(lua_State *state);
+int LuaGetScriptMemory(lua_State *state);
+int LuaSetScriptMemory(lua_State *state);
 int LuaGetAddOnInfo(lua_State *state);
 int LuaGetAddOnDependencies(lua_State *state);
 int LuaGetAddOnEnableState(lua_State *state);
@@ -327,6 +329,8 @@ constexpr openwow::ui::LuaGlobalBinding kGluePreFrameScriptBindings[] = {
     {"AcceptContest", LuaAcceptContest},
     {"QuitGameAndRunLauncher", LuaQuitGameAndRunLauncher},
     {"GetNumAddOns", LuaGetNumAddOns},
+    {"GetScriptMemory", LuaGetScriptMemory},
+    {"SetScriptMemory", LuaSetScriptMemory},
     {"GetAddOnInfo", LuaGetAddOnInfo},
     {"GetAddOnDependencies", LuaGetAddOnDependencies},
     {"GetAddOnEnableState", LuaGetAddOnEnableState},

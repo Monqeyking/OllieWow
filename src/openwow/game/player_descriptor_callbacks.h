@@ -191,9 +191,6 @@ inline constexpr std::uint32_t kQuestLogStateBitComplete = 0x02;
 inline constexpr std::uint32_t kQuestFlagAutoRewarded = 0x10000;
 
 struct QuestLogChangeResult {
-
-  bool send_questgiver_status_multiple_query = false;
-
   bool notify_quest_change = false;
   std::uint32_t notification_quest_id = 0;
   bool trigger_tutorial_0x28 = false;

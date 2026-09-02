@@ -8,6 +8,7 @@
 #include "openwow/ui/game/framescript/core/frame_lua_object_tree.h"
 #include "openwow/ui/game/framescript/xml/frame_xml_region_materializer.h"
 #include "openwow/ui/game/framescript/core/frame_draw_layer_state.h"
+#include "openwow/ui/game/framescript/core/frame_input_state.h"
 #include "openwow/ui/game/framescript/core/frame_script_dispatch.h"
 #include "openwow/ui/game/framescript/core/frame_script_object_runtime.h"
 #include "openwow/ui/game/api/game_lua_api_internal.h"
@@ -570,6 +571,27 @@ void BindButtonFontStringRegion(lua_State *L, int button_idx,
 
   if (lua_istable(L, -1) != 0) {
     const int current_idx = lua_absindex(L, -1);
+
+    // A button may receive SetText before its XML ButtonText region is
+    // materialized. Preserve that pending label when the authored region
+    // replaces the temporary runtime region.
+    lua_getfield(L, current_idx, "__ow_text");
+    const bool current_has_text = lua_isstring(L, -1) != 0 &&
+                                  lua_tostring(L, -1) != nullptr &&
+                                  lua_tostring(L, -1)[0] != '\0';
+    if (current_has_text) {
+      lua_getfield(L, font_string_idx, "__ow_text");
+      const bool target_has_text = lua_isstring(L, -1) != 0 &&
+                                   lua_tostring(L, -1) != nullptr &&
+                                   lua_tostring(L, -1)[0] != '\0';
+      lua_pop(L, 1);
+      if (!target_has_text) {
+        lua_pushvalue(L, -2);
+        lua_setfield(L, font_string_idx, "__ow_text");
+      }
+    }
+    lua_pop(L, 1);
+
     RemoveExactValueFromArrayField(L, button_idx, "__ow_regions", current_idx);
     lua_getfield(L, current_idx, "__ow_parent");
     if (lua_rawequal(L, -1, button_idx) != 0) {
@@ -608,6 +630,10 @@ void BindButtonFontStringRegion(lua_State *L, int button_idx,
   } else {
     ResolveButtonLabelAnchorPoint(L, button_idx, font_string_idx);
   }
+
+  // The ownership swap changes the retained render region even when the
+  // authored FontString already had anchors, so publish the mutation too.
+  NotifyFrameInputMutation(L, font_string_idx, false);
 }
 
 const char *NativeTextureSlotField(

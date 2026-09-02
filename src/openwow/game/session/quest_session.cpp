@@ -108,17 +108,6 @@ namespace openwow::game {
 
 namespace {
 
-void RefreshQuestgiverStatusesAfterQuestFailure(WorldSession &session,
-                                                const std::uint32_t quest_id) {
-  const auto *entry = session.quests().FindQuestLogEntry(quest_id);
-  if (entry == nullptr || entry->status == QuestStatus::kComplete ||
-      entry->status == QuestStatus::kRewarded ||
-      session.objects().GetLocalPlayerTyped() == nullptr) {
-    return;
-  }
-
-  session.Send(net::wotlk::PacketSender::BuildQuestgiverStatusMultipleQuery());
-}
 [[nodiscard]] bool ShouldKeepQuestDialogOpenAfterTurnIn(const WorldSession &session,
                                                          const std::uint32_t quest_id) {
   if (quest_id == 0) {
@@ -738,7 +727,6 @@ void WorldSession::HandleQuestUpdateFailed(const net::wotlk::WorldPacket &pkt) {
     return;
   }
 
-  RefreshQuestgiverStatusesAfterQuestFailure(*this, quests_.last_update_failed_quest());
 }
 
 void WorldSession::HandleQuestUpdateAddPvpKill(const net::wotlk::WorldPacket &pkt) {
@@ -774,7 +762,6 @@ void WorldSession::HandleQuestUpdateFailedTimer(const net::wotlk::WorldPacket &p
     return;
   }
 
-  RefreshQuestgiverStatusesAfterQuestFailure(*this, quests_.failed_timer_quest());
 }
 
 }

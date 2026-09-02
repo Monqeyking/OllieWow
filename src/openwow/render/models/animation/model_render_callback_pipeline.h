@@ -51,6 +51,12 @@ struct ModelRenderCallbackPointLightState {
       ModelRenderCallbackPointLightAttenuation::kPolynomial};
 };
 
+struct ModelRenderCallbackDirectionalLightState {
+  std::array<float, 3> direction{};
+  std::array<float, 3> ambient_rgb{};
+  std::array<float, 3> diffuse_rgb{};
+};
+
 enum class ModelRenderCallbackFogMode : std::uint8_t {
   kInherit,
   kDisabled,
@@ -70,6 +76,7 @@ struct ModelRenderCallbackLightingState {
   float fog_blend_scale{0.0f};
   std::array<float, 3> fog_color_rgb{};
 
+  std::vector<ModelRenderCallbackDirectionalLightState> directional_lights;
   std::vector<ModelRenderCallbackPointLightState> point_lights;
 };
 

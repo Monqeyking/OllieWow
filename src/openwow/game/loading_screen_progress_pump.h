@@ -13,7 +13,6 @@ namespace openwow::game {
 struct LoadingScreenProgressPumpResult {
   bool accepted = false;
   bool should_present = false;
-  bool should_send_keep_alive = false;
   float display_progress = 0.0f;
 };
 
@@ -24,7 +23,7 @@ class LoadingScreenProgressPump {
   }
 
   void Reset(bool split_secondary_progress, std::uint32_t now_ms = 0) {
-    keep_alive_deadline_ms_ = now_ms + kKeepAliveIntervalMs;
+    (void)now_ms;
     openwow::screens::LoadingScreenManager::Get().ResetCompositeProgress(
         split_secondary_progress);
     PumpPendingEvents();
@@ -146,20 +145,13 @@ class LoadingScreenProgressPump {
     last_present_tick_ms_ = now_ms;
     manager.UpdateDisplayProgress(online_mode, online_trial_gate_open);
     result.should_present = true;
-    if (static_cast<std::int32_t>(now_ms - keep_alive_deadline_ms_) >= 0) {
-      result.should_send_keep_alive = true;
-      keep_alive_deadline_ms_ = now_ms + kKeepAliveIntervalMs;
-    }
     result.display_progress = manager.GetProgress();
     return result;
   }
 
  private:
-  static constexpr std::uint32_t kKeepAliveIntervalMs = 30000;
-
   std::function<void()> pending_event_pump_;
   std::uint32_t last_present_tick_ms_ = std::numeric_limits<std::uint32_t>::max();
-  std::uint32_t keep_alive_deadline_ms_ = kKeepAliveIntervalMs;
 };
 
 }

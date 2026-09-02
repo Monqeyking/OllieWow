@@ -1340,23 +1340,25 @@ constexpr std::uint8_t AUTH_DATABASE_BUSY           = 26;
 constexpr std::uint8_t AUTH_ALREADY_LOGGING_IN      = 28;
 constexpr std::uint8_t AUTH_WAIT_QUEUE              = 27;
 
-constexpr std::uint8_t CHAR_CREATE_SUCCESS          = 0x2F;
-constexpr std::uint8_t CHAR_CREATE_ERROR            = 0x30;
-constexpr std::uint8_t CHAR_CREATE_FAILED           = 0x31;
-constexpr std::uint8_t CHAR_CREATE_NAME_IN_USE      = 0x32;
-constexpr std::uint8_t CHAR_CREATE_DISABLED         = 0x33;
-constexpr std::uint8_t CHAR_CREATE_PVP_TEAMS        = 0x34;
-constexpr std::uint8_t CHAR_CREATE_SERVER_LIMIT     = 0x35;
-constexpr std::uint8_t CHAR_CREATE_ACCOUNT_LIMIT    = 0x36;
-constexpr std::uint8_t CHAR_CREATE_SERVER_QUEUE     = 0x37;
-constexpr std::uint8_t CHAR_CREATE_ONLY_EXISTING    = 0x38;
-constexpr std::uint8_t CHAR_CREATE_EXPANSION        = 0x39;
-constexpr std::uint8_t CHAR_CREATE_EXPANSION_CLASS  = 0x3A;
-constexpr std::uint8_t CHAR_CREATE_LEVEL_REQ        = 0x3B;
-constexpr std::uint8_t CHAR_CREATE_UNIQUE_CLASS     = 0x3C;
+// These values must match the local Classic/Turtle ResponseCodes enum in
+// D:\OllieWoW\Source\src\game\SharedDefines.h.  The original OpenWow
+// values were shifted to the WotLK layout, which made a successful character
+// creation response (0x2E) look like an error to the client.
+constexpr std::uint8_t CHAR_CREATE_IN_PROGRESS      = 0x2D;
+constexpr std::uint8_t CHAR_CREATE_SUCCESS          = 0x2E;
+constexpr std::uint8_t CHAR_CREATE_ERROR            = 0x2F;
+constexpr std::uint8_t CHAR_CREATE_FAILED           = 0x30;
+constexpr std::uint8_t CHAR_CREATE_NAME_IN_USE      = 0x31;
+constexpr std::uint8_t CHAR_CREATE_DISABLED         = 0x32;
+constexpr std::uint8_t CHAR_CREATE_PVP_TEAMS        = 0x33;
+constexpr std::uint8_t CHAR_CREATE_SERVER_LIMIT     = 0x34;
+constexpr std::uint8_t CHAR_CREATE_ACCOUNT_LIMIT    = 0x35;
+constexpr std::uint8_t CHAR_CREATE_SERVER_QUEUE     = 0x36;
+constexpr std::uint8_t CHAR_CREATE_ONLY_EXISTING    = 0x37;
 
-constexpr std::uint8_t CHAR_DELETE_SUCCESS          = 0x47;
-constexpr std::uint8_t CHAR_DELETE_FAILED           = 0x48;
+constexpr std::uint8_t CHAR_DELETE_IN_PROGRESS      = 0x38;
+constexpr std::uint8_t CHAR_DELETE_SUCCESS          = 0x39;
+constexpr std::uint8_t CHAR_DELETE_FAILED           = 0x3A;
 
 constexpr std::uint8_t RESPONSE_SUCCESS             = 0x00;
 

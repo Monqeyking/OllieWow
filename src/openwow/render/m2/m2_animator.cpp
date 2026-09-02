@@ -49,6 +49,15 @@ BoneMatrixAt(const std::span<const float> bone_matrices, const std::size_t bone_
   };
 }
 
+[[nodiscard]] RenderVec3 TransformDirection(const RenderVec3View direction,
+                                            const RenderMatrix4x4View matrix) noexcept {
+  return {
+      matrix[0] * direction[0] + matrix[4] * direction[1] + matrix[8] * direction[2],
+      matrix[1] * direction[0] + matrix[5] * direction[1] + matrix[9] * direction[2],
+      matrix[2] * direction[0] + matrix[6] * direction[1] + matrix[10] * direction[2],
+  };
+}
+
 bx::Vec3 Vec3From(const openwow::data::model::M2Vec3 &v) {
   return bx::Vec3{v.x, v.y, v.z};
 }
@@ -82,6 +91,10 @@ template <typename T> struct TrackRef {
 template <typename T> struct TrackSet {
   std::span<const std::uint32_t> times;
   std::span<const T> values;
+  std::size_t window_first{0};
+  std::size_t window_last{0};
+  std::uint32_t sequence_start_ms{0};
+  bool uses_classic_bracket{false};
 
   [[nodiscard]] bool Empty() const noexcept { return times.empty() || values.empty(); }
 };
@@ -91,6 +104,27 @@ template <typename T>
   if (ref.track == nullptr) {
     return {};
   }
+
+  if (ref.track->classic_range_brackets && !ref.track->classic_ranges.empty() &&
+      !ref.track->classic_key_times_ms.empty() && !ref.track->classic_key_values.empty()) {
+    std::size_t set_index = 0;
+    if (ref.track->global_sequence < 0) {
+      set_index = static_cast<std::size_t>(std::max(0, ref.animation_index));
+    }
+    if (set_index >= ref.track->classic_ranges.size()) {
+      set_index = 0;
+    }
+    const auto &range = ref.track->classic_ranges[set_index];
+    return TrackSet<T>{
+        .times = ref.track->classic_key_times_ms,
+        .values = ref.track->classic_key_values,
+        .window_first = range.first_key,
+        .window_last = range.last_key,
+        .sequence_start_ms = range.sequence_start_ms,
+        .uses_classic_bracket = true,
+    };
+  }
+
   const auto &segments = ref.track->segments;
   if (segments.empty()) {
     return {};
@@ -249,6 +283,50 @@ template <typename T>
   at.values = set.values;
   at.valid = true;
   if (times.size() <= 1u) {
+    return at;
+  }
+
+  if (set.uses_classic_bracket) {
+    const std::size_t last = times.size() - 1u;
+    const std::size_t lo = std::min(set.window_first, last);
+    const std::size_t hi = std::min(std::max(set.window_last, lo), last);
+
+    std::uint32_t sample_time = ref.time_ms;
+    if (ref.animation_duration_ms > 0u) {
+      sample_time = ref.has_animation_wrapped_time
+                        ? ref.animation_wrapped_time_ms
+                        : WrapTimeMs(sample_time, ref.animation_duration_ms);
+    }
+    sample_time = sample_time > std::numeric_limits<std::uint32_t>::max() -
+                              set.sequence_start_ms
+                      ? std::numeric_limits<std::uint32_t>::max()
+                      : sample_time + set.sequence_start_ms;
+
+    // The range is a search window.  k1 intentionally comes from the full
+    // timeline, matching Benilla's sampler for keys just beyond the band.
+    std::size_t index = lo;
+    for (std::size_t candidate = lo; candidate <= hi; ++candidate) {
+      if (times[candidate] <= sample_time) {
+        index = candidate;
+      } else {
+        break;
+      }
+    }
+    at.index = std::min(index, at.values.size() - 1u);
+    const std::size_t next = at.index + 1u;
+    if (next >= times.size() || next >= at.values.size() || ref.track->interpolation == 0u) {
+      return at;
+    }
+    const std::uint32_t first_time = times[at.index];
+    const std::uint32_t second_time = times[next];
+    if (second_time <= first_time) {
+      return at;
+    }
+    at.alpha = std::clamp(
+        static_cast<float>(static_cast<double>(sample_time) - first_time) /
+            static_cast<float>(second_time - first_time),
+        0.0f, 1.0f);
+    at.interpolate = true;
     return at;
   }
 
@@ -1531,7 +1609,8 @@ M2Animator::SampleParticleEmitter(const std::size_t emitter_index, const int ani
   const std::uint32_t animation_wrapped_time_ms =
       wrap_by_animation ? WrapTimeMs(time_ms, anim_duration) : 0u;
 
-  const auto sample_float_track = [&](const openwow::data::model::M2Track<float> &track) {
+  const auto sample_float_track = [&](const openwow::data::model::M2Track<float> &track,
+                                      const float default_value = 0.0f) {
     const TrackRef<float> ref{
         .track = &track,
         .animation_index = animation_index,
@@ -1541,7 +1620,7 @@ M2Animator::SampleParticleEmitter(const std::size_t emitter_index, const int ani
         .has_animation_wrapped_time = wrap_by_animation,
         .animation_wrapped_time_ms = animation_wrapped_time_ms,
     };
-    return SampleTrack(ref, 0.0f,
+    return SampleTrack(ref, default_value,
                        [](const float a, const float b, const float k) { return a + (b - a) * k; });
   };
 
@@ -1551,7 +1630,10 @@ M2Animator::SampleParticleEmitter(const std::size_t emitter_index, const int ani
   sample.vertical_range = sample_float_track(emitter.vertical_range);
   sample.horizontal_range = sample_float_track(emitter.horizontal_range);
   sample.gravity = sample_float_track(emitter.gravity);
-  sample.lifespan = sample_float_track(emitter.lifespan);
+  // Vanilla's keyless lifespan channel holds 1 second; zero means that no
+  // particle can survive long enough to render.  Other keyless scalar
+  // channels retain their existing zero identity.
+  sample.lifespan = sample_float_track(emitter.lifespan, 1.0f);
   sample.emission_rate = sample_float_track(emitter.emission_rate);
   sample.emission_area_length = sample_float_track(emitter.emission_area_length);
   sample.emission_area_width = sample_float_track(emitter.emission_area_width);
@@ -1707,15 +1789,18 @@ M2LightSample M2Animator::SampleLight(int light_index, int animation_index, std:
   }
 
   RenderVec3 position{light.position[0], light.position[1], light.position[2]};
+  RenderVec3 direction{0.0f, 0.0f, 1.0f};
 
   if (light.bone >= 0) {
     const auto bone_matrix = BoneMatrixAt(bone_matrices, static_cast<std::size_t>(light.bone));
     if (bone_matrix.has_value()) {
       position = TransformPoint(RenderVec3View{position}, *bone_matrix);
+      direction = TransformDirection(RenderVec3View{direction}, *bone_matrix);
     }
   }
 
   result.position = position;
+  result.direction = direction;
 
   return result;
 }

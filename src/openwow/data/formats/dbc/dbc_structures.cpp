@@ -410,7 +410,7 @@ OPENWOW_DBC_SCHEMA(SkillLineEntry,
   DBC_I32(category_id, 1)
   DBC_U32(skill_cost_id, 2)
   DBC_LOCALIZED(name, 3)
-  DBC_U32(can_link, 21)
+  DBC_U32(spell_icon_id, 21)
 )
 
 OPENWOW_DBC_SCHEMA(SkillLineAbilityEntry,

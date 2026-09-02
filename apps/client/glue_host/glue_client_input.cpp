@@ -37,6 +37,25 @@ namespace {
 constexpr int kRealmListRowHeightPx = 52;
 constexpr int kCharacterSelectRowHeightPx = 58;
 
+bool IsMovementDiagnosticKey(const SDL_Scancode scancode) {
+  switch (scancode) {
+    case SDL_SCANCODE_W:
+    case SDL_SCANCODE_S:
+    case SDL_SCANCODE_A:
+    case SDL_SCANCODE_D:
+    case SDL_SCANCODE_Q:
+    case SDL_SCANCODE_E:
+    case SDL_SCANCODE_UP:
+    case SDL_SCANCODE_DOWN:
+    case SDL_SCANCODE_LEFT:
+    case SDL_SCANCODE_RIGHT:
+    case SDL_SCANCODE_SPACE:
+      return true;
+    default:
+      return false;
+  }
+}
+
 void RequestApplicationQuit() {
   auto& client_services = openwow::net::ClientServices::Instance();
   if (client_services.HasPendingLogoutRequest()) {
@@ -623,9 +642,20 @@ void GlueClient::HandleEvent(const SDL_Event &event) {
   }
 
   if (event.type == SDL_KEYUP && mode_ == UiMode::kInWorld) {
+    const SDL_Scancode scancode = event.key.keysym.scancode;
+    const bool movement_key = IsMovementDiagnosticKey(scancode);
     if (game_loop_.game_ui().is_initialized() &&
         game_loop_.game_ui().input_router().HandleKeyUp(
-            static_cast<std::uint32_t>(event.key.keysym.scancode))) {
+            static_cast<std::uint32_t>(scancode))) {
+      if (movement_key) {
+        openwow::diagnostics::Log(
+            openwow::diagnostics::LogLevel::kWarn,
+            "MovementInput: keyup key=" +
+                openwow::game::actions::bindings::adapters::platform::
+                    SdlScancodeToBaseKey(scancode) +
+                " ui_handled=1 focus=" +
+                game_loop_.game_ui().input_router().focused_frame_name());
+      }
       UpdateTextInputState();
       return;
     }
@@ -634,8 +664,15 @@ void GlueClient::HandleEvent(const SDL_Event &event) {
         openwow::game::actions::bindings::adapters::platform::SdlScancodeToBindingChord(
             event.key.keysym.scancode,
             static_cast<std::uint16_t>(event.key.keysym.mod));
-    if (!key_name.empty() &&
-        game_loop_.binding_input().KeyUp(key_name)) {
+    const bool binding_handled = !key_name.empty() &&
+                                  game_loop_.binding_input().KeyUp(key_name);
+    if (movement_key) {
+      openwow::diagnostics::Log(
+          openwow::diagnostics::LogLevel::kWarn,
+          "MovementInput: binding-up key=" + key_name +
+              " handled=" + (binding_handled ? "1" : "0"));
+    }
+    if (binding_handled) {
       return;
     }
     return;
@@ -954,12 +991,24 @@ void GlueClient::HandleKeyDown(const SDL_Event &event) {
     return;
   }
 
-  if (mode_ == UiMode::kInWorld && game_loop_.game_ui().is_initialized() &&
-      game_loop_.game_ui().input_router().HandleKeyDown(
-          static_cast<std::uint32_t>(event.key.keysym.scancode), shift_down,
-          ctrl_down)) {
-    UpdateTextInputState();
-    return;
+  const bool movement_key = IsMovementDiagnosticKey(scancode);
+  if (mode_ == UiMode::kInWorld && game_loop_.game_ui().is_initialized()) {
+    const bool ui_handled = game_loop_.game_ui().input_router().HandleKeyDown(
+        static_cast<std::uint32_t>(event.key.keysym.scancode), shift_down,
+        ctrl_down);
+    if (movement_key) {
+      openwow::diagnostics::Log(
+          openwow::diagnostics::LogLevel::kWarn,
+          "MovementInput: keydown key=" +
+              openwow::game::actions::bindings::adapters::platform::
+                  SdlScancodeToBaseKey(scancode) +
+              " ui_handled=" + (ui_handled ? "1" : "0") +
+              " focus=" + game_loop_.game_ui().input_router().focused_frame_name());
+    }
+    if (ui_handled) {
+      UpdateTextInputState();
+      return;
+    }
   }
 
   if (mode_ != UiMode::kInWorld) {
@@ -1145,8 +1194,15 @@ void GlueClient::HandleKeyDown(const SDL_Event &event) {
             scancode,
             static_cast<std::uint16_t>(event.key.keysym.mod),
             event.key.repeat != 0);
-    if (!key_name.empty() &&
-        game_loop_.binding_input().KeyDown(key_name)) {
+    const bool binding_handled = !key_name.empty() &&
+                                  game_loop_.binding_input().KeyDown(key_name);
+    if (movement_key) {
+      openwow::diagnostics::Log(
+          openwow::diagnostics::LogLevel::kWarn,
+          "MovementInput: binding-down key=" + key_name +
+              " handled=" + (binding_handled ? "1" : "0"));
+    }
+    if (binding_handled) {
       return;
     }
   }

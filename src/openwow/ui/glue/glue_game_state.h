@@ -181,6 +181,11 @@ struct GlueGameState {
   float select_facing{0.0f};
 
   std::string char_select_background;
+  // Keep the Lua-requested token separate from the resolved model path.  The
+  // Vanilla CharacterSelect flow requests the background before SelectCharacter
+  // updates the native selected index, so the token must be replayed after the
+  // selection changes.
+  std::string char_select_requested_background;
 
   std::weak_ptr<GlueModelFFXWidget> char_select_model_frame;
 

@@ -1452,6 +1452,19 @@ void WorldSession::HandleAttackStart(const net::wotlk::WorldPacket& pkt) {
         attacker != nullptr) {
 
       attacker->Interaction().SetCachedUpdateTarget(parsed->victim);
+      openwow::diagnostics::Log(
+          openwow::diagnostics::LogLevel::kInfo,
+          "CombatTrace: SMSG_ATTACKSTART attacker=" +
+              std::to_string(parsed->attacker.GetRawValue()) +
+              " victim=" + std::to_string(parsed->victim.GetRawValue()) +
+              " selected=" +
+              (attacker->Animation().GetSelectedStandAnimationId().has_value()
+                   ? std::to_string(*attacker->Animation().GetSelectedStandAnimationId())
+                   : std::string("none")) +
+              " resolved=" +
+              std::to_string(attacker->Animation().GetResolvedPlaybackAnimationId()) +
+              " sheathe=" +
+              std::to_string(attacker->Animation().GetCachedSheatheState()));
     }
     if (auto_attack_combat_event_callback_) {
       auto_attack_combat_event_callback_(
@@ -1724,6 +1737,13 @@ void WorldSession::HandleAttackerStateUpdate(const net::wotlk::WorldPacket& pkt)
     return;
   }
   const auto& asu = *parsed_asu;
+  openwow::diagnostics::Log(
+      openwow::diagnostics::LogLevel::kInfo,
+      "CombatTrace: SMSG_ATTACKERSTATEUPDATE attacker=" +
+          std::to_string(asu.attacker.GetRawValue()) +
+          " victim=" + std::to_string(asu.victim.GetRawValue()) +
+          " hit_info=0x" + std::to_string(asu.hit_info) +
+          " melee_spell=" + std::to_string(asu.melee_spell_id));
   if (auto_attack_combat_event_callback_) {
     auto_attack_combat_event_callback_(
         AutoAttackCombatEvent::AttackerStateUpdate,

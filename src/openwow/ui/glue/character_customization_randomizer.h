@@ -39,10 +39,10 @@ struct CharacterCustomizationState {
 inline bool CharacterCreateFilterMatchesFlags(const std::uint32_t flags, const int filter_mode) {
   switch (filter_mode) {
   case 0:
-    if ((flags & 0x1u) == 0u) {
-      return false;
-    }
-    return (flags & 0xCu) == 0u;
+    // Classic 1.12 CharSections uses bit 0 as SECTION_FLAG_UNAVAILABLE:
+    // normal create rows have the bit clear. The old predicate came from
+    // the WotLK/OpenWow layout and rejected every normal Classic row.
+    return (flags & 0x1u) == 0u;
   case 1:
     return (flags & 0x1u) != 0u && (flags & 0x14u) != 0u && (flags & 0x8u) == 0u;
   case 2:
@@ -70,6 +70,12 @@ inline bool CharacterCreateFilterMatchesFlags(const std::uint32_t flags, const i
 }
 
 inline int CharacterCreateFilterModeForClass(const int mode, const int class_id) {
+  // The Classic CharacterCreate selector has no WotLK death-knight variant.
+  // Keep the selector data-driven for every class instead of switching to a
+  // WotLK class-specific flag predicate for class id 6.
+  if (mode == 0) {
+    return 0;
+  }
   switch (mode) {
   case 1:
     return (class_id == 6) ? 3 : 2;
@@ -175,16 +181,35 @@ inline const openwow::data::dbc::CharSectionsEntry *
 FindCharacterCustomizationRow(const EntryRange &entries, const CharacterCustomizationState &state,
                               const std::uint32_t base_section, const int type_value,
                               const int variation_value, const int mode) {
-  const auto *entry = GetUnfilteredCharacterCustomizationRow(entries, state, base_section,
-                                                             type_value, variation_value);
-  if (entry == nullptr) {
+  if (base_section > 4u || type_value < 0 || variation_value < 0) {
     return nullptr;
   }
+
+  const int type_slot_count = GetCharacterCustomizationTypeSlotCount(entries, state, base_section);
+  if (type_slot_count <= 0 || type_value >= type_slot_count) {
+    return nullptr;
+  }
+
+  const int variation_slot_count =
+      GetCharacterCustomizationVariationSlotCount(entries, state, base_section, type_value);
+  if (variation_slot_count <= 0 || variation_value >= variation_slot_count) {
+    return nullptr;
+  }
+
   const int filter_mode = CharacterCreateFilterModeForClass(mode, state.class_id);
-  if (!CharacterCreateFilterMatchesFlags(entry->flags, filter_mode)) {
-    return nullptr;
+  for (auto it = entries.rbegin(); it != entries.rend(); ++it) {
+    const auto &entry = *it;
+    if (static_cast<int>(entry.race_id) != state.race_id ||
+        static_cast<int>(entry.sex_id) != state.sex_id || entry.base_section != base_section ||
+        static_cast<int>(entry.type) != type_value ||
+        static_cast<int>(entry.variation) != variation_value ||
+        !CharacterCreateFilterMatchesFlags(entry.flags, filter_mode)) {
+      continue;
+    }
+    return &entry;
   }
-  return entry;
+
+  return nullptr;
 }
 
 template <typename EntryRange>
@@ -325,7 +350,10 @@ inline bool IsSkinSelectionCompatible(const EntryRange &entries,
     return false;
   }
 
-  if (mode == 2) {
+  // Classic does not use section 4 as a prerequisite for selecting a skin.
+  // Underwear is an independent render layer; requiring it here makes a valid
+  // skin/face grid unselectable when the Classic table has no underwear row.
+  if (mode == 0 || mode == 2) {
     return true;
   }
 
@@ -336,27 +364,42 @@ template <typename EntryRange>
 inline bool CycleSkinCustomizationSelection(CharacterCustomizationState &state,
                                             const EntryRange &entries, const int delta,
                                             const int mode = 0) {
-  const int skin_slot_count = GetCharacterCustomizationVariationSlotCount(entries, state, 0u, 0);
-  if (skin_slot_count <= 0) {
+  std::vector<int> candidates;
+  candidates.reserve(16);
+  for (const auto &entry : entries) {
+    if (entry.race_id != static_cast<std::uint32_t>(state.race_id) ||
+        entry.sex_id != static_cast<std::uint32_t>(state.sex_id) || entry.base_section != 0u ||
+        entry.type != 0u ||
+        FindCharacterCustomizationRow(entries, state, 0u, 0, static_cast<int>(entry.variation),
+                                      mode) == nullptr ||
+        !IsSkinSelectionCompatible(entries, state, static_cast<int>(entry.variation), mode)) {
+      continue;
+    }
+    if (std::find(candidates.begin(), candidates.end(), static_cast<int>(entry.variation)) ==
+        candidates.end()) {
+      candidates.push_back(static_cast<int>(entry.variation));
+    }
+  }
+
+  if (candidates.empty()) {
     return false;
   }
 
-  const int start = state.skin;
-  int candidate = start;
-  while (true) {
-    candidate = WrapCustomizationValue(candidate, delta, skin_slot_count - 1);
-    if (candidate == start) {
-      break;
-    }
-    if (!IsSkinSelectionCompatible(entries, state, candidate, mode)) {
-      continue;
-    }
-    state.skin = candidate;
-    state.skin_selection_anchor = candidate;
-    return true;
+  const auto current = std::find(candidates.begin(), candidates.end(), state.skin);
+  if (candidates.size() == 1u && current != candidates.end()) {
+    return false;
   }
 
-  return false;
+  const std::size_t current_index =
+      current == candidates.end()
+          ? (delta > 0 ? 0u : candidates.size() - 1u)
+          : static_cast<std::size_t>(std::distance(candidates.begin(), current));
+  const std::size_t next_index =
+      delta > 0 ? (current_index + 1u) % candidates.size()
+                : (current_index + candidates.size() - 1u) % candidates.size();
+  state.skin = candidates[next_index];
+  state.skin_selection_anchor = state.skin;
+  return current == candidates.end() || state.skin != *current;
 }
 
 template <typename EntryRange>
@@ -368,7 +411,9 @@ inline bool IsFaceSelectionCompatible(const EntryRange &entries,
     return false;
   }
 
-  if (mode == 2) {
+  // As with skin selection, Classic underwear is not part of the appearance
+  // validity predicate and must not prevent a face change.
+  if (mode == 0 || mode == 2) {
     return true;
   }
 
@@ -378,15 +423,31 @@ inline bool IsFaceSelectionCompatible(const EntryRange &entries,
 template <typename EntryRange>
 inline int FindCompatibleFaceSkin(CharacterCustomizationState state, const EntryRange &entries,
                                   const int face, const int mode = 0) {
-  const int variation_slot_count =
-      GetCharacterCustomizationVariationSlotCount(entries, state, 1u, face);
-  if (variation_slot_count <= 0) {
+  std::vector<int> skins;
+  skins.reserve(16);
+  for (const auto &entry : entries) {
+    if (entry.race_id != static_cast<std::uint32_t>(state.race_id) ||
+        entry.sex_id != static_cast<std::uint32_t>(state.sex_id) || entry.base_section != 1u ||
+        entry.type != static_cast<std::uint32_t>(face) ||
+        FindCharacterCustomizationRow(entries, state, 1u, face,
+                                      static_cast<int>(entry.variation), mode) == nullptr) {
+      continue;
+    }
+    if (std::find(skins.begin(), skins.end(), static_cast<int>(entry.variation)) == skins.end()) {
+      skins.push_back(static_cast<int>(entry.variation));
+    }
+  }
+  if (skins.empty()) {
     return -1;
   }
 
-  const int anchor = std::max(state.skin_selection_anchor, 0);
-  for (int ordinal = 0; ordinal < variation_slot_count; ++ordinal) {
-    const int candidate_skin = (anchor + ordinal) % variation_slot_count;
+  const auto anchor = std::find(skins.begin(), skins.end(), state.skin_selection_anchor);
+  const std::size_t anchor_index =
+      anchor == skins.end()
+          ? 0u
+          : static_cast<std::size_t>(std::distance(skins.begin(), anchor));
+  for (std::size_t ordinal = 0; ordinal < skins.size(); ++ordinal) {
+    const int candidate_skin = skins[(anchor_index + ordinal) % skins.size()];
     if (IsFaceSelectionCompatible(entries, state, face, candidate_skin, mode)) {
       return candidate_skin;
     }
@@ -427,33 +488,54 @@ template <typename EntryRange>
 inline bool CycleFaceCustomizationSelection(CharacterCustomizationState &state,
                                             const EntryRange &entries, const int delta,
                                             const int mode = 0) {
-  const int type_slot_count = GetCharacterCustomizationTypeSlotCount(entries, state, 1u);
-  if (type_slot_count <= 0) {
+  std::vector<int> candidates;
+  candidates.reserve(16);
+  for (const auto &entry : entries) {
+    if (entry.race_id != static_cast<std::uint32_t>(state.race_id) ||
+        entry.sex_id != static_cast<std::uint32_t>(state.sex_id) || entry.base_section != 1u ||
+        FindCharacterCustomizationRow(entries, state, static_cast<std::uint32_t>(1u),
+                                      static_cast<int>(entry.type),
+                                      static_cast<int>(entry.variation), mode) == nullptr) {
+      continue;
+    }
+    if (std::find(candidates.begin(), candidates.end(), static_cast<int>(entry.type)) ==
+        candidates.end()) {
+      candidates.push_back(static_cast<int>(entry.type));
+    }
+  }
+
+  if (candidates.empty()) {
     return false;
   }
 
-  const int start = state.face;
-  int candidate = start;
-  while (true) {
-    candidate = WrapCustomizationValue(candidate, delta, type_slot_count - 1);
-    if (candidate == start) {
-      break;
-    }
-    const int compatible_skin = FindCompatibleFaceSkin(state, entries, candidate, mode);
-    if (compatible_skin < 0) {
-      continue;
-    }
-
-    if (IsFaceSelectionCompatible(entries, state, candidate, state.skin, mode)) {
-      state.face = candidate;
-    } else {
-      state.skin = compatible_skin;
-      state.face = candidate;
-    }
-    return true;
+  const auto current = std::find(candidates.begin(), candidates.end(), state.face);
+  if (candidates.size() == 1u && current != candidates.end()) {
+    return false;
+  }
+  const std::size_t current_index =
+      current == candidates.end()
+          ? (delta > 0 ? 0u : candidates.size() - 1u)
+          : static_cast<std::size_t>(std::distance(candidates.begin(), current));
+  const std::size_t next_index =
+      delta > 0 ? (current_index + 1u) % candidates.size()
+                : (current_index + candidates.size() - 1u) % candidates.size();
+  const int candidate = candidates[next_index];
+  if (candidate == state.face) {
+    return false;
   }
 
-  return false;
+  const int compatible_skin = FindCompatibleFaceSkin(state, entries, candidate, mode);
+  if (compatible_skin < 0) {
+    return false;
+  }
+
+  if (IsFaceSelectionCompatible(entries, state, candidate, state.skin, mode)) {
+    state.face = candidate;
+  } else {
+    state.skin = compatible_skin;
+    state.face = candidate;
+  }
+  return true;
 }
 
 template <typename FacialHairStyleRange>

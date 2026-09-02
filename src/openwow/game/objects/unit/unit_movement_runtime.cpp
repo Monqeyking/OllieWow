@@ -1656,6 +1656,59 @@ void UnitMovementRuntime::AdvanceMovementStep(
   data_.AdvanceKinematics(step_ms);
   const auto integrated_transform = data_.GetTransformPosition();
 
+  const auto trace_step = [this, &session, timestamp, step_ms, &start,
+                           &integrated_transform](
+                              const char *const stage,
+                              const char *const collision_status,
+                              const C3Vector &solved_transform) {
+    if (!owner_.IsActiveMover()) {
+      return;
+    }
+
+    constexpr std::uint32_t kMovementStepTraceIntervalMs = 250u;
+    const std::uint32_t now_ms = session.CurrentClientTimeMs();
+    if (now_ms - last_movement_step_trace_log_ms_ <
+        kMovementStepTraceIntervalMs) {
+      return;
+    }
+    last_movement_step_trace_log_ms_ = now_ms;
+
+    const auto current_transform = data_.GetTransformPosition();
+    const auto &owner_movement = owner_.GetMovementInfo();
+    const auto owner_position = owner_.GetPosition();
+    diagnostics::Log(
+        diagnostics::LogLevel::kWarn,
+        std::string("MovementStep: stage=") + stage +
+            " status=" + collision_status +
+            " guid=" + std::to_string(owner_.GetGuid().GetRawValue()) +
+            " timestamp=" + std::to_string(timestamp) +
+            " step_ms=" + std::to_string(step_ms) +
+            " flags=" + std::to_string(data_.GetRuntimeFlags()) +
+            " flags2=" + std::to_string(data_.GetRuntimeFlags2()) +
+            " speed=" + std::to_string(data_.GetCurrentSpeed()) +
+            " speeds=" + std::to_string(data_.GetSpeed(kSpeedWalk)) +
+            "," + std::to_string(data_.GetSpeed(kSpeedRun)) + "," +
+            std::to_string(data_.GetSpeed(kSpeedRunBack)) + "," +
+            std::to_string(data_.GetSpeed(kSpeedTurnRate)) +
+            " start=" + std::to_string(start[0]) + "," +
+            std::to_string(start[1]) + "," + std::to_string(start[2]) +
+            " integrated=" + std::to_string(integrated_transform[0]) +
+            "," + std::to_string(integrated_transform[1]) + "," +
+            std::to_string(integrated_transform[2]) +
+            " solved=" + std::to_string(solved_transform.x) + "," +
+            std::to_string(solved_transform.y) + "," +
+            std::to_string(solved_transform.z) +
+            " data=" + std::to_string(current_transform[0]) + "," +
+            std::to_string(current_transform[1]) + "," +
+            std::to_string(current_transform[2]) +
+            " owner=" + std::to_string(owner_position.x) + "," +
+            std::to_string(owner_position.y) + "," +
+            std::to_string(owner_position.z) +
+            " wire=" + std::to_string(owner_movement.x) + "," +
+            std::to_string(owner_movement.y) + "," +
+            std::to_string(owner_movement.z));
+  };
+
   const auto restore_pre_step_kinematics = [this, &start, start_fall_time] {
     data_.SetTransformPosition(start[0], start[1], start[2]);
     data_.SetRuntimeFallTime(start_fall_time);
@@ -1686,6 +1739,12 @@ void UnitMovementRuntime::AdvanceMovementStep(
                                              : "non_finite_extent");
     restore_pre_step_kinematics();
     commit_if_requested();
+    trace_step("solver_bail", !solver || !solver->IsBound()
+                                  ? "solver_unbound"
+                                  : data_.HasTransferredMovementControl()
+                                        ? "control_transferred"
+                                        : "non_finite_extent",
+               C3Vector{start[0], start[1], start[2]});
     return;
   }
 
@@ -1987,6 +2046,25 @@ void UnitMovementRuntime::AdvanceMovementStep(
   }
   AdoptTransportParentFromGroundContact(session, collision);
   commit_if_requested();
+  const auto collision_status_name = [](const MovementCollisionStatus status) {
+    switch (status) {
+      case MovementCollisionStatus::kNoCollision:
+        return "no_collision";
+      case MovementCollisionStatus::kCollided:
+        return "collided";
+      case MovementCollisionStatus::kBlocked:
+        return "blocked";
+      case MovementCollisionStatus::kQueryFailed:
+        return "query_failed";
+      case MovementCollisionStatus::kCancelled:
+        return "cancelled";
+      case MovementCollisionStatus::kInvalidInput:
+        return "invalid_input";
+    }
+    return "unknown";
+  };
+  trace_step("solved", collision_status_name(collision.status),
+             solved_transform);
 }
 
 void UnitMovementRuntime::ArmDeferredAutoRelease() {
@@ -3879,6 +3957,16 @@ bool UnitMovementRuntime::SendSimpleMovePacket(
   const auto packet = net::wotlk::PacketSender::BuildMovement(
       static_cast<net::wotlk::Opcode>(opcode), owner_.GetGuid(), movement_info);
   const bool sent = net::ClientServices__SendPacket(packet);
+  openwow::diagnostics::Log(
+      openwow::diagnostics::LogLevel::kWarn,
+      "MovementInput: packet opcode=" + std::to_string(opcode) +
+          " payload=" + std::to_string(packet.payload.size()) +
+          " flags=" + std::to_string(movement_info.flags) +
+          " time=" + std::to_string(movement_info.time) +
+          " pos=" + std::to_string(movement_info.x) + "," +
+          std::to_string(movement_info.y) + "," +
+          std::to_string(movement_info.z) +
+          " sent=" + (sent ? "1" : "0"));
   if (sent) {
     UpdateWireAnnouncedFallingLatch(owner_, data_.GetRuntimeFlags());
   }

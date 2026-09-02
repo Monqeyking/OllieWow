@@ -483,6 +483,12 @@ int LuaApi_SetUIVisibility(lua_State *L) {
   return 0;
 }
 
+int LuaShowNameplates(lua_State *L) {
+  (void)L;
+  GameUI_UpdateNameplateVisibility({.always_show_nameplates = true});
+  return 0;
+}
+
 int LuaHideNameplates(lua_State *L) {
   (void)L;
   GameUI_UpdateNameplateVisibility({.always_show_nameplates = false});

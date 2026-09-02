@@ -69,6 +69,36 @@ constexpr std::uint32_t kEmoteInternalFlagInFlightSubmitFilterMask =
     kEmoteInternalFlagAnimationBehavior121;
 constexpr std::uint32_t kInvalidAnimationBehaviorId = 506u;
 
+bool MoveTraceEnabled() {
+  static const bool enabled = [] {
+    const char *value = std::getenv("OPENWOW_MOVE_TRACE");
+    return value != nullptr && value[0] != '\0' && std::strcmp(value, "0") != 0;
+  }();
+  return enabled;
+}
+
+void TraceMovementSelection(const CGUnit_C &unit, const std::uint32_t previous_flags,
+                            const std::uint32_t current_flags,
+                            const std::uint16_t requested_animation,
+                            const bool accepted) {
+  if (!MoveTraceEnabled() || !unit.IsActivePlayer()) {
+    return;
+  }
+  const auto &request = unit.Animation().GetPlaybackRequest();
+  const std::string message =
+      "MoveTrace: select guid=" +
+      std::to_string(unit.GetGuid().GetRawValue()) +
+      " flags=" + std::to_string(previous_flags) + "->" +
+      std::to_string(current_flags) +
+      " requested=" + std::to_string(requested_animation) +
+      " accepted=" + (accepted ? "1" : "0") +
+      " active=" + std::to_string(request.animation_id) +
+      " resolved=" + std::to_string(unit.Animation().GetResolvedPlaybackAnimationId()) +
+      " serial=" + std::to_string(request.serial) +
+      " looping=" + (request.looping ? "1" : "0");
+  openwow::diagnostics::Log(openwow::diagnostics::LogLevel::kInfo, message);
+}
+
 constexpr std::uint32_t kJumpStartBehaviorId = 0x25u;
 constexpr std::uint32_t kJumpEndBehaviorId = 0x27u;
 constexpr std::uint32_t kJumpLandRunBehaviorId = 0xBBu;
@@ -1843,8 +1873,12 @@ void UnitAnimationRuntime::HandleMovementAnimation(
   (void)ResolveDirectionalLocomotionAnimation(current_flags, ~0u,
                                               &locomotion_animation_id);
   if (locomotion_animation_id != 0u) {
-    RequestPlayback(locomotion_animation_id,
-                    AnimationSequenceLoops(locomotion_animation_id));
+    // Benilla treats every selected gait as a persistent locomotion state.
+    // Do not let a transient/unavailable M2 sequence query turn movement into
+    // a one-shot that clamps on its final pose.
+    const bool accepted = RequestPlayback(locomotion_animation_id, true);
+    TraceMovementSelection(owner_, previous_flags, current_flags,
+                           locomotion_animation_id, accepted);
     return;
   }
 
@@ -1856,13 +1890,28 @@ void UnitAnimationRuntime::HandleMovementAnimation(
 void UnitAnimationRuntime::PlayAttackAnimation(const std::uint32_t hit_info,
                                                const std::uint32_t melee_spell_id) {
   if (owner_.State().IsDead()) {
+    openwow::diagnostics::Log(
+        openwow::diagnostics::LogLevel::kInfo,
+        "CombatTrace: swing_skip guid=" +
+            std::to_string(owner_.GetGuid().GetRawValue()) + " reason=dead");
     return;
   }
   if ((hit_info & kHitInfoNoAnimation) != 0u) {
+    openwow::diagnostics::Log(
+        openwow::diagnostics::LogLevel::kInfo,
+        "CombatTrace: swing_skip guid=" +
+            std::to_string(owner_.GetGuid().GetRawValue()) +
+            " reason=no_animation hit_info=0x" + std::to_string(hit_info));
     return;
   }
 
   if (melee_spell_id != 0u) {
+    openwow::diagnostics::Log(
+        openwow::diagnostics::LogLevel::kInfo,
+        "CombatTrace: swing_skip guid=" +
+            std::to_string(owner_.GetGuid().GetRawValue()) +
+            " reason=melee_spell melee_spell=" +
+            std::to_string(melee_spell_id));
     return;
   }
   std::uint16_t attack = render::AnimId::kAttackUnarmed;
@@ -1897,6 +1946,12 @@ void UnitAnimationRuntime::PlayAttackAnimation(const std::uint32_t hit_info,
       break;
     }
   }
+  openwow::diagnostics::Log(
+      openwow::diagnostics::LogLevel::kInfo,
+      "CombatTrace: swing_play guid=" +
+          std::to_string(owner_.GetGuid().GetRawValue()) +
+          " animation=" + std::to_string(attack) +
+          " hit_info=0x" + std::to_string(hit_info));
   RequestPlayback(attack, false, true);
 }
 
@@ -2302,6 +2357,13 @@ std::uint32_t UnitAnimationRuntime::WalkAnimationDataFallback(
         return system->InstanceModelHasAnimation(target_instance_id,
                                                  animation_id);
       };
+
+  // Benilla resolves through the model's playable-animation lookup first.
+  // Prefer an authored sequence over a DBC behavior row that happens to point
+  // at another valid sequence (for example Run 5 versus Sprint 143).
+  if (model_supports_animation(anim_id)) {
+    return anim_id;
+  }
 
   std::uint32_t result_id = static_cast<std::uint16_t>(anim_id);
   const std::uint32_t start_anim_id = anim_id;
@@ -3167,6 +3229,14 @@ bool UnitAnimationRuntime::TryResolveCachedTargetStandAnimation(
     return true;
   }
   *out_animation_id = GetWeaponBasedReadyAnimationId();
+  if (owner_.IsActivePlayer()) {
+    openwow::diagnostics::Log(
+        openwow::diagnostics::LogLevel::kInfo,
+        "CombatTrace: ready_resolve guid=" +
+            std::to_string(owner_.GetGuid().GetRawValue()) +
+            " target=1 animation=" + std::to_string(*out_animation_id) +
+            " sheathe=" + std::to_string(sheathe_state_));
+  }
   return true;
 }
 
@@ -3402,7 +3472,15 @@ bool UnitAnimationRuntime::IsAirborneForAnimationSplit() const {
 }
 
 std::uint32_t UnitAnimationRuntime::ResolveSelectorMovementFlags() const {
+  constexpr std::uint32_t kSelectorDirectionalMovementMask =
+      kMoveFlagForward | kMoveFlagBackward | kMoveFlagStrafeLeft |
+      kMoveFlagStrafeRight;
   auto flags = owner_.GetMovementInfo().flags;
+  // Movement playback receives the local/current flags before the replicated
+  // MovementInfo can be refreshed. Keep stand-selector refreshes on that same
+  // directional state, otherwise they can replace Run/Walk with Stand.
+  flags = (flags & ~kSelectorDirectionalMovementMask) |
+          (playback_movement_flags_ & kSelectorDirectionalMovementMask);
   if (owner_.Movement().HasActiveSplineLocomotion()) {
     flags |= owner_.Movement().IsSplineLocomotionBackward() ? kMoveFlagBackward
                                                             : kMoveFlagForward;

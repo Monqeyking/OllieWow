@@ -239,11 +239,6 @@ constexpr int kMaxDailyQuests = 25;
 constexpr int kMasterLooterSystemMessageId = 251;
 constexpr std::uint32_t kUnitFlagInCombat = 0x00080000u;
 
-void RequestGuildPermissionsAndWithdrawRefresh(InteractionSender &interaction) {
-  interaction.SendGuildPermissionsQuery();
-  interaction.SendGuildBankMoneyWithdrawnQuery();
-}
-
 void RefreshLocalPlayerCombatUsability(WorldSession &session) {
   auto &dispatch = ui::game::ScriptEventDispatch::Get();
   dispatch.FireEvent(ui::game::events::SPELL_UPDATE_USABLE);
@@ -909,19 +904,10 @@ void WorldSession::OnLocalPlayerCreated(const ObjectGuid &guid) {
   if (const auto *local_player = objects().GetLocalPlayerTyped(); local_player != nullptr) {
     dance_studio().SetActivePlayerClass(
         ToDancePlayerClass(local_player->State().GetClass()));
-    if (local_player->GetGuildID() != 0) {
-      RequestGuildPermissionsAndWithdrawRefresh(interaction_);
-    } else {
-      interaction_.SendGuildBankMoneyWithdrawnQuery();
-    }
-  } else {
-    interaction_.SendGuildBankMoneyWithdrawnQuery();
   }
 
   SyncActivePlayerArenaTeams(false);
   lfg_.ResetProposalEventGateForPlayerEnterWorld();
-  interaction_.SendLfgGetStatus();
-  interaction_.SendLfdPlayerLockInfoRequest();
 
   inventory_bridge_.FullResync();
   (void)inventory_bridge_.ConsumeChangedContainers();
@@ -2003,7 +1989,6 @@ void WorldSession::RequestVisibleQuestgiverStatusRefresh() {
     }
   });
 
-  Send(net::wotlk::PacketSender::BuildQuestgiverStatusMultipleQuery());
 }
 
 void WorldSession::RefreshCreatedGameObjectQuestgiverStatus(const WorldObject &obj) {
@@ -2256,21 +2241,11 @@ void WorldSession::OnFieldsChanged(const WorldObject &obj, const FieldUpdateBatc
             ui::game::events::CALENDAR_UPDATE_EVENT_LIST);
       }
       TrySyncLoadedChatChannels(*this);
-      if (!is_create) {
-
-        RequestGuildPermissionsAndWithdrawRefresh(interaction_);
-      }
       if (gossip().merchant().active()) {
         ui::game::ScriptEventDispatch::Get().FireMerchantUpdate();
       }
       GuildSystem::Get().ClearGuildBankTabCacheRuntimeState();
     }
-  }
-
-  if (!is_create && obj.GetGuid() == objects().GetLocalPlayerGuid() &&
-      obj.GetTypeId() == TypeID::kPlayer && HasUpdatedField(updates, PLAYER_GUILDRANK)) {
-
-    RequestGuildPermissionsAndWithdrawRefresh(interaction_);
   }
 
   if (!is_create && obj.GetTypeId() == TypeID::kPlayer &&

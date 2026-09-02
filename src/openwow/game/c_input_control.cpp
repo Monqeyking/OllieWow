@@ -18,6 +18,7 @@
 #include "openwow/game/vehicle_helpers.h"
 #include "openwow/game/world_session.h"
 #include "openwow/input/hid_manager.h"
+#include "openwow/foundation/diagnostics/logging.h"
 #include "openwow/ui/game/cvar_system.h"
 #include "openwow/ui/game/game_events.h"
 #include "openwow/ui/surfaces/game/runtime/system_message_dispatch.h"
@@ -1371,10 +1372,13 @@ void ProcessMovement(CInputControl& control, std::uint32_t timestamp,
   ProcessMovementDecision decision;
   decision.timestamp = timestamp;
   decision.movement_active = movement_active;
+  const bool forward_input = control.ComputeNetForward() != 0;
 
   ProcessMovementRuntimeState runtime_state;
+  bool runtime_state_available = false;
   if (g_process_movement_runtime_state_query &&
       g_process_movement_runtime_state_query(runtime_state)) {
+    runtime_state_available = true;
     if (runtime_state.should_use_movement_rates) {
       decision.used_movement_rates = true;
       decision.movement_rates_updated =
@@ -1405,6 +1409,29 @@ void ProcessMovement(CInputControl& control, std::uint32_t timestamp,
         control.SetControlFlagsRaw(control.GetControlFlags() & ~kCtrlAutoRun);
       }
     }
+  }
+
+  if (forward_input) {
+    const auto &gate = runtime_state.gate_state;
+    openwow::diagnostics::Log(
+        openwow::diagnostics::LogLevel::kWarn,
+        std::string("MovementInput: gate query=") +
+            (runtime_state_available ? "1" : "0") +
+            " can_move=" + (decision.can_move ? "1" : "0") +
+            " health=" + std::to_string(gate.health) +
+            " unit_flags=" + std::to_string(gate.unit_flags) +
+            " knockdown=" + (gate.has_knockdown_animation ? "1" : "0") +
+            " active_player=" + (gate.is_active_player ? "1" : "0") +
+            " vehicle_free=" +
+                (gate.vehicle_control_allows_free_movement ? "1" : "0") +
+            " vehicle_transition=" +
+                (gate.is_in_vehicle_transition ? "1" : "0") +
+            " non_static_seat=" +
+                (gate.has_non_static_vehicle_seat ? "1" : "0") +
+            " restrictions=" +
+                (gate.has_movement_restriction_flags ? "1" : "0") +
+            " power_locked=" + (gate.is_power_type_locked ? "1" : "0") +
+            " on_vehicle=" + (gate.is_on_vehicle ? "1" : "0"));
   }
 
   if (g_process_movement) {

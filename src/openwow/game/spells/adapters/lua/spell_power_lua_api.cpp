@@ -474,6 +474,43 @@ int LuaIsSelectedSpell(lua_State *L) {
   return 1;
 }
 
+int LuaIsCurrentCast(lua_State *L) {
+  // Classic SpellBookFrame uses this narrower predicate for its checked ring:
+  // only the selected trade-skill or active shapeshift spell is current.
+  const auto query = ResolveScriptCurrentSpellQuery(L, "IsCurrentCast");
+  if (!query.has_value()) {
+    return 0;
+  }
+
+  const auto *session = GetWorldSession(L);
+  const auto *player =
+      session != nullptr ? session->objects().GetActivePlayer() : nullptr;
+  const auto *dbc = session != nullptr ? session->GetDbcLoader() : nullptr;
+  const auto *spell =
+      dbc != nullptr ? dbc->spell().LookupEntry(query->spell_id) : nullptr;
+
+  std::uint32_t spell_skill_line = 0;
+  if (player != nullptr && dbc != nullptr) {
+    if (const auto resolved = openwow::game::ResolveSpellSkillLineId(
+            session->objects(), dbc, player->State().GetRace(),
+            player->State().GetClass(), query->spell_id)) {
+      spell_skill_line = *resolved;
+    }
+  }
+
+  const bool current = openwow::game::IsSelectedSpellImpl(
+      spell, openwow::game::ProfessionSystem::Get().GetOpenSkillLine(),
+      openwow::game::ProfessionSystem::Get().IsTradeSkillLinked(),
+      spell_skill_line,
+      player != nullptr ? player->Animation().GetShapeshiftForm() : 0);
+  if (current) {
+    lua_pushnumber(L, 1.0);
+  } else {
+    lua_pushnil(L);
+  }
+  return 1;
+}
+
 int LuaSpellTargetItem(lua_State *L) {
 
   if (!GameUI_CanPerformProtectedAction(openwow::ui::game::protected_action_kind::kSpellCast))

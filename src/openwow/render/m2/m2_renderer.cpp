@@ -117,7 +117,9 @@ void M2Renderer::UpdateAllEffects(
       continue;
     }
     effect_simulation_scratch_.push_back(
-        EffectSimulationTarget{.instance = &instance, .resource = &resource});
+        EffectSimulationTarget{.instance_id = instance_id,
+                               .instance = &instance,
+                               .resource = &resource});
   }
 
   const auto simulate = [&](const EffectSimulationTarget& target) {
@@ -149,7 +151,7 @@ void M2Renderer::UpdateAllEffects(
     }
 
     effect_renderer_.SimulateEffects(
-        instance, resource, model_matrix, view_matrix, animation_index,
+        target.instance_id, instance, resource, model_matrix, view_matrix, animation_index,
         animation_time_ms, frame_delta_seconds, *bone_matrix_vector,
         bone_matrix_vector->size() / 16u);
   };

@@ -375,6 +375,23 @@ void ProcessLuaInputControlMovement(::openwow::game::CInputControl &control,
     return;
   }
 
+  const int net_forward = control.ComputeNetForward();
+  const auto mover_guid =
+      g_process_movement_session->player_control_runtime().ActiveMoverGuid();
+  auto *const mover = g_process_movement_session->objects().GetMutableUnit(
+      mover_guid);
+  if (net_forward != 0) {
+    openwow::diagnostics::Log(
+        openwow::diagnostics::LogLevel::kWarn,
+        "MovementInput: process forward=" + std::to_string(net_forward) +
+            " can_move=" + (decision.can_move ? "1" : "0") +
+            " can_turn=" + (decision.can_turn ? "1" : "0") +
+            " movement_active=" + (decision.movement_active ? "1" : "0") +
+            " flags=" + std::to_string(decision.movement_flags) +
+            " active_mover=" + std::to_string(mover_guid.GetRawValue()) +
+            " mover_present=" + (mover != nullptr ? "1" : "0"));
+  }
+
   if (decision.stop_auto_attack) {
     if (auto *player = const_cast<openwow::game::CGPlayer_C*>(g_process_movement_session->objects().GetLocalPlayerTyped());
         player != nullptr) {
@@ -404,10 +421,6 @@ void ProcessLuaInputControlMovement(::openwow::game::CInputControl &control,
     }
   }
 
-  const auto mover_guid =
-      g_process_movement_session->player_control_runtime().ActiveMoverGuid();
-  auto *const mover = g_process_movement_session->objects().GetMutableUnit(
-      mover_guid);
   if (mover != nullptr) {
     mover->Movement().ApplyInputControlMovement(
         *g_process_movement_session, control, decision);

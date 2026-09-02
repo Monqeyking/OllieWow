@@ -681,15 +681,40 @@ openwow::ui::LuaRunResult GlueClient::DispatchButtonClick(const std::string &wid
 
   const std::vector<openwow::ui::glue::GlueLuaValue> args{MakeLuaString(button_name),
                                                           MakeLuaBool(is_down)};
+  const bool is_random_name_button =
+      openwow::text::EqualsIgnoreCaseAscii(widget_name, "CharacterCreateRandomName");
+  const bool has_on_click = glue_runtime_.HasWidgetScript(widget_name, "OnClick");
+  if (is_random_name_button && !is_down) {
+    openwow::diagnostics::Log(
+        openwow::diagnostics::LogLevel::kInfo,
+        "Glue CharacterCreate random-name: func=button-release widget=" + widget_name +
+            " on_click=" + (has_on_click ? "1" : "0") +
+            " before=" +
+            (glue_widgets_.GetText("CharacterCreateNameEdit").empty()
+                 ? "<empty>"
+                 : glue_widgets_.GetText("CharacterCreateNameEdit")));
+  }
   if (glue_runtime_.HasWidgetScript(widget_name, "PreClick")) {
     (void)DispatchWidgetEvent(widget_name, "PreClick", widget_name + ".PreClick", args);
   }
   openwow::ui::LuaRunResult result{.ok = true, .error = ""};
-  if (glue_runtime_.HasWidgetScript(widget_name, "OnClick")) {
+  if (has_on_click) {
     result = DispatchWidgetEvent(widget_name, "OnClick", widget_name + ".OnClick", args);
   }
   if (glue_runtime_.HasWidgetScript(widget_name, "PostClick")) {
     (void)DispatchWidgetEvent(widget_name, "PostClick", widget_name + ".PostClick", args);
+  }
+
+  if (is_random_name_button && !is_down) {
+    openwow::diagnostics::Log(
+        openwow::diagnostics::LogLevel::kInfo,
+        "Glue CharacterCreate random-name: func=button-release-complete widget=" +
+            widget_name + " ok=" + (result.ok ? "1" : "0") +
+            " after=" +
+            (glue_widgets_.GetText("CharacterCreateNameEdit").empty()
+                 ? "<empty>"
+                 : glue_widgets_.GetText("CharacterCreateNameEdit")) +
+            (result.error.empty() ? "" : " error=" + result.error));
   }
 
   button_clicks_in_progress_.erase(widget_name);

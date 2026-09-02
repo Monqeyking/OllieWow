@@ -1459,7 +1459,6 @@ private:
   ReferAFriendRuntime refer_a_friend_runtime_;
   net::LatencyTracker latency_tracker_;
   core::ClientCrtRandom client_random_;
-  float keep_alive_timer_{0.0f};
   static constexpr float kKeepAliveInterval{30.0f};
   BotDetectedProbeFn bot_detected_probe_fn_;
   ConsumeLegacyTokenSeedVerificationFn

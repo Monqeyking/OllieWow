@@ -95,6 +95,10 @@ class GlueModelRenderer {
   void BeginAnimationFrame(openwow::ui::glue::GlueWidgetRuntime& widgets,
                            std::uint32_t delta_ms);
 
+  // Glue scenes have their own render loop. Keep M2 particle/ribbon
+  // simulation on that loop instead of relying on the world renderer.
+  void UpdateEffectsFrame(std::uint32_t delta_ms);
+
   void BindAttachedCharacterScene(openwow::ui::glue::GlueCharSelectScene* scene,
                                   std::string model_frame_widget_name);
   void BindAttachedCharacterScenes(openwow::ui::glue::GlueCharSelectScene* select_scene,
@@ -150,6 +154,9 @@ class GlueModelRenderer {
     bool animation_info_refresh_pending{true};
 
     bool camera_source_diag_logged{false};
+    bool render_diagnostics_logged{false};
+    bool render_result_diagnostics_logged{false};
+    std::string render_diagnostics_model_path;
 
     float model_alpha{1.0f};
 
@@ -240,6 +247,7 @@ class GlueModelRenderer {
   std::unordered_map<std::string, InstanceState> instances_;
 
   std::unordered_set<std::string> zero_submit_warned_widgets_;
+  bool effect_diagnostics_logged_{false};
 
   enum class LoadPhase : std::uint8_t {
     kNone = 0,

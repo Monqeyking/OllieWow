@@ -190,13 +190,6 @@ void OnSkillValueDescriptorChanged(WorldSession& session,
       }
     }
 
-    if (skill_category_id == kSkillCategorySecondary ||
-        skill_category_id == kSkillCategoryProfession) {
-      if (session.objects().GetLocalPlayer() != nullptr) {
-        auto pkt = net::wotlk::PacketSender::BuildQuestgiverStatusMultipleQuery();
-        session.interaction().SendRawPacket(pkt);
-      }
-    }
   }
 
   ui::game::ScriptEventDispatch::Get().FireEvent(
@@ -474,10 +467,6 @@ bool ProcessInventorySlotChange(const InventorySlotChangeInfo& info,
 bool ProcessQuestLogChange(const QuestLogChangeInfo& info,
                            QuestLogChangeResult& out) {
   out = {};
-
-  if (info.is_active_player) {
-    out.send_questgiver_status_multiple_query = true;
-  }
 
   const bool quest_id_changed = info.old_quest_id != info.new_quest_id;
   const bool complete_bit_gained =
@@ -1043,10 +1032,6 @@ void OnCoinageDescriptorChanged(WorldSession& session,
   ui::game::ScriptEventDispatch::Get().FirePlayerMoney();
 
   const auto* player = session.objects().GetLocalPlayer();
-  if (player != nullptr) {
-    auto pkt = net::wotlk::PacketSender::BuildQuestgiverStatusMultipleQuery();
-    session.interaction().SendRawPacket(pkt);
-  }
 
   auto& trade = session.trade();
   if (trade.is_open() && player != nullptr) {

@@ -24,7 +24,10 @@
 #include <cassert>
 #include <cmath>
 #include <cstddef>
+#include <cstdlib>
+#include <cstring>
 #include <exception>
+#include <string>
 #include <string_view>
 
 namespace openwow::render {
@@ -67,6 +70,38 @@ constexpr std::int32_t kGameObjectM2DefaultRepeatCount = 0;
 constexpr std::int32_t kGameObjectM2SequenceRepeatCount = 1;
 constexpr float kM2NegativeRetrySeconds = 10.0f;
 constexpr std::size_t kMaxEquipmentRequestsPerFrame = 8u;
+
+bool MoveTraceEnabled() {
+  static const bool enabled = [] {
+    const char *value = std::getenv("OPENWOW_MOVE_TRACE");
+    return value != nullptr && value[0] != '\0' && std::strcmp(value, "0") != 0;
+  }();
+  return enabled;
+}
+
+void TraceAnimationClock(const RenderInstance &inst, const float dt,
+                         const std::uint32_t duration_ms,
+                         const std::uint32_t before_ms,
+                         const std::uint32_t after_ms) {
+  if (!MoveTraceEnabled() || inst.type_id != game::TypeID::kPlayer) {
+    return;
+  }
+  const auto &request = inst.unit_animation;
+  const std::string message =
+      "MoveTrace: clock guid=" +
+      std::to_string(inst.guid.GetRawValue()) +
+      " anim=" + std::to_string(inst.animation.current_anim()) +
+      " time=" + std::to_string(before_ms) + "->" +
+      std::to_string(after_ms) +
+      " duration=" + std::to_string(duration_ms) +
+      " dt=" + std::to_string(dt) +
+      " rate=" + std::to_string(inst.animation_playback_rate) +
+      " request=" + std::to_string(request.animation_id) +
+      " resolved=" + std::to_string(request.resolved_animation_id) +
+      " serial=" + std::to_string(request.serial) +
+      " looping=" + (request.looping ? "1" : "0");
+  openwow::diagnostics::Log(openwow::diagnostics::LogLevel::kInfo, message);
+}
 
 [[nodiscard]] std::optional<std::uint32_t>
 ResolveGameObjectAnimationRequestTransition(
@@ -685,7 +720,19 @@ void ObjectRenderer::Update(float dt) {
                                       inst.locomotion_speed);
     const std::uint32_t anim_duration_ms =
         ResolvePresentationAnimationDurationMs(m2_system_, inst);
+    const std::uint32_t animation_time_before =
+        inst.animation.current_time_ms();
     inst.animation.Update(dt * inst.animation_playback_rate, anim_duration_ms);
+    const std::uint32_t animation_time_after =
+        inst.animation.current_time_ms();
+    if (MoveTraceEnabled() && inst.type_id == game::TypeID::kPlayer &&
+        (animation_sample_frame_ % 30u == 0u ||
+         animation_time_before == 0u ||
+         (animation_time_before != animation_time_after &&
+          animation_time_after < animation_time_before))) {
+      TraceAnimationClock(inst, dt, anim_duration_ms, animation_time_before,
+                          animation_time_after);
+    }
 
     if (inst.unit_animation.upper_body_only) {
       inst.upper_animation.Update(
@@ -816,10 +863,54 @@ void ObjectRenderer::PrepareVisibleInstances(
 
     if (pose_installed) {
       auto request = BuildM2FramePresentationRequest(inst);
-      inst.animation_sample_ready = prepare.SamplePresentation(request);
+      const bool initial_sample = prepare.SamplePresentation(request);
+      inst.animation_sample_ready = initial_sample;
+      bool fallback_used = false;
       if (!inst.animation_sample_ready && request.sample_animation) {
         request.sample_animation = false;
+        fallback_used = true;
         inst.animation_sample_ready = prepare.SamplePresentation(request);
+      }
+      if (MoveTraceEnabled() && inst.type_id == game::TypeID::kPlayer &&
+          (animation_sample_frame_ % 30u) == 0u) {
+        const auto info = inst.m2_instance_id != 0u
+                              ? m2_system_.QueryInstanceAnimationInfo(
+                                    inst.m2_instance_id)
+                              : m2::M2InstanceAnimationInfoQuery{};
+        const auto bones = inst.m2_instance_id != 0u
+                               ? m2_system_.QueryInstanceSampleBoneMatrices(
+                                     inst.m2_instance_id)
+                               : m2::M2SampleBoneMatricesQuery{};
+        const auto &state = info.info;
+        const auto &bone_data = bones.bone_matrices;
+        const float bone0_x = bone_data.size() >= 16u ? bone_data[12u] : 0.0f;
+        const float bone0_y = bone_data.size() >= 16u ? bone_data[13u] : 0.0f;
+        const float bone0_z = bone_data.size() >= 16u ? bone_data[14u] : 0.0f;
+        openwow::diagnostics::Log(
+            openwow::diagnostics::LogLevel::kInfo,
+            "MoveTrace: sample guid=" +
+                std::to_string(inst.guid.GetRawValue()) +
+                " m2=" + std::to_string(inst.m2_instance_id) +
+                " initial=" + (initial_sample ? "1" : "0") +
+                " fallback=" + (fallback_used ? "1" : "0") +
+                " final=" + (inst.animation_sample_ready ? "1" : "0") +
+                " status=" + std::to_string(static_cast<int>(info.status)) +
+                " anim=" + std::to_string(state.requested_animation_id) +
+                " resolved=" + std::to_string(state.resolved_animation_id) +
+                " seq=" + std::to_string(state.sequence_index) +
+                " time=" + std::to_string(state.time_ms) +
+                " duration=" + std::to_string(state.duration_ms) +
+                " pose_status=" +
+                std::to_string(static_cast<int>(bones.status)) +
+                " bone_count=" +
+                std::to_string(bone_data.size() / 16u) +
+                " bone0_t=" + std::to_string(bone0_x) + "," +
+                std::to_string(bone0_y) + "," + std::to_string(bone0_z) +
+                " request_anim=" +
+                std::to_string(request.animation_id) +
+                " request_time=" + std::to_string(request.sample_time_ms) +
+                " current_anim=" +
+                std::to_string(inst.animation.current_anim()));
       }
     } else {
       inst.animation_sample_ready = false;

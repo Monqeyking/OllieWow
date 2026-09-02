@@ -289,7 +289,8 @@ class DbcLoader {
   bool LoadOneOptional(DbcStore<T>& store,
                        const openwow::vfs::VirtualFileSystem& vfs,
                        const std::string& path,
-                       const RetailDbcDescriptor& descriptor);
+                       const RetailDbcDescriptor& descriptor,
+                       bool require_declared_schema = false);
 
   const openwow::vfs::VirtualFileSystem* vfs_ = nullptr;
 

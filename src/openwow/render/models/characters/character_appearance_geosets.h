@@ -34,7 +34,10 @@ struct CharacterAppearanceGeosetStores {
 struct CharacterAppearanceGeosetState {
   std::uint16_t hair{1u};
 
-  std::array<std::uint16_t, 3> facial_hair{101u, 301u, 201u};
+  // CharacterFacialHairStyles carries five facial geoset groups.  The first
+  // three are the visible hair/accessory groups; groups 1600 and 1700 are
+  // feature overlays such as the Night Elf/Blood Elf eye-glow cards.
+  std::array<std::uint16_t, 5> facial_hair{101u, 301u, 201u, 0u, 0u};
   std::uint16_t facial_accessory{702u};
 
   std::uint16_t glove{0u};

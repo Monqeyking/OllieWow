@@ -283,7 +283,6 @@ bool ShouldRefreshLfgStatusAfterGroupList(const bool was_in_group, const bool wa
 
 void RefreshLfgStateAfterGroupAcquisition(WorldSession &session) {
   session.lfg().ClearServerInfoSnapshots();
-  session.interaction().SendLfgGetStatus();
 
   if (auto *ui = session.world_ui_runtime()) {
     ui->frame_events().dispatcher().FireEventArgs(

@@ -23,6 +23,7 @@ int LuaDisableSpellAutocast(lua_State* L);
 
 int LuaSpellTargetItem(lua_State* L);
 int LuaIsSelectedSpell(lua_State* L);
+int LuaIsCurrentCast(lua_State* L);
 
 [[nodiscard]] openwow::ui::lua::NativeBindingCatalog SpellPowerConstantCatalog();
 

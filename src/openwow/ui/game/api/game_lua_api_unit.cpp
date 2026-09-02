@@ -1932,6 +1932,14 @@ int LuaUnitPlayerControlled(lua_State *L) {
       unit != nullptr && unit->Interaction().IsPlayerControlled());
 }
 
+int LuaUnitIsCivilian(lua_State *L) {
+  const LuaCallFrame call{L};
+  const auto uid = call.require_string(1, "Usage: UnitIsCivilian(\"unit\")");
+  const auto *const unit =
+      ResolveLiveScriptUnit(call.world_session(), uid);
+  return call.wow_bool(unit != nullptr && unit->State().IsCivilian());
+}
+
 int LuaUnitCanAttack(lua_State *L) {
   const LuaCallFrame call{L};
   const auto units =

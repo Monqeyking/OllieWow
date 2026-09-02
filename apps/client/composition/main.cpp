@@ -235,6 +235,7 @@ int RunClientProcess(int argc, char** argv) {
   bool lua_trace_enabled = false;
   bool ui_frame_tree_dump_enabled = false;
   bool render_submit_trace_enabled = false;
+  bool move_trace_enabled = false;
   std::string cli_game_data_path;
 
   std::vector<std::string> scenario_extra_cvar_lines;
@@ -291,6 +292,19 @@ int RunClientProcess(int argc, char** argv) {
       render_submit_trace_enabled = true;
       continue;
     }
+    if (arg == "--move-trace") {
+      move_trace_enabled = true;
+      continue;
+    }
+  }
+  if (move_trace_enabled) {
+#if defined(_WIN32)
+    (void)_putenv_s("OPENWOW_MOVE_TRACE", "1");
+    (void)_putenv_s("OPENWOW_LOG_LEVEL", "info");
+#else
+    (void)setenv("OPENWOW_MOVE_TRACE", "1", 1);
+    (void)setenv("OPENWOW_LOG_LEVEL", "info", 1);
+#endif
   }
   if (!startup_trace_enabled) {
     const char* v = std::getenv("OPENWOW_STARTUP_TRACE");
@@ -477,7 +491,7 @@ int RunClientProcess(int argc, char** argv) {
 
   if (startup_trace.has_value()) startup_trace->Add("launch.resolve");
 
-  openwow::diagnostics::InitLogging("openwow-client", openwow::diagnostics::LogLevel::kInfo);
+  openwow::diagnostics::InitLogging("openwow-client", openwow::diagnostics::LogLevel::kWarn);
   openwow::diagnostics::Log(openwow::diagnostics::LogLevel::kInfo, "Client startup");
 
   openwow::net::PacketLog::Get().Initialize(

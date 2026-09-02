@@ -2268,6 +2268,15 @@ void PumpGlueFlow(GlueFlowContext& ctx, GlueFlowState& state) {
         state.last_status_text.clear();
         if (ctx.fire_glue_event) {
           ctx.fire_glue_event("SELECT_LAST_CHARACTER", {});
+        }
+
+        // Character creation changes the server-side roster. Re-enumerate it
+        // before returning to CharacterSelect so SELECT_LAST_CHARACTER can
+        // select the newly created row from the fresh list.
+        openwow::ui::glue::CGlueMgr_RequestCharacterList(gs);
+        gs.wants_character_list_refresh = false;
+        StartCharacterListRefresh(ctx, state);
+        if (ctx.fire_glue_event) {
           openwow::ui::glue::Login_SetScreen(ctx.fire_glue_event, "charselect");
         }
 

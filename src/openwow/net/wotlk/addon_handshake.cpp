@@ -860,8 +860,6 @@ std::vector<std::uint8_t> RealmAddonHandshakeState::BuildSerializedClientInfo()
       return {};
     }
 
-    AppendU32(inner, 0);
-    std::uint32_t enabled_count = 0;
     for (const auto& addon : client_addons_) {
 
       if (!addon.is_secure) {
@@ -883,11 +881,7 @@ std::vector<std::uint8_t> RealmAddonHandshakeState::BuildSerializedClientInfo()
               : ComputeRealmAddonInfoCrc32(
                     reinterpret_cast<const std::uint8_t*>(addon.update_url.data()),
                     addon.update_url.size()));
-      ++enabled_count;
     }
-
-    std::memcpy(inner.data(), &enabled_count, sizeof(enabled_count));
-    AppendU32(inner, catalog_revision_max_locked());
   }
 
   std::vector<std::uint8_t> outer;

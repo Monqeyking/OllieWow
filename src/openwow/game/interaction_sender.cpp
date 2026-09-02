@@ -2404,16 +2404,6 @@ void InteractionSender::SendGuildSetOfficerNote(const std::string &name, const s
   Send(pkt);
 }
 
-void InteractionSender::SendGuildPermissionsQuery() {
-  WorldPacket pkt(Opcode::MSG_GUILD_PERMISSIONS);
-  Send(pkt);
-}
-
-void InteractionSender::SendGuildBankMoneyWithdrawnQuery() {
-  WorldPacket pkt(Opcode::MSG_GUILD_BANK_MONEY_WITHDRAWN);
-  Send(pkt);
-}
-
 void InteractionSender::SendGuildBankDepositMoney(std::uint64_t banker_guid, std::uint32_t amount) {
   auto pkt = PacketSender::BuildGuildBankDepositMoney(banker_guid, amount);
   Send(pkt);
@@ -3105,16 +3095,6 @@ void InteractionSender::SendLfgSetRoles(std::uint8_t roles) {
 void InteractionSender::SendLfgSetComment(const std::string &comment) {
   WorldPacket pkt(Opcode::CMSG_SET_LFG_COMMENT);
   pkt.AppendString(comment.c_str());
-  Send(pkt);
-}
-
-void InteractionSender::SendLfgGetStatus() {
-  WorldPacket pkt(Opcode::CMSG_LFG_GET_STATUS);
-  Send(pkt);
-}
-
-void InteractionSender::SendLfdPlayerLockInfoRequest() {
-  WorldPacket pkt(Opcode::CMSG_LFD_PLAYER_LOCK_INFO_REQUEST);
   Send(pkt);
 }
 

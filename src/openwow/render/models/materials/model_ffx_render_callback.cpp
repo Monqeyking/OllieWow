@@ -34,6 +34,11 @@ void AccumulateBlockLights(const ModelFfxContextBlock& block,
       });
       continue;
     }
+    state.directional_lights.push_back({
+        .direction = record.direction,
+        .ambient_rgb = record.ambient_rgb,
+        .diffuse_rgb = record.diffuse_rgb,
+    });
     accumulator.AccumulateModelLightRecord(light_handle++, record);
     any_directional = true;
   }
@@ -107,6 +112,7 @@ void ApplyModelFfxLightingRenderCallback(
   state.ambient_rgb = {};
   state.diffuse_rgb = {};
   state.direction = {};
+  state.directional_lights.clear();
 
   AccumulateBlockLights(*active_block, state);
   render_ctx.SetLightingState(std::move(state));

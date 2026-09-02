@@ -349,7 +349,17 @@ bool DispatchMovementBindingThroughLua(lua_State *state, const std::string_view 
   }
 
   const char *function_name = key_down ? call->on_down : call->on_up;
-  if (function_name != nullptr && !openwow::ui::CallLuaGlobalIfFunction(state, function_name)) {
+  bool lua_called = false;
+  if (function_name != nullptr) {
+    lua_called = openwow::ui::CallLuaGlobalIfFunction(state, function_name);
+  }
+  openwow::diagnostics::Log(
+      openwow::diagnostics::LogLevel::kWarn,
+      "MovementInput: lua command=" + std::string(command) +
+          " function=" + (function_name != nullptr ? function_name : "<none>") +
+          " phase=" + (key_down ? "down" : "up") +
+          " called=" + (lua_called ? "1" : "0"));
+  if (function_name != nullptr && !lua_called) {
     openwow::diagnostics::Log(openwow::diagnostics::LogLevel::kWarn,
                               "BindingAssignment: movement Lua function unavailable: " +
                                   std::string(function_name));
@@ -3429,9 +3439,6 @@ void GameLoop::WaitForTrialStartRacePreloadGate() {
     const auto result =
         loading_screen_progress_pump_.AdvanceTrialLoadingAlpha(trial_alpha, now_ms, true, false);
     if (result.should_present) {
-      if (result.should_send_keep_alive && send_packet_fn_) {
-        send_packet_fn_(openwow::net::wotlk::PacketSender::BuildKeepAlive());
-      }
       PresentBlockingLoadingFrame();
     }
 
@@ -3926,9 +3933,6 @@ void GameLoop::HandleLoadingScreenProgress(openwow::screens::LoadingProgressInpu
     return;
   }
 
-  if (result.should_send_keep_alive && send_packet_fn_) {
-    send_packet_fn_(openwow::net::wotlk::PacketSender::BuildKeepAlive());
-  }
   PresentBlockingLoadingFrame();
 }
 

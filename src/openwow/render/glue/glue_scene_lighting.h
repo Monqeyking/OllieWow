@@ -96,7 +96,10 @@ inline void AppendGlueSceneM2Light(GlueSceneLightingSnapshot& snapshot,
   }
 
   GlueSceneDirectionalLight directional;
-  directional.direction = TransformGlueSceneLightDirection(sample.position, model_world);
+  // Vanilla uses the light bone's local +Z axis for a directional M2 light.
+  // The M2 position is a point-light input and must not be reused as a
+  // directional vector; UI_* scenes commonly contain large position values.
+  directional.direction = TransformGlueSceneLightDirection(sample.direction, model_world);
   directional.ambient_rgb = {
       sample.ambient_color[0] * sample.ambient_intensity,
       sample.ambient_color[1] * sample.ambient_intensity,
@@ -130,6 +133,14 @@ inline void AppendGlueSceneM2Light(GlueSceneLightingSnapshot& snapshot,
   state.ambient_rgb = projected.ambient_rgb;
   state.diffuse_rgb = projected.projected_diffuse_rgb;
   state.direction = projected.normalized_light_direction;
+  state.directional_lights.reserve(snapshot.directional_lights.size());
+  for (const auto& directional : snapshot.directional_lights) {
+    state.directional_lights.push_back({
+        .direction = directional.direction,
+        .ambient_rgb = directional.ambient_rgb,
+        .diffuse_rgb = directional.diffuse_rgb,
+    });
+  }
   state.point_lights = snapshot.point_lights;
   return state;
 }
@@ -142,12 +153,18 @@ inline void AppendGlueSceneM2Light(GlueSceneLightingSnapshot& snapshot,
   const bool has_directional_energy =
       state.has_directional_light &&
       (has_rgb(state.ambient_rgb) || has_rgb(state.diffuse_rgb));
+  const bool has_preserved_directional_energy = std::any_of(
+      state.directional_lights.begin(), state.directional_lights.end(),
+      [&has_rgb](const ModelRenderCallbackDirectionalLightState& light) {
+        return has_rgb(light.ambient_rgb) || has_rgb(light.diffuse_rgb);
+      });
   const bool has_point_energy = std::any_of(
       state.point_lights.begin(), state.point_lights.end(),
       [&has_rgb](const ModelRenderCallbackPointLightState& light) {
         return has_rgb(light.diffuse_rgb);
       });
-  return has_directional_energy || has_point_energy;
+  return has_directional_energy || has_preserved_directional_energy ||
+         has_point_energy;
 }
 
 // Classic 1.12 CharacterModelBase constructor defaults, cross-checked against
@@ -161,6 +178,11 @@ BuildClassicCharacterModelLighting() noexcept {
   state.direction = {0.0f, 1.0f, 0.0f};
   state.ambient_rgb = {0.7f, 0.7f, 0.7f};
   state.diffuse_rgb = {0.8f, 0.8f, 0.64f};
+  state.directional_lights.push_back({
+      .direction = {0.0f, 1.0f, 0.0f},
+      .ambient_rgb = {0.7f, 0.7f, 0.7f},
+      .diffuse_rgb = {0.8f, 0.8f, 0.64f},
+  });
   return state;
 }
 
@@ -168,42 +190,78 @@ BuildClassicCharacterModelLighting() noexcept {
     const ModelRenderCallbackLightingState& state,
     const RenderVec3& model_world_position) {
   m2::M2BatchUniforms uniforms;
+  RenderVec3 ambient_rgb{state.ambient_rgb[0], state.ambient_rgb[1],
+                         state.ambient_rgb[2]};
+  if (!state.directional_lights.empty()) {
+    ambient_rgb = {};
+    for (const auto& directional : state.directional_lights) {
+      ambient_rgb[0] += directional.ambient_rgb[0];
+      ambient_rgb[1] += directional.ambient_rgb[1];
+      ambient_rgb[2] += directional.ambient_rgb[2];
+    }
+  }
   uniforms.light_ambient = {
-      state.ambient_rgb[0], state.ambient_rgb[1], state.ambient_rgb[2], 0.0f};
+      ambient_rgb[0], ambient_rgb[1], ambient_rgb[2], 0.0f};
 
   std::size_t uniform_light_count = 0;
-  if (state.has_directional_light) {
-
-    const RenderVec3 surface_to_light{
-        -state.direction[0], -state.direction[1], -state.direction[2]};
+  if (!state.directional_lights.empty()) {
+    for (const auto& directional : state.directional_lights) {
+      if (uniform_light_count >= m2::M2BatchUniforms::kMaxM2Lights) {
+        break;
+      }
+      const std::size_t slot = uniform_light_count++;
+      uniforms.light_pos_range[slot] = {
+          // Model2.bls consumes a directional lobe as a toward-light vector.
+          // M2LightSample::direction is the light bone's local +Z axis, which
+          // is already that vector; negating it here lights the back side.
+          directional.direction[0], directional.direction[1],
+          directional.direction[2], 0.0f};
+      uniforms.light_attenuation[slot] = {0.0f, 1.0f, 0.0f, 0.0f};
+      uniforms.light_color[slot] = {
+          directional.diffuse_rgb[0], directional.diffuse_rgb[1],
+          directional.diffuse_rgb[2], 0.0f};
+    }
+  } else if (state.has_directional_light) {
+    const RenderVec3 surface_to_light{state.direction[0], state.direction[1],
+                                      state.direction[2]};
+    const RenderVec3 non_negative_diffuse{
+        std::max(state.diffuse_rgb[0], 0.0f),
+        std::max(state.diffuse_rgb[1], 0.0f),
+        std::max(state.diffuse_rgb[2], 0.0f)};
     uniforms.light_pos_range[uniform_light_count] = {
         surface_to_light[0], surface_to_light[1], surface_to_light[2], 0.0f};
     uniforms.light_attenuation[uniform_light_count] = {0.0f, 1.0f, 0.0f, 0.0f};
     uniforms.light_color[uniform_light_count] = {
-        state.diffuse_rgb[0], state.diffuse_rgb[1], state.diffuse_rgb[2], 0.0f};
+        non_negative_diffuse[0], non_negative_diffuse[1],
+        non_negative_diffuse[2], 0.0f};
     ++uniform_light_count;
   }
 
-  constexpr std::size_t kMaxRetailPointLightSlots =
-      m2::M2BatchUniforms::kMaxM2Lights - 1u;
-  std::array<const ModelRenderCallbackPointLightState*, kMaxRetailPointLightSlots>
+  const std::size_t point_slot_capacity =
+      m2::M2BatchUniforms::kMaxM2Lights - uniform_light_count;
+  std::array<const ModelRenderCallbackPointLightState*,
+             m2::M2BatchUniforms::kMaxM2Lights>
       selected_points{};
-  std::array<float, kMaxRetailPointLightSlots> selected_distance_squared{};
+  std::array<float, m2::M2BatchUniforms::kMaxM2Lights>
+      selected_distance_squared{};
   selected_distance_squared.fill(std::numeric_limits<float>::infinity());
   std::size_t selected_count = 0;
 
   for (const auto& point : state.point_lights) {
+    if (point_slot_capacity == 0u) {
+      break;
+    }
     const float dx = point.position[0] - model_world_position[0];
     const float dy = point.position[1] - model_world_position[1];
     const float dz = point.position[2] - model_world_position[2];
     const float distance_squared = dx * dx + dy * dy + dz * dz;
 
     std::size_t insert_index = selected_count;
-    if (insert_index == kMaxRetailPointLightSlots) {
-      if (distance_squared >= selected_distance_squared.back()) {
+    if (insert_index == point_slot_capacity) {
+      if (distance_squared >= selected_distance_squared[point_slot_capacity - 1u]) {
         continue;
       }
-      insert_index = kMaxRetailPointLightSlots - 1u;
+      insert_index = point_slot_capacity - 1u;
     } else {
       ++selected_count;
     }

@@ -742,6 +742,15 @@ M2TextureUnitPreparationResult PrepareM2SkinTextureUnitsForRender(
     data::model::M2Skin &skin) {
   M2TextureUnitPreparationResult result = ValidateSkinTextureUnitPreparationInputs(model, skin);
   ResolveRetailSkinTextureUnitShaders(model, skin);
+
+  // Classic v256 stores raw combo indices in the embedded M2 batches.  The
+  // following helpers are specifically for the packed/normalized indices of
+  // later WotLK .skin files; applying them to Classic changes the texture and
+  // UV-animation references before the Classic resolver can read them.
+  if (model.header.version == 256u) {
+    return result;
+  }
+
   ExpandSkinTextureLookupIndices(model, skin);
   const RetailSkinTextureUnitRewriteResult rewrite_result =
       ApplyRetailSkinTextureUnitShaderRewrite(model, skin);

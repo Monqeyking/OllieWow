@@ -125,6 +125,9 @@ struct M2BatchUniforms {
   RenderVec4 material_color{1.0f, 1.0f, 1.0f, 1.0f};
   RenderVec4 combiner_mode{0.0f, 0.0f, 1.0f, 0.0f};
   RenderVec4 alpha_ref{0.0f, 0.0f, 0.0f, 0.0f};
+  // x = unlit, y = unfogged, z = Vanilla exterior-M2 Model2.bls lighting.
+  // The flag is deliberately per draw: WMO/clutter and world M2 callers keep
+  // their existing matte lighting until they opt into the translated lane.
   RenderVec4 material_flags{0.0f, 0.0f, 0.0f, 0.0f};
   RenderVec4 fog_params{900.0f, 1200.0f, 0.0f, 0.0f};
   RenderVec4 fog_color{0.6f, 0.7f, 0.85f, 1.0f};
@@ -257,6 +260,9 @@ struct M2ColorSample {
 struct M2LightSample {
   std::uint16_t type{0};
   RenderVec3 position{0.0f, 0.0f, 0.0f};
+  // Directional M2 lights use the light bone's local +Z axis.  The position
+  // field is only meaningful for point lights.
+  RenderVec3 direction{0.0f, 0.0f, 1.0f};
   RenderVec3 ambient_color{0.0f, 0.0f, 0.0f};
   float ambient_intensity{0.0f};
   RenderVec3 diffuse_color{0.0f, 0.0f, 0.0f};

@@ -298,18 +298,6 @@ void LogVoiceChatDisabledFooter(openwow::audio::SoundEngine& engine,
       engine, 0, " -###########################################################################################");
 }
 
-bool SendVoiceChatEnablePacket(const bool voice_enabled,
-                               const bool microphone_enabled) {
-  std::vector<std::uint8_t> payload{
-      static_cast<std::uint8_t>(voice_enabled ? 1 : 0),
-      static_cast<std::uint8_t>(microphone_enabled ? 1 : 0),
-  };
-  return openwow::net::ClientServices__SendPacket(
-      openwow::net::wotlk::WorldPacket(
-          openwow::net::wotlk::Opcode::CMSG_VOICE_SESSION_ENABLE,
-          std::move(payload)));
-}
-
 }
 
 bool ReadVoiceChatCVarBool(const char *name, const bool fallback) {
@@ -1428,8 +1416,6 @@ bool CVar_EnableMicrophone_OnChanged(openwow::audio::SoundEngine& engine,
   const bool voice_enabled = ReadVoiceChatBoolCVar(kEnableVoiceChatCVarName);
   const bool microphone_enabled =
       new_value != nullptr && ParseVoiceToggleValue(new_value);
-  (void)SendVoiceChatEnablePacket(voice_enabled, microphone_enabled);
-
   if (voice_enabled && microphone_enabled &&
       VoiceChat::Get().IsAllowedAndEnabled()) {
     openwow::audio::VoiceChat_SetCaptureEnabled(engine, true);
@@ -1482,7 +1468,6 @@ bool CVar_EnableVoiceChat_OnChanged(openwow::audio::SoundRuntime& sound_runtime,
     SyncVoiceChatSettingsFromCVars();
   }
 
-  (void)SendVoiceChatEnablePacket(voice_enabled, microphone_enabled);
   ui::game::ScriptEventDispatch::Get().FireEvent(
       ui::game::events::VOICE_CHAT_ENABLED_UPDATE);
 
@@ -1576,8 +1561,6 @@ void VoiceChat_Initialize(openwow::audio::SoundRuntime& sound_runtime) {
 
   VoiceChat_InitComSatDriver(engine);
   ClearTrackedVoiceActivity();
-  (void)SendVoiceChatEnablePacket(ReadVoiceChatBoolCVar(kEnableVoiceChatCVarName),
-                                  ReadVoiceChatBoolCVar(kEnableMicrophoneCVarName, true));
 }
 
 void VoiceChat_Shutdown(openwow::audio::SoundRuntime& sound_runtime) {

@@ -1294,6 +1294,7 @@ void CGlueMgr_RequestCharacterList(GlueGameState& state) {
 void CGlueMgr_ResetCharacterListDisplay(GlueGameState& state) {
   state.characters.clear();
   state.selected_character_index = -1;
+  state.char_select_requested_background.clear();
   state.wants_enter_world = false;
   if (state.char_select_scene != nullptr) {
     state.char_select_scene->SyncFromGameState(state);

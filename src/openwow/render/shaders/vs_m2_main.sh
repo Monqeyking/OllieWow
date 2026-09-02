@@ -71,6 +71,11 @@ vec3 safeNormalizeM2(vec3 value) {
         : vec3_splat(0.0);
 }
 
+float model2BlsSunLobe(float mu) {
+    // Vanilla Model2.bls order-2 spherical-harmonics lobe.
+    return (4.0 / 17.0) * (0.375 + 2.0 * mu + 1.875 * mu * mu);
+}
+
 void main()
 {
     M2_MAIN_PROLOGUE
@@ -170,8 +175,11 @@ void main()
                 strength = clamp(dot(worldNormal, safeNormalizeM2(toLight)), 0.0, 1.0)
                          / max(denominator, 0.0001);
             } else {
-                strength = clamp(dot(worldNormal,
-                    safeNormalizeM2(u_m2LightPosRange(index).xyz)), 0.0, 1.0);
+                float mu = dot(worldNormal,
+                    safeNormalizeM2(u_m2LightPosRange(index).xyz));
+                strength = u_materialFlags.z > 0.5
+                    ? model2BlsSunLobe(mu)
+                    : clamp(mu, 0.0, 1.0);
             }
             lighting += lightColor.rgb * strength;
         }

@@ -297,6 +297,10 @@ WorldPacket PacketSender::BuildCharCreate(std::string_view name, std::uint8_t ra
   pkt.AppendU8(hair_color);
   pkt.AppendU8(facial_hair);
   pkt.AppendU8(outfit_id);
+  // OllieWoW/Turtle's CharacterHandler reads the optional challenge mask
+  // immediately after outfitId. Classic character creation uses no selected
+  // challenge here, but the field must still be present on the wire.
+  pkt.AppendU32(0);
   return pkt;
 }
 
@@ -309,14 +313,6 @@ WorldPacket PacketSender::BuildCharDelete(std::uint64_t guid) {
 WorldPacket PacketSender::BuildPlayerLogin(std::uint64_t guid) {
   WorldPacket pkt(Opcode::CMSG_PLAYER_LOGIN);
   pkt.AppendU64(guid);
-  return pkt;
-}
-
-WorldPacket PacketSender::BuildVoiceChatEnable(const bool voice_enabled,
-                                               const bool microphone_enabled) {
-  WorldPacket pkt(Opcode::CMSG_VOICE_SESSION_ENABLE);
-  pkt.AppendU8(voice_enabled ? 1u : 0u);
-  pkt.AppendU8(microphone_enabled ? 1u : 0u);
   return pkt;
 }
 
@@ -333,10 +329,6 @@ WorldPacket PacketSender::BuildLogoutRequest() {
 
 WorldPacket PacketSender::BuildLogoutCancel() {
   return WorldPacket(Opcode::CMSG_LOGOUT_CANCEL);
-}
-
-WorldPacket PacketSender::BuildKeepAlive() {
-  return WorldPacket(Opcode::CMSG_KEEP_ALIVE);
 }
 
 WorldPacket PacketSender::BuildMovement(Opcode opcode, const game::ObjectGuid &mover,
@@ -727,10 +719,6 @@ WorldPacket PacketSender::BuildQuestgiverStatusQuery(std::uint64_t guid) {
   WorldPacket pkt(Opcode::CMSG_QUESTGIVER_STATUS_QUERY);
   pkt.AppendU64(guid);
   return pkt;
-}
-
-WorldPacket PacketSender::BuildQuestgiverStatusMultipleQuery() {
-  return WorldPacket(Opcode::CMSG_QUESTGIVER_STATUS_MULTIPLE_QUERY);
 }
 
 WorldPacket PacketSender::BuildQuestPoiQuery(const std::vector<std::uint32_t> &quest_ids) {
@@ -1808,16 +1796,6 @@ WorldPacket PacketSender::BuildCompleteMovie() {
   return pkt;
 }
 
-WorldPacket PacketSender::BuildReadyForAccountDataTimes() {
-  return WorldPacket(Opcode::CMSG_READY_FOR_ACCOUNT_DATA_TIMES);
-}
-
-WorldPacket PacketSender::BuildRealmSplit(const std::uint32_t split_state) {
-  WorldPacket packet(Opcode::CMSG_REALM_SPLIT);
-  packet.AppendU32(split_state);
-  return packet;
-}
-
 WorldPacket PacketSender::BuildWorldStateUiTimerUpdate() {
   WorldPacket pkt(Opcode::CMSG_WORLD_STATE_UI_TIMER_UPDATE);
   return pkt;
@@ -1832,6 +1810,7 @@ WorldPacket PacketSender::BuildInspect(std::uint64_t target_guid) {
 WorldPacket PacketSender::BuildItemQuerySingle(std::uint32_t item_entry) {
   WorldPacket pkt(Opcode::CMSG_ITEM_QUERY_SINGLE);
   pkt.AppendU32(item_entry);
+  pkt.AppendU64(0);
   return pkt;
 }
 

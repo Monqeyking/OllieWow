@@ -459,6 +459,11 @@ float DotM2Lighting(const RenderVec3 &lhs, const RenderVec3 &rhs) noexcept {
   return lhs[0] * rhs[0] + lhs[1] * rhs[1] + lhs[2] * rhs[2];
 }
 
+float EvaluateModel2BlsSunLobe(const float mu) noexcept {
+  return (4.0f / 17.0f) *
+         (0.375f + 2.0f * mu + 1.875f * mu * mu);
+}
+
 }
 
 RenderVec3 EvaluateM2SurfaceLighting(const M2BatchUniforms &uniforms,
@@ -490,7 +495,10 @@ RenderVec3 EvaluateM2SurfaceLighting(const M2BatchUniforms &uniforms,
     } else {
       const RenderVec3 direction = NormalizeM2LightingVector(
           {position_range[0], position_range[1], position_range[2]});
-      strength = std::max(DotM2Lighting(normal, direction), 0.0f);
+      const float mu = DotM2Lighting(normal, direction);
+      strength = uniforms.material_flags[2] > 0.5f
+                     ? EvaluateModel2BlsSunLobe(mu)
+                     : std::max(mu, 0.0f);
     }
     lighting[0] += color[0] * strength;
     lighting[1] += color[1] * strength;

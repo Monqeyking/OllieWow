@@ -1359,14 +1359,17 @@ int LuaGetPVPLifetimeStats(lua_State *L) {
   if (player == nullptr) {
     lua_pushnumber(L, 0);
     lua_pushnumber(L, 0);
-    return 2;
+    lua_pushnumber(L, 0);
+    return 3;
   }
 
   lua_pushnumber(L, static_cast<lua_Number>(player->GetUInt32(
                         PLAYER_FIELD_LIFETIME_HONORABLE_KILLS)));
+  lua_pushnumber(L, static_cast<lua_Number>(player->GetUInt32(
+                        PLAYER_FIELD_LIFETIME_DISHONORABLE_KILLS)));
   const auto rank = player->GetPvpMedalRank();
   lua_pushnumber(L, static_cast<lua_Number>(rank > 4u ? rank : 0u));
-  return 2;
+  return 3;
 }
 
 int LuaGetHonorCurrency(lua_State *L) {

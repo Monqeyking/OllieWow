@@ -26,11 +26,6 @@ void WorldUiSessionCommandAdapter::SetWorldUiSelection(
 }
 
 void WorldUiSessionCommandAdapter::EnableWorldUiVoice(
-    const WorldUiVoiceSettings settings) {
-  if (session_ != nullptr) {
-    session_->Send(openwow::net::wotlk::PacketSender::BuildVoiceChatEnable(
-        settings.voice_enabled, settings.microphone_enabled));
-  }
-}
+    const WorldUiVoiceSettings) {}
 
 }

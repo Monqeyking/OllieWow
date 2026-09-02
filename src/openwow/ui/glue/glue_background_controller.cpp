@@ -205,6 +205,29 @@ void GlueBackgroundController::SetCharCustomizeModelFrame(GlueGameState& gs,
 void GlueBackgroundController::SetCharSelectBackground(GlueGameState& gs,
                                                        GlueWidgetRuntime& widgets,
                                                        const std::string& filename) {
+  gs.char_select_requested_background = filename;
+  const auto selected_character =
+      gs.selected_character_index >= 0 &&
+              gs.selected_character_index < static_cast<int>(gs.characters.size())
+          ? &gs.characters[static_cast<std::size_t>(gs.selected_character_index)]
+          : nullptr;
+  openwow::diagnostics::Log(
+      openwow::diagnostics::LogLevel::kInfo,
+      "Glue background model resolve: frame=CharacterSelect" +
+          std::string(" customize=0") +
+          " selected_index=" + std::to_string(gs.selected_character_index) +
+          " selected_count=" + std::to_string(gs.characters.size()) +
+          " selected_race=" +
+          (selected_character == nullptr
+               ? std::string("<none>")
+               : std::to_string(selected_character->race_id)) +
+          " selected_class=" +
+          (selected_character == nullptr
+               ? std::string("<none>")
+               : std::to_string(selected_character->class_id)) +
+          " create_race=" + std::to_string(gs.create_race) +
+          " requested=" + filename +
+          " resolved=" + filename);
   SetBackgroundForFrame(gs.char_select_model_frame,
                         gs.char_select_background,
                         widgets,
@@ -215,6 +238,15 @@ void GlueBackgroundController::SetCharSelectBackground(GlueGameState& gs,
 void GlueBackgroundController::SetCharCustomizeBackground(GlueGameState& gs,
                                                           GlueWidgetRuntime& widgets,
                                                           const std::string& filename) {
+  openwow::diagnostics::Log(
+      openwow::diagnostics::LogLevel::kInfo,
+      "Glue background model resolve: frame=CharacterCreate" +
+          std::string(" customize=1") +
+          " selected_index=" + std::to_string(gs.selected_character_index) +
+          " selected_count=" + std::to_string(gs.characters.size()) +
+          " create_race=" + std::to_string(gs.create_race) +
+          " requested=" + filename +
+          " resolved=" + filename);
   SetBackgroundForFrame(gs.char_customize_model_frame,
                         gs.char_customize_background,
                         widgets,

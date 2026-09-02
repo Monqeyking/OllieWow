@@ -13,6 +13,8 @@
 #include <atomic>
 #include <cstring>
 #include <limits>
+#include <mutex>
+#include <unordered_set>
 
 namespace openwow::render::m2 {
 namespace {
@@ -41,6 +43,84 @@ constexpr float kRenderableOpacityThreshold = 0.0001f;
   }
   return uniforms->light_count[0] > 0.0f || uniforms->light_ambient[0] != 0.0f ||
          uniforms->light_ambient[1] != 0.0f || uniforms->light_ambient[2] != 0.0f;
+}
+
+[[nodiscard]] bool IsGlueSceneModel(const std::string_view model_path) noexcept {
+  return model_path.find("Interface/Glues/Models/") != std::string_view::npos;
+}
+
+[[nodiscard]] bool IsCharacterModel(const std::string_view model_path) noexcept {
+  return model_path.find("Character/") != std::string_view::npos ||
+         model_path.find("\\Character\\") != std::string_view::npos;
+}
+
+[[nodiscard]] std::string BillboardBoneSummary(
+    const data::model::M2Model& model, const data::model::M2Skin& skin,
+    const std::size_t submesh_index, std::size_t* const out_vertex_count) {
+  if (out_vertex_count != nullptr) {
+    *out_vertex_count = 0u;
+  }
+  if (submesh_index >= skin.submeshes.size()) {
+    return "invalid-submesh";
+  }
+  const auto& submesh = skin.submeshes[submesh_index];
+  std::vector<std::uint16_t> billboard_bones;
+  const std::size_t index_end =
+      std::min<std::size_t>(skin.triangles.size(),
+                            static_cast<std::size_t>(submesh.index_start) +
+                                static_cast<std::size_t>(submesh.index_count));
+  for (std::size_t position = submesh.index_start; position < index_end; ++position) {
+    const std::size_t skin_vertex_index = skin.triangles[position];
+    if (skin_vertex_index >= model.vertices.size()) {
+      continue;
+    }
+    const auto& vertex = model.vertices[skin_vertex_index];
+    bool vertex_has_billboard = false;
+    for (std::size_t influence = 0; influence < 4u; ++influence) {
+      if (vertex.bone_weights[influence] == 0u) {
+        continue;
+      }
+      const std::size_t lookup_index =
+          static_cast<std::size_t>(submesh.bone_combo_index) + vertex.bone_indices[influence];
+      if (lookup_index >= model.bone_lookup.size()) {
+        continue;
+      }
+      const std::uint16_t global_bone = model.bone_lookup[lookup_index];
+      if (global_bone >= model.bones.size() ||
+          (model.bones[global_bone].flags & data::model::kM2BoneFlagBillboardMask) == 0u) {
+        continue;
+      }
+      vertex_has_billboard = true;
+      if (std::find(billboard_bones.begin(), billboard_bones.end(), global_bone) ==
+          billboard_bones.end()) {
+        billboard_bones.push_back(global_bone);
+      }
+    }
+    if (vertex_has_billboard && out_vertex_count != nullptr) {
+      ++*out_vertex_count;
+    }
+  }
+  if (billboard_bones.empty()) {
+    return "none";
+  }
+  std::string result;
+  for (const auto bone : billboard_bones) {
+    if (!result.empty()) {
+      result += ",";
+    }
+    result += std::to_string(bone);
+  }
+  return result;
+}
+
+[[nodiscard]] std::string TextureName(const data::model::M2Model& model,
+                                       const std::size_t texture_index) {
+  if (texture_index >= model.textures.size()) {
+    return "<invalid>";
+  }
+  return model.textures[texture_index].name_text.empty()
+             ? "<unnamed>"
+             : model.textures[texture_index].name_text;
 }
 
 struct M2BatchDrawSetup {
@@ -397,6 +477,92 @@ M2RenderInstanceResult M2GeometrySubmitter::Submit(
     classification.opaque = BatchBelongsToOpaqueList(
         static_cast<std::uint32_t>(batch.blend_mode),
         classification.material_sample.color[3]);
+  }
+
+  if (IsGlueSceneModel(model_path) || IsCharacterModel(model_path)) {
+    static std::mutex logged_models_mutex;
+    static std::unordered_set<std::string> logged_models;
+    bool first_for_model = false;
+    {
+      std::lock_guard lock(logged_models_mutex);
+      first_for_model = logged_models.emplace(model_path).second;
+    }
+    if (first_for_model) {
+      std::size_t drawable_count = 0;
+      std::size_t opaque_count = 0;
+      std::size_t transparent_count = 0;
+      std::size_t lit_count = 0;
+      std::size_t unlit_count = 0;
+      for (std::size_t index = 0; index < classifications.size(); ++index) {
+        const auto& classification = classifications[index];
+        if (!classification.drawable) {
+          continue;
+        }
+        ++drawable_count;
+        if (classification.opaque) {
+          ++opaque_count;
+        } else {
+          ++transparent_count;
+        }
+        const auto& batch = render_batches[index];
+        if ((batch.material_flags & kM2MaterialFlagUnlit) != 0u) {
+          ++unlit_count;
+        } else {
+          ++lit_count;
+        }
+      }
+      openwow::diagnostics::Log(
+          openwow::diagnostics::LogLevel::kInfo,
+          "GlueRenderDiagnostics: batches model=" + std::string(model_path) +
+              " total=" + std::to_string(render_batches.size()) +
+              " drawable=" + std::to_string(drawable_count) +
+              " opaque=" + std::to_string(opaque_count) +
+              " transparent=" + std::to_string(transparent_count) +
+              " lit=" + std::to_string(lit_count) +
+              " unlit=" + std::to_string(unlit_count) +
+              " active_lighting=" +
+              std::to_string(has_active_lighting ? 1 : 0) +
+          " material_lane=" +
+          std::to_string(base_uniforms != nullptr
+                                 ? static_cast<int>(base_uniforms->material_flags[2])
+                                 : 0));
+
+      for (std::size_t index = 0; index < render_batches.size(); ++index) {
+        const auto& batch = render_batches[index];
+        const auto& texture_unit = skin.texture_units[batch.texture_unit_index];
+        const auto& submesh = skin.submeshes[batch.submesh_index];
+        const auto& classification = classifications[index];
+        const bool visible = is_visible(batch.submesh_index);
+        std::size_t billboard_vertex_count = 0u;
+        const std::string billboard_bones = BillboardBoneSummary(
+            model, skin, batch.submesh_index, &billboard_vertex_count);
+        openwow::diagnostics::Log(
+            openwow::diagnostics::LogLevel::kInfo,
+            "GlueRenderDiagnostics: batch model=" + std::string(model_path) +
+                " index=" + std::to_string(index) +
+                " tu=" + std::to_string(batch.texture_unit_index) +
+                " submesh=" + std::to_string(batch.submesh_index) +
+                " section=" + std::to_string(submesh.section_id) +
+                " indices=" + std::to_string(batch.start_index) + "+" +
+                std::to_string(batch.index_count) +
+                " visible=" + std::to_string(visible ? 1 : 0) +
+                " drawable=" + std::to_string(classification.drawable ? 1 : 0) +
+                " opaque=" + std::to_string(classification.opaque ? 1 : 0) +
+                " blend=" +
+                std::to_string(static_cast<std::uint32_t>(batch.blend_mode)) +
+                " material_flags=" + std::to_string(batch.material_flags) +
+                " shader=" + std::to_string(batch.shader_id) +
+                " tex0=" + std::to_string(batch.texture0_index) + ":" +
+                TextureName(model, batch.texture0_index) +
+                " tex1=" + std::to_string(batch.texture1_index) + ":" +
+                TextureName(model, batch.texture1_index) +
+                " tex_count=" + std::to_string(batch.texture_count) +
+                " tu_mode=" + std::to_string(texture_unit.mode) +
+                " tu_flags=" + std::to_string(texture_unit.flags) +
+                " billboard_bones=" + billboard_bones +
+                " billboard_vertices=" + std::to_string(billboard_vertex_count));
+      }
+    }
   }
 
   const auto build_draw_order =

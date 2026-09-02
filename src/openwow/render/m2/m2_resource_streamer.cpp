@@ -11,11 +11,32 @@
 #include <algorithm>
 #include <exception>
 #include <limits>
+#include <string_view>
 #include <thread>
 #include <unordered_set>
 #include <utility>
 
 namespace openwow::render::m2 {
+
+namespace {
+
+[[nodiscard]] std::string ResolveModelSiblingTexturePath(
+    const std::string& model_path, const std::string& texture_path) {
+  const auto model_separator = model_path.find_last_of("/\\");
+  const auto texture_separator = texture_path.find_last_of("/\\");
+  if (model_separator == std::string::npos ||
+      texture_separator == std::string::npos ||
+      texture_separator + 1u >= texture_path.size()) {
+    return {};
+  }
+
+  std::string sibling = model_path.substr(0, model_separator + 1u);
+  sibling += texture_path.substr(texture_separator + 1u);
+  std::replace(sibling.begin(), sibling.end(), '\\', '/');
+  return sibling;
+}
+
+}
 
 M2PreparedResourceBundle PrepareM2ResourceBundle(
     const M2StreamModelPreparer& model_preparer,
@@ -45,15 +66,56 @@ M2PreparedResourceBundle PrepareM2ResourceBundle(
       continue;
     }
 
-    bundle.texture_dependencies.push_back(dependency);
+    auto prepare_texture = [&](const std::string& path) {
+      return texture_preparer
+                 ? texture_preparer(path)
+                 : TextureManager::PrepareTextureUploadFromLoader(path, loader);
+    };
+
+    std::string resolved_texture_path = dependency.texture_path;
+    PreparedTextureUpload upload;
+    if (IsRendererContextActive() || IsRendererDeviceRestarting()) {
+      upload = prepare_texture(resolved_texture_path);
+
+      // Some Classic/Turtle glue models keep legacy embedded texture paths
+      // from their original UI folder. If that exact path is absent, retry
+      // the texture beside the active model and update the parsed model's
+      // texture record so later render passes use the same resolved path.
+      if (!upload.valid) {
+        const std::string sibling_path =
+            ResolveModelSiblingTexturePath(model_path, resolved_texture_path);
+        if (!sibling_path.empty() && sibling_path != resolved_texture_path) {
+          auto sibling_upload = prepare_texture(sibling_path);
+          if (sibling_upload.valid) {
+            openwow::diagnostics::Log(
+                openwow::diagnostics::LogLevel::kInfo,
+                "M2 texture relative fallback: model=" + model_path +
+                    " embedded=" + resolved_texture_path +
+                    " resolved=" + sibling_path);
+            resolved_texture_path = sibling_path;
+            upload = std::move(sibling_upload);
+
+            if (auto* prepared_impl =
+                    M2PreparedModelAccess::Get(preparation.prepared.get());
+                prepared_impl != nullptr &&
+                dependency.texture_index <
+                    prepared_impl->resource.model_data.textures.size()) {
+              prepared_impl->resource.model_data
+                  .textures[dependency.texture_index]
+                  .name_text = resolved_texture_path;
+            }
+          }
+        }
+      }
+    }
+
+    auto resolved_dependency = dependency;
+    resolved_dependency.texture_path = resolved_texture_path;
+    bundle.texture_dependencies.push_back(std::move(resolved_dependency));
 
     if (!IsRendererContextActive() && !IsRendererDeviceRestarting()) {
       continue;
     }
-    auto upload = texture_preparer
-                      ? texture_preparer(dependency.texture_path)
-                      : TextureManager::PrepareTextureUploadFromLoader(
-                            dependency.texture_path, loader);
     if (!upload.valid) {
       openwow::diagnostics::Log(
           openwow::diagnostics::LogLevel::kWarn,
@@ -63,10 +125,11 @@ M2PreparedResourceBundle PrepareM2ResourceBundle(
               " dependency_index=" +
               std::to_string(bundle.texture_dependencies.size() - 1u) +
               " embedded_name=" + dependency.texture_path +
+              " resolved_name=" + resolved_texture_path +
               " source=" + (texture_preparer ? "texture-preparer" : "file-loader"));
       bundle.status = M2ResultStatus::kFailed;
       bundle.reason = M2ResultReason::kMissingTexture;
-      bundle.detail = dependency.texture_path;
+      bundle.detail = resolved_texture_path;
       bundle.textures.clear();
       return bundle;
     }

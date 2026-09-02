@@ -3,6 +3,7 @@
 
 #include "openwow/render/api/math/render_matrix_math.h"
 
+#include "openwow/game/character_appearance_geoset_resolver.h"
 #include "openwow/render/models/characters/character_model_path.h"
 #include "openwow/render/m2/m2_system.h"
 #include "openwow/foundation/diagnostics/logging.h"
@@ -390,6 +391,7 @@ void GlueCharSelectScene::ResetCurrentDisplayContent() {
 void GlueCharSelectScene::ReleaseContent() {
   NotifyContentRelease();
   ResetCurrentDisplayContent();
+  last_create_appearance_trace_.clear();
   RebuildAttachments();
   ApplySelectFacing(0.0f);
 }
@@ -418,6 +420,7 @@ void GlueCharSelectScene::Reset() {
   selected_character_display_initialized_ = false;
   character_display_preloads_.clear();
   last_create_model_resolution_trace_.clear();
+  last_create_appearance_trace_.clear();
 
   RebuildAttachments();
   ApplySelectFacing(0.0f);
@@ -592,6 +595,79 @@ void GlueCharSelectScene::RefreshCharacterAppearanceTextureSources() {
   appearance_texture_sources_ =
       openwow::render::BuildCharacterAppearanceTextureSources(
           selection, char_sections_, item_display_info_, chr_races_);
+
+  // CharacterCreate's horn color is a two-part Classic data flow: the horn
+  // style selects a CharHairGeosets row, while the color is applied through
+  // CharSections TextureName[1]/[2] in the body atlas. Keep this diagnostic
+  // behind a combination key so a test run produces one readable record per
+  // actual appearance, not a line every frame.
+  if (current_display_owner_.kind != CharacterDisplayOwnerKind::kCreatePreview) {
+    return;
+  }
+
+  const auto geoset_id = openwow::game::ResolveHairGeosetId(
+      appearance.race, appearance.gender, appearance.hair_style, hair_geosets_);
+  std::string geoset_row = "missing";
+  if (hair_geosets_ != nullptr) {
+    for (const auto &entry : hair_geosets_->entries()) {
+      if (entry.race_id == appearance.race &&
+          entry.sex_id == appearance.gender &&
+          entry.variation_id == appearance.hair_style) {
+        geoset_row = "geoset=" + std::to_string(entry.geoset_id) +
+                     ",show_scalp=" + std::to_string(entry.bald);
+        break;
+      }
+    }
+  }
+
+  const auto DescribeTexture = [this](const char *label,
+                                      const std::string &path) {
+    std::string result = label;
+    result += "=";
+    result += path.empty() ? "<empty>" : path;
+    result += ":";
+    if (path.empty()) {
+      result += "empty";
+    } else if (vfs_ == nullptr) {
+      result += "no-vfs";
+    } else {
+      result += vfs_->Exists(path) ? "present" : "missing";
+    }
+    return result;
+  };
+
+  std::string trace =
+      std::to_string(appearance.race) + ":" +
+      std::to_string(appearance.gender) + ":" +
+      std::to_string(appearance.skin_color) + ":" +
+      std::to_string(appearance.face) + ":" +
+      std::to_string(appearance.hair_style) + ":" +
+      std::to_string(appearance.hair_color) + ":" +
+      std::to_string(appearance.facial_hair) + ":" +
+      appearance_texture_sources_.base_skin + ":" +
+      appearance_texture_sources_.scalp_lower + ":" +
+      appearance_texture_sources_.scalp_upper;
+  if (trace == last_create_appearance_trace_) {
+    return;
+  }
+  last_create_appearance_trace_ = std::move(trace);
+
+  openwow::diagnostics::Log(
+      openwow::diagnostics::LogLevel::kInfo,
+      "Glue CharacterCreate appearance: "
+      "race=" + std::to_string(appearance.race) +
+          " gender=" + std::to_string(appearance.gender) +
+          " skin=" + std::to_string(appearance.skin_color) +
+          " face=" + std::to_string(appearance.face) +
+          " horn_style=" + std::to_string(appearance.hair_style) +
+          " hair_color=" + std::to_string(appearance.hair_color) +
+          " facial_hair=" + std::to_string(appearance.facial_hair) +
+          " resolved_hair_geoset=" + std::to_string(geoset_id) +
+          " hair_row=" + geoset_row +
+          " | " + DescribeTexture("base", appearance_texture_sources_.base_skin) +
+          " | " + DescribeTexture("scalp_lower", appearance_texture_sources_.scalp_lower) +
+          " | " + DescribeTexture("scalp_upper", appearance_texture_sources_.scalp_upper) +
+          " | " + DescribeTexture("hair_mesh", appearance_texture_sources_.hair));
 }
 
 void GlueCharSelectScene::RefreshAppearanceGeosets() {
@@ -1122,7 +1198,8 @@ void GlueCharSelectScene::SyncCreateCharacter(const GlueGameState &gs) {
             " enumerated_exists=" + (enumerated_model_exists ? "1" : "0") +
             " result=" + (model_path.empty() ? "<empty>" : model_path));
   }
-  if (model_path.empty() || !HasValidBaseSkinSelection(appearance)) {
+  const bool valid_base_skin = HasValidBaseSkinSelection(appearance);
+  if (model_path.empty() || !valid_base_skin) {
     // Keep the last valid preview while the new DBC/model/texture selection
     // is unavailable. Selection code must not turn a temporary asset miss
     // into a blank CharacterCreate screen.

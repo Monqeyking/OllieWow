@@ -93,6 +93,24 @@ bool GlueModelStreamingTraceEnabled() {
   return enabled;
 }
 
+bool GlueRenderDiagnosticsEnabled(const std::string_view widget_name,
+                                  const std::string_view model_path) {
+  // Keep the temporary shading probe focused on the login scene. The
+  // environment switch allows the same inspection for another ModelFFX
+  // widget without turning every model frame into log noise.
+  static const bool all_widgets = [] {
+    const char* value = std::getenv("OPENWOW_GLUE_RENDER_DIAGNOSTICS");
+    return value != nullptr && *value != '\0' && std::strcmp(value, "0") != 0;
+  }();
+  return all_widgets || widget_name == "AccountLogin" ||
+         widget_name == "UI_MainMenu" ||
+         widget_name == "CharacterSelect" ||
+         widget_name == "CharacterCreate" ||
+         model_path.find("Interface/Glues/Models/UI_Highelf/") !=
+             std::string_view::npos ||
+         model_path == "/Interface/Glues/Models/UI_MainMenu/UI_MainMenu.m2";
+}
+
 GlueModelRenderer::StreamingBackend MakeDefaultStreamingBackend(
     const openwow::vfs::VirtualFileSystem* vfs,
     openwow::render::TextureManager& texture_manager) {
@@ -574,6 +592,7 @@ void GlueModelRenderer::Shutdown() {
   active_character_appearance_keys_.clear();
   static_model_prewarm_queued_ = false;
   initial_visible_commit_boost_ = false;
+  effect_diagnostics_logged_ = false;
 
   openwow::render::ui::DestroyUiProgram(selection_triangle_program_, selection_triangle_sampler_);
   shared_white_texture_ = BGFX_INVALID_HANDLE;
@@ -762,7 +781,7 @@ void GlueModelRenderer::EnsureQueued(const std::string &model_m2_path) {
     return;
 
   openwow::diagnostics::Log(
-      openwow::diagnostics::LogLevel::kInfo,
+      openwow::diagnostics::LogLevel::kDebug,
       "GlueModelRenderer: queue model path=" + model_m2_path +
           " vfs_exists=" +
           (vfs_ != nullptr && vfs_->Exists(model_m2_path) ? "1" : "0"));
@@ -1516,6 +1535,44 @@ void GlueModelRenderer::BeginAnimationFrame(
   }
 }
 
+void GlueModelRenderer::UpdateEffectsFrame(const std::uint32_t delta_ms) {
+  if (delta_ms == 0u) {
+    return;
+  }
+
+  // M2Renderer filters this to instances rendered during the previous frame,
+  // so visible glue emitters are simulated once without touching stale models.
+  m2_system_.UpdateAllEffects(static_cast<float>(delta_ms) / 1000.0f,
+                              std::nullopt);
+
+  if (!effect_diagnostics_logged_) {
+    for (const auto& [key, instance] : instances_) {
+      if ((!key.starts_with("AccountLogin") &&
+           !key.starts_with("UI_MainMenu")) ||
+          instance.m2_instance_id == 0u) {
+        continue;
+      }
+      const auto instance_info =
+          m2_system_.QueryInstanceInfo(instance.m2_instance_id);
+      openwow::diagnostics::Log(
+          openwow::diagnostics::LogLevel::kInfo,
+          "GlueRenderDiagnostics: effect_tick delta_ms=" +
+              std::to_string(delta_ms) + " widget=" + key +
+              " instance=" + std::to_string(instance.m2_instance_id) +
+              " status=" +
+              std::to_string(static_cast<int>(instance_info.status)) +
+              " emitters_enabled=" +
+              std::to_string(instance_info.info.effect_emitters_enabled ? 1 : 0) +
+              " particle_bound=" +
+              std::to_string(instance_info.info.particle_system_bound ? 1 : 0) +
+              " ribbon_bound=" +
+              std::to_string(instance_info.info.ribbon_system_initialized ? 1 : 0));
+      effect_diagnostics_logged_ = true;
+      break;
+    }
+  }
+}
+
 void GlueModelRenderer::TickStreaming(openwow::ui::glue::GlueWidgetRuntime &widgets,
                                       std::uint32_t step_budget) {
   active_model_paths_.clear();
@@ -1863,6 +1920,8 @@ bool GlueModelRenderer::RenderSingleModel(openwow::ui::glue::GlueWidgetRuntime &
     return false;
   }
   const std::string m2_path = *m2_path_opt;
+  const bool glue_render_diagnostics =
+      GlueRenderDiagnosticsEnabled(widget.name, m2_path);
   if (assets == nullptr || !assets->ok) {
     return false;
   }
@@ -1920,6 +1979,8 @@ bool GlueModelRenderer::RenderSingleModel(openwow::ui::glue::GlueWidgetRuntime &
     inst.time_ms = 0;
     inst.sequence_restart_pending = true;
     inst.animation_completion_fired = false;
+    inst.render_diagnostics_logged = false;
+    inst.render_result_diagnostics_logged = false;
     InvalidateAnimationInfo(inst);
   }
 
@@ -1938,6 +1999,8 @@ bool GlueModelRenderer::RenderSingleModel(openwow::ui::glue::GlueWidgetRuntime &
   static std::uint32_t rsm_diag_ctr = 0;
   const bool rsm_diag =
       kGlueModelFrameDiagnostics && (rsm_diag_ctr++ % 300 == 0);
+  const bool render_diagnostics_due =
+      glue_render_diagnostics && inst.render_diagnostics_model_path != m2_path;
 
   const int cam_index = std::max(0, inst.camera);
   auto cam_pose =
@@ -2113,7 +2176,7 @@ bool GlueModelRenderer::RenderSingleModel(openwow::ui::glue::GlueWidgetRuntime &
     openwow::render::glue::AppendGlueSceneM2Light(
         host_scene_snapshot, sample,
         openwow::render::RenderMatrix4x4View{model_mtx});
-    if (rsm_diag) {
+    if (rsm_diag || render_diagnostics_due) {
       openwow::diagnostics::Log(
           openwow::diagnostics::LogLevel::kInfo,
           "  m2_light[" + std::to_string(light_index) +
@@ -2276,6 +2339,9 @@ bool GlueModelRenderer::RenderSingleModel(openwow::ui::glue::GlueWidgetRuntime &
   }
 
   openwow::render::m2::M2BatchUniforms base_uniforms = light_template;
+  // UI_MainMenu is an exterior-style M2 scene in the Vanilla client. Select
+  // the translated Model2.bls lighting lane for this glue model draw only.
+  base_uniforms.material_flags[2] = 1.0f;
   if (widget_fog.far_distance > 0.0f) {
     base_uniforms.material_flags[1] = 0.0f;
     base_uniforms.fog_params[0] = widget_fog.near_distance;
@@ -2288,7 +2354,80 @@ bool GlueModelRenderer::RenderSingleModel(openwow::ui::glue::GlueWidgetRuntime &
     base_uniforms.material_flags[1] = 1.0f;
   }
 
+  if (render_diagnostics_due) {
+    const auto instance_info = m2_system.QueryInstanceInfo(instance_id);
+    openwow::diagnostics::Log(
+        openwow::diagnostics::LogLevel::kInfo,
+        "GlueRenderDiagnostics: widget=" + widget.name +
+            " kind=" + widget.kind + " model=" + m2_path +
+            " model_id=" + std::to_string(assets->model_id) +
+            " instance=" + std::to_string(instance_id) +
+            " geometry=" + std::to_string(model_info.info.vertex_count) +
+            " submeshes=" + std::to_string(model_info.info.submesh_count) +
+            " tex_units=" + std::to_string(model_info.info.texture_unit_count) +
+            " particles=" +
+            std::to_string(model_info.info.particle_emitter_count) +
+            " ribbons=" + std::to_string(model_info.info.ribbon_emitter_count) +
+            " model_lights=" + std::to_string(model_info.info.light_count) +
+            " scene_directional=" +
+            std::to_string(host_scene_snapshot.directional_lights.size()) +
+            " scene_points=" +
+            std::to_string(host_scene_snapshot.point_lights.size()) +
+            " callback_directional=" +
+            std::to_string(callback_lighting != nullptr &&
+                                   callback_lighting->has_directional_light
+                               ? 1
+                               : 0) +
+            " callback_points=" +
+            std::to_string(callback_lighting != nullptr
+                               ? callback_lighting->point_lights.size()
+                               : 0u) +
+            " uniform_lights=" +
+            std::to_string(static_cast<int>(light_template.light_count[0])) +
+            " material_lane=" +
+            std::to_string(static_cast<int>(base_uniforms.material_flags[2])) +
+            " emitters_enabled=" +
+            std::to_string(instance_info.info.effect_emitters_enabled ? 1 : 0) +
+            " particle_bound=" +
+            std::to_string(instance_info.info.particle_system_bound ? 1 : 0) +
+            " ribbon_bound=" +
+            std::to_string(instance_info.info.ribbon_system_initialized ? 1 : 0) +
+            " transforms=" + std::to_string(transforms.size()));
+    for (int light_index = 0;
+         light_index < static_cast<int>(light_template.light_count[0]);
+         ++light_index) {
+      const auto& light_pos = light_template.light_pos_range[light_index];
+      const auto& light_color = light_template.light_color[light_index];
+      const auto& light_attenuation = light_template.light_attenuation[light_index];
+      openwow::diagnostics::Log(
+          openwow::diagnostics::LogLevel::kInfo,
+          "GlueRenderDiagnostics: uniform_light model=" + m2_path +
+              " slot=" + std::to_string(light_index) +
+              " pos_or_dir=(" + std::to_string(light_pos[0]) + "," +
+              std::to_string(light_pos[1]) + "," + std::to_string(light_pos[2]) +
+              ") range=" + std::to_string(light_pos[3]) +
+              " color=(" + std::to_string(light_color[0]) + "," +
+              std::to_string(light_color[1]) + "," + std::to_string(light_color[2]) +
+              ") type_or_enabled=" + std::to_string(light_color[3]) +
+              " attenuation=(" + std::to_string(light_attenuation[0]) + "," +
+              std::to_string(light_attenuation[1]) + "," +
+              std::to_string(light_attenuation[2]) + "," +
+              std::to_string(light_attenuation[3]));
+    }
+    openwow::diagnostics::Log(
+        openwow::diagnostics::LogLevel::kInfo,
+        "GlueRenderDiagnostics: uniform_ambient model=" + m2_path +
+            " value=(" + std::to_string(light_template.light_ambient[0]) + "," +
+            std::to_string(light_template.light_ambient[1]) + "," +
+            std::to_string(light_template.light_ambient[2]) + "," +
+            std::to_string(light_template.light_ambient[3]) + ")");
+    inst.render_diagnostics_logged = true;
+    inst.render_diagnostics_model_path = m2_path;
+  }
+
   int submitted_transform_count = 0;
+  std::uint32_t submitted_draw_count = 0;
+  std::uint32_t submitted_geometry_draw_count = 0;
   openwow::render::m2::M2ResultStatus last_failed_status =
       openwow::render::m2::M2ResultStatus::kReady;
   openwow::render::m2::M2ResultReason last_failed_reason =
@@ -2301,6 +2440,8 @@ bool GlueModelRenderer::RenderSingleModel(openwow::ui::glue::GlueWidgetRuntime &
       const auto render_result = m2_system_.RenderInstance(
           static_cast<std::uint16_t>(view_id), inst.m2_instance_id,
           openwow::render::RenderMatrix4x4View{view});
+      submitted_draw_count += render_result.submitted_draw_count;
+      submitted_geometry_draw_count += render_result.submitted_geometry_draw_count;
       if (render_result.status == openwow::render::m2::M2ResultStatus::kReady) {
         ++submitted_transform_count;
       } else if (openwow::render::m2::IsTerminalM2ResultStatus(render_result.status)) {
@@ -2315,6 +2456,30 @@ bool GlueModelRenderer::RenderSingleModel(openwow::ui::glue::GlueWidgetRuntime &
         last_failed_detail = render_result.detail;
       }
     }
+  }
+
+  if (!inst.render_result_diagnostics_logged &&
+      GlueRenderDiagnosticsEnabled(widget.name, m2_path)) {
+    const auto instance_info = m2_system.QueryInstanceInfo(instance_id);
+    openwow::diagnostics::Log(
+        openwow::diagnostics::LogLevel::kInfo,
+        "GlueRenderDiagnostics: submit_result widget=" + widget.name +
+            " instance=" + std::to_string(instance_id) +
+            " transforms=" + std::to_string(submitted_transform_count) +
+            " total_draws=" + std::to_string(submitted_draw_count) +
+            " geometry_draws=" +
+            std::to_string(submitted_geometry_draw_count) +
+            " effect_draws=" +
+            std::to_string(submitted_draw_count >= submitted_geometry_draw_count
+                               ? submitted_draw_count - submitted_geometry_draw_count
+                               : 0u) +
+            " last_status=" +
+            std::to_string(static_cast<int>(last_failed_status)) +
+            " last_reason=" +
+            std::to_string(static_cast<int>(last_failed_reason)) +
+            " instance_status=" +
+            std::to_string(static_cast<int>(instance_info.status)));
+    inst.render_result_diagnostics_logged = true;
   }
 
   if (submitted_transform_count == 0 && !transforms.empty() &&
@@ -2602,6 +2767,9 @@ bool GlueModelRenderer::RenderSingleModel(openwow::ui::glue::GlueWidgetRuntime &
             authored_fog, attached_callback_lighting);
 
         openwow::render::m2::M2BatchUniforms attached_uniforms = callback_light_template;
+        // CharacterSelect's attached character reads the same scene-authored
+        // Model2.bls lighting lane as the fullscreen UI_<Race> backdrop.
+        attached_uniforms.material_flags[2] = 1.0f;
         if (attached_fog.far_distance > 0.0f) {
           attached_uniforms.material_flags[1] = 0.0f;
           attached_uniforms.fog_params[0] = attached_fog.near_distance;
@@ -2612,6 +2780,85 @@ bool GlueModelRenderer::RenderSingleModel(openwow::ui::glue::GlueWidgetRuntime &
           attached_uniforms.fog_color[3] = 1.0f;
         } else {
           attached_uniforms.material_flags[1] = 1.0f;
+        }
+
+        const bool attached_render_diagnostics_due =
+            glue_render_diagnostics &&
+            inst2.render_diagnostics_model_path != m2_path;
+        if (attached_render_diagnostics_due) {
+          std::size_t callback_block_light_count = 0u;
+          if (host_is_model_ffx && inst.model_ffx_ctx.has_value() &&
+              options.callback_block_index < inst.model_ffx_ctx->blocks.size()) {
+            callback_block_light_count =
+                inst.model_ffx_ctx->blocks[options.callback_block_index].lights.size();
+          }
+          openwow::diagnostics::Log(
+              openwow::diagnostics::LogLevel::kInfo,
+              "GlueRenderDiagnostics: attached widget=" + widget.name +
+                  " model=" + m2_path +
+                  " instance=" + std::to_string(attached_instance_id) +
+                  " model_lights=" + std::to_string(attached_info.info.light_count) +
+                  " sampled_lights=" + std::to_string(attached_model_lights.size()) +
+                  " host_directional=" +
+                  std::to_string(host_scene_lighting.directional_lights.size()) +
+                  " host_points=" +
+                  std::to_string(host_scene_lighting.point_lights.size()) +
+                  " scene_directional=" +
+                  std::to_string(attached_scene_lighting->directional_lights.size()) +
+                  " scene_points=" +
+                  std::to_string(attached_scene_lighting->point_lights.size()) +
+                  " callback_block_lights=" +
+                  std::to_string(callback_block_light_count) +
+                  " callback_directional=" +
+                  std::to_string(attached_callback_lighting != nullptr
+                                     ? attached_callback_lighting->directional_lights.size()
+                                     : 0u) +
+                  " callback_points=" +
+                  std::to_string(attached_callback_lighting != nullptr
+                                     ? attached_callback_lighting->point_lights.size()
+                                     : 0u) +
+                  " uniform_lights=" +
+                  std::to_string(static_cast<int>(attached_uniforms.light_count[0])) +
+                  " material_lane=" +
+                  std::to_string(static_cast<int>(attached_uniforms.material_flags[2])) +
+                  " ambient=(" +
+                  std::to_string(attached_uniforms.light_ambient[0]) + "," +
+                  std::to_string(attached_uniforms.light_ambient[1]) + "," +
+                  std::to_string(attached_uniforms.light_ambient[2]) + ")");
+          for (std::size_t light_index = 0;
+               light_index < attached_model_lights.size(); ++light_index) {
+            const auto& sample = attached_model_lights[light_index];
+            openwow::diagnostics::Log(
+                openwow::diagnostics::LogLevel::kInfo,
+                "GlueRenderDiagnostics: attached_m2_light model=" + m2_path +
+                    " slot=" + std::to_string(light_index) +
+                    " type=" + std::to_string(sample.type) +
+                    " direction=(" + std::to_string(sample.direction[0]) + "," +
+                    std::to_string(sample.direction[1]) + "," +
+                    std::to_string(sample.direction[2]) + ")" +
+                    " diffuse=(" + std::to_string(sample.diffuse_color[0]) + "," +
+                    std::to_string(sample.diffuse_color[1]) + "," +
+                    std::to_string(sample.diffuse_color[2]) + ")*" +
+                    std::to_string(sample.diffuse_intensity));
+          }
+          for (int light_index = 0;
+               light_index < static_cast<int>(attached_uniforms.light_count[0]);
+               ++light_index) {
+            const auto& light_pos = attached_uniforms.light_pos_range[light_index];
+            const auto& light_color = attached_uniforms.light_color[light_index];
+            openwow::diagnostics::Log(
+                openwow::diagnostics::LogLevel::kInfo,
+                "GlueRenderDiagnostics: attached_uniform model=" + m2_path +
+                    " slot=" + std::to_string(light_index) +
+                    " pos_or_dir=(" + std::to_string(light_pos[0]) + "," +
+                    std::to_string(light_pos[1]) + "," +
+                    std::to_string(light_pos[2]) + ") color=(" +
+                    std::to_string(light_color[0]) + "," +
+                    std::to_string(light_color[1]) + "," +
+                    std::to_string(light_color[2]) + ") type=" +
+                    std::to_string(light_color[3]));
+          }
+          inst2.render_diagnostics_model_path = m2_path;
         }
 
         const auto *visible_filter =

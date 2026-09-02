@@ -127,6 +127,7 @@ class M2Renderer {
   std::uint64_t effect_update_frame_{1u};
 
   struct EffectSimulationTarget {
+    std::uint32_t instance_id;
     detail::M2Instance* instance;
     detail::M2ModelResource* resource;
   };
