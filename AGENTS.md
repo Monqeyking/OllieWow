@@ -10,6 +10,24 @@ Breng de OpenWow-client minimaal en controleerbaar naar Classic/Turtle-gedrag,
 zodat login, CharacterSelect, CharacterCreate en daarna world-entry werken met
 de lokale Turtle-data.
 
+## Doelruntime versus bestaande implementatie
+
+- De doelclient en doelserver zijn Vanilla/Classic/Turtle. De lokale Client-
+  XML/Lua beschrijft daarom het gewenste gedrag; OpenWow's oorspronkelijke
+  3.3.5/WotLK-gedrag is technische erfenis en geen nieuw contract.
+- Lokale Vanilla/Turtle-Lua mag niet inhoudelijk worden omgezet naar 3.3.5-
+  of WotLK-semantiek. Een compatibiliteitslaag is alleen toegestaan als
+  tijdelijke interne runtimebrug wanneer de ingebouwde Lua-engine een andere
+  Lua-versie of ABI heeft. Die brug moet de Vanilla-semantiek behouden en mag
+  geen lokale API-, enumeratie- of UI-keuzes vervangen.
+- Geef bij zo'n verschil de voorkeur aan een kleine runtime-/VM-correctie of
+  een aantoonbaar semantiekbehoudende loader-aanpassing. Een bronrewrite die
+  expliciete Vanilla-constructies verandert, is fout en moet met de lokale
+  Client-Lua en Benilla worden gevalideerd.
+- Behandel iedere runtimebridge als technische schuld richting een echte
+  Vanilla-compatibele runtime; een succesvolle build bewijst niet dat de
+  Vanilla-Lua-flow correct is.
+
 ## Bronprioriteit
 
 Gebruik bij twijfel deze volgorde:

@@ -117,6 +117,10 @@ int LuaGetActionBarPage(lua_State* L);
 int LuaChangeActionBarPage(lua_State* L);
 
 int LuaGetActionBarToggles(lua_State* L);
+int LuaMultiBar1IsVisible(lua_State* L);
+int LuaMultiBar2IsVisible(lua_State* L);
+int LuaMultiBar3IsVisible(lua_State* L);
+int LuaMultiBar4IsVisible(lua_State* L);
 int LuaIsActionInRange(lua_State* L);
 int LuaIsEquippedAction(lua_State* L);
 int LuaSetActionBarToggles(lua_State* L);

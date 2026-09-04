@@ -47,3 +47,4 @@ Testing/
 *.log
 /logs/
 /artifacts/
+/.codex-remote-attachments/

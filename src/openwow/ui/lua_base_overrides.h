@@ -12,6 +12,7 @@ extern "C" {
 #include "openwow/ui/game/lua_addon_memory_tracker.h"
 #include "openwow/foundation/text/ascii.h"
 
+#include <algorithm>
 #include <cctype>
 #include <cstdint>
 #include <limits>
@@ -319,9 +320,55 @@ inline std::optional<std::string> RewriteLua51MutableGenericForVariables(
 
 // Vanilla FrameXML was authored for Lua 5.0, where a table is accepted
 // directly as the iterator in `for key, value in table do`.  Lua 5.1 keeps
-// the syntax but calls the table at runtime.  Convert only iterator clauses
-// that do not already contain a function call, leaving pairs(), ipairs(),
-// next(), and other explicit iterators unchanged.
+// the syntax but calls the table at runtime.  Convert only direct table
+// iterators.  Explicit iterators such as `next, table` are already valid
+// Vanilla syntax and must remain untouched.
+inline bool LuaIteratorClauseHasTopLevelComma(std::string_view clause) {
+  int brace_depth = 0;
+  int bracket_depth = 0;
+
+  for (std::size_t pos = 0; pos < clause.size();) {
+    if (clause[pos] == '-' && pos + 1u < clause.size() &&
+        clause[pos + 1u] == '-') {
+      pos = SkipLuaComment(clause, pos);
+      continue;
+    }
+    if (clause[pos] == '\'' || clause[pos] == '"') {
+      pos = SkipLuaQuotedString(clause, pos);
+      continue;
+    }
+    if (const std::size_t equals = LuaLongBracketEquals(clause, pos);
+        equals != std::string_view::npos) {
+      pos = SkipLuaLongBracket(clause, pos, equals);
+      continue;
+    }
+
+    switch (clause[pos]) {
+      case '{':
+        ++brace_depth;
+        break;
+      case '}':
+        brace_depth = std::max(0, brace_depth - 1);
+        break;
+      case '[':
+        ++bracket_depth;
+        break;
+      case ']':
+        bracket_depth = std::max(0, bracket_depth - 1);
+        break;
+      case ',':
+        if (brace_depth == 0 && bracket_depth == 0) {
+          return true;
+        }
+        break;
+      default:
+        break;
+    }
+    ++pos;
+  }
+  return false;
+}
+
 inline std::optional<std::string> RewriteLua50TableIterators(
     std::string_view chunk) {
 #if LUA_VERSION_NUM == 501
@@ -376,6 +423,8 @@ inline std::optional<std::string> RewriteLua50TableIterators(
     const std::size_t iterable_begin = SkipLuaSpace(chunk, in_pos + 2u);
     const std::size_t iterable_end = *do_pos;
     if (iterable_begin >= iterable_end ||
+        LuaIteratorClauseHasTopLevelComma(
+            chunk.substr(iterable_begin, iterable_end - iterable_begin)) ||
         chunk.substr(iterable_begin, iterable_end - iterable_begin).find('(') !=
             std::string_view::npos) {
       pos = *do_pos + 2u;

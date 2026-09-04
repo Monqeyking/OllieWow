@@ -703,14 +703,18 @@ void ParseButtonStateChildren(const XmlNode& node, UiFrame* frame) {
   if (frame == nullptr) {
     return;
   }
+  const auto read_font_style = [](const XmlNode& font) {
+    const std::string inherited = Trim(Attr(font, "inherits"));
+    return inherited.empty() ? Trim(Attr(font, "style")) : inherited;
+  };
   if (const auto* font = FirstDirectChild(node, "NormalFont"); font != nullptr) {
-    frame->button_normal_font_style = Trim(Attr(*font, "style"));
+    frame->button_normal_font_style = read_font_style(*font);
   }
   if (const auto* font = FirstDirectChild(node, "DisabledFont"); font != nullptr) {
-    frame->button_disabled_font_style = Trim(Attr(*font, "style"));
+    frame->button_disabled_font_style = read_font_style(*font);
   }
   if (const auto* font = FirstDirectChild(node, "HighlightFont"); font != nullptr) {
-    frame->button_highlight_font_style = Trim(Attr(*font, "style"));
+    frame->button_highlight_font_style = read_font_style(*font);
   }
   if (const auto* color = FirstDirectChild(node, "NormalColor"); color != nullptr) {
     frame->button_normal_color = ParseUiColor(*color);
@@ -821,21 +825,21 @@ namespace {
 
 std::vector<ScriptHandler> ParseScriptHandlers(const XmlNode& node) {
   std::vector<ScriptHandler> handlers;
-  const auto* scripts = FirstDirectChild(node, "Scripts");
-  if (scripts == nullptr) {
-    return handlers;
-  }
-
-  for (const auto& child : scripts->children) {
-    if (child.tag.empty()) {
+  for (const auto& scripts : node.children) {
+    if (ToLowerAscii(scripts.tag) != "scripts") {
       continue;
     }
-    ScriptHandler handler;
+    for (const auto& child : scripts.children) {
+      if (child.tag.empty()) {
+        continue;
+      }
+      ScriptHandler handler;
 
-    handler.event = detail::CanonicalizeScriptEvent(child.tag);
-    handler.function = Attr(child, "function");
-    handler.body = Trim(child.text);
-    handlers.push_back(std::move(handler));
+      handler.event = detail::CanonicalizeScriptEvent(child.tag);
+      handler.function = Attr(child, "function");
+      handler.body = Trim(child.text);
+      handlers.push_back(std::move(handler));
+    }
   }
 
   return handlers;

@@ -256,6 +256,7 @@ constexpr openwow::ui::LuaGlobalBinding kItemLuaBindings[] = {
     {"CloseItemText", LuaCloseItemText},
     {"PickupEquipmentSet", LuaPickupEquipmentSet},
     {"PickupEquipmentSetByName", LuaPickupEquipmentSetByName},
+    {"SetBagPortaitTexture", LuaSetBagPortraitTexture},
     {"SetBagPortraitTexture", LuaSetBagPortraitTexture},
     {"SetInventoryPortraitTexture", LuaSetInventoryPortraitTexture},
     {"SocketContainerItem", LuaSocketContainerItem},

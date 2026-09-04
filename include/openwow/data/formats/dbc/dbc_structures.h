@@ -539,6 +539,7 @@ struct SpellRangeEntry {
 struct SpellEntry {
   std::uint32_t id;
   std::uint32_t category;
+  std::uint32_t cast_ui;
   std::uint32_t dispel;
   std::uint32_t mechanic;
 

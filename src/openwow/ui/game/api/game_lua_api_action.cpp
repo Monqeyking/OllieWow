@@ -2959,7 +2959,9 @@ int LuaChangeActionBarPage(lua_State *L) {
   return 0;
 }
 
-int LuaGetActionBarToggles(lua_State *L) {
+namespace {
+
+std::uint8_t CurrentActionBarToggles(lua_State *L) {
   auto *session = GetWorldSession(L);
   uint8_t flags = 0;
   if (session != nullptr) {
@@ -2967,6 +2969,22 @@ int LuaGetActionBarToggles(lua_State *L) {
       flags = player->GetActionBarToggles();
     }
   }
+  return flags;
+}
+
+int PushMultiBarVisibility(lua_State *L, const int bit) {
+  if (CurrentActionBarToggles(L) & (1 << bit)) {
+    lua_pushnumber(L, 1.0);
+  } else {
+    lua_pushnil(L);
+  }
+  return 1;
+}
+
+}
+
+int LuaGetActionBarToggles(lua_State *L) {
+  const uint8_t flags = CurrentActionBarToggles(L);
 
   for (int i = 0; i < 4; ++i) {
     if (flags & (1 << i)) {
@@ -2977,6 +2995,11 @@ int LuaGetActionBarToggles(lua_State *L) {
   }
   return 4;
 }
+
+int LuaMultiBar1IsVisible(lua_State *L) { return PushMultiBarVisibility(L, 0); }
+int LuaMultiBar2IsVisible(lua_State *L) { return PushMultiBarVisibility(L, 1); }
+int LuaMultiBar3IsVisible(lua_State *L) { return PushMultiBarVisibility(L, 2); }
+int LuaMultiBar4IsVisible(lua_State *L) { return PushMultiBarVisibility(L, 3); }
 
 bool CheckActionTargetInRange(WorldSession &session, std::size_t slot_index,
                               openwow::game::ObjectGuid target_guid,

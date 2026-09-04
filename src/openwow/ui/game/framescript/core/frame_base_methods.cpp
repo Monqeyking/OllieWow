@@ -131,6 +131,13 @@ void ApplyBaseFrameMethods(lua_State *L) {
   }, 0);
   lua_setfield(L, -2, "GetObjectType");
 
+  lua_pushcclosure(L, [](lua_State *Ls) -> int {
+    const int self_index = ValidateFrameScriptSelf(Ls);
+    lua_pushstring(Ls, GetLuaFrameRuntimeTypeName(Ls, self_index));
+    return 1;
+  }, 0);
+  lua_setfield(L, -2, "GetFrameType");
+
   openwow::ui::anim::ApplyAnimationRegionMethods(L);
 
   lua_pushcclosure(L, [](lua_State *Ls) -> int {

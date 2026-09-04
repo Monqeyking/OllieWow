@@ -453,56 +453,82 @@ OPENWOW_DBC_SCHEMA(SpellEntry,
     e.id = f.GetUInt32(row, 0);
     e.school_mask = f.GetUInt32(row, 1);
     e.category = f.GetUInt32(row, 2);
+    e.cast_ui = f.GetUInt32(row, 3);
     e.dispel = f.GetUInt32(row, 4);
-    e.mechanic = f.GetUInt32(row, 3);
+    e.mechanic = f.GetUInt32(row, 5);
 
-    e.attributes = f.GetUInt32(row, 5);
-    e.attributes_ex = f.GetUInt32(row, 6);
-    e.attributes_ex2 = f.GetUInt32(row, 7);
-    e.attributes_ex3 = f.GetUInt32(row, 8);
-    e.attributes_ex4 = f.GetUInt32(row, 9);
-    e.attributes_ex5 = f.GetUInt32(row, 10);
+    e.attributes = f.GetUInt32(row, 6);
+    e.attributes_ex = f.GetUInt32(row, 7);
+    e.attributes_ex2 = f.GetUInt32(row, 8);
+    e.attributes_ex3 = f.GetUInt32(row, 9);
+    e.attributes_ex4 = f.GetUInt32(row, 10);
 
     e.targets = f.GetUInt32(row, 13);
     e.target_aura_state = f.GetUInt32(row, 17);
-    e.casting_time_index = f.GetUInt32(row, 15);
-    e.duration_index = f.GetUInt32(row, 40);
-    e.power_type = f.GetUInt32(row, 28);
-    e.mana_cost = f.GetUInt32(row, 29);
-    e.range_index = f.GetUInt32(row, 33);
+    e.casting_time_index = f.GetUInt32(row, 18);
+    e.recovery_time = f.GetUInt32(row, 19);
+    e.category_recovery_time = f.GetUInt32(row, 20);
+    e.interrupt_flags = f.GetUInt32(row, 21);
+    e.aura_interrupt_flags = f.GetUInt32(row, 22);
+    e.channel_interrupt_flags = f.GetUInt32(row, 23);
+    e.proc_flags = f.GetUInt32(row, 24);
+    e.proc_chance = f.GetUInt32(row, 25);
+    e.proc_charges = f.GetUInt32(row, 26);
+    e.max_level = f.GetUInt32(row, 27);
+    e.base_level = f.GetUInt32(row, 28);
+    e.spell_level = f.GetUInt32(row, 29);
+    e.duration_index = f.GetUInt32(row, 30);
+    e.power_type = f.GetUInt32(row, 31);
+    e.mana_cost = f.GetUInt32(row, 32);
+    e.mana_cost_per_level = f.GetUInt32(row, 33);
+    e.mana_per_second = f.GetUInt32(row, 34);
+    e.mana_per_second_per_level = f.GetUInt32(row, 35);
+    e.range_index = f.GetUInt32(row, 36);
+    e.speed = f.GetFloat(row, 37);
+    e.modal_next_spell = f.GetUInt32(row, 38);
+    e.stack_amount = f.GetUInt32(row, 39);
 
-    DBC_U32_ARRAY(totem, 50)
+    DBC_U32_ARRAY(totem, 40)
 
     for (int i = 0; i < kMaxSpellReagents; ++i) {
-      e.reagent[i] = f.GetInt32(row, 52 + i);
-      e.reagent_count[i] = f.GetUInt32(row, 60 + i);
+      e.reagent[i] = f.GetInt32(row, 42 + i);
+      e.reagent_count[i] = f.GetUInt32(row, 50 + i);
     }
 
-    e.equipped_item_class = f.GetInt32(row, 68);
-    e.equipped_item_sub_class_mask = f.GetInt32(row, 69);
-    e.equipped_item_inv_type_mask = f.GetInt32(row, 70);
+    e.equipped_item_class = f.GetInt32(row, 58);
+    e.equipped_item_sub_class_mask = f.GetInt32(row, 59);
+    e.equipped_item_inv_type_mask = f.GetInt32(row, 60);
 
     for (int i = 0; i < kMaxSpellEffects; ++i) {
-      e.effect[i] = f.GetUInt32(row, 71 + i);
-      e.effect_die_sides[i] = f.GetInt32(row, 74 + i);
-      e.effect_real_points_per_lvl[i] = f.GetFloat(row, 77 + i);
-      e.effect_base_points[i] = f.GetInt32(row, 80 + i);
-      e.effect_mechanic[i] = f.GetUInt32(row, 83 + i);
-      e.effect_implicit_target_a[i] = f.GetUInt32(row, 86 + i);
-      e.effect_implicit_target_b[i] = f.GetUInt32(row, 89 + i);
-      e.effect_radius_index[i] = f.GetUInt32(row, 92 + i);
-      e.effect_apply_aura[i] = f.GetUInt32(row, 95 + i);
-      e.effect_amplitude[i] = f.GetUInt32(row, 98 + i);
-      e.effect_value_multiplier[i] = f.GetFloat(row, 101 + i);
-      e.effect_chain_target[i] = f.GetUInt32(row, 104 + i);
-      e.effect_item_type[i] = f.GetUInt32(row, 107 + i);
-      e.effect_misc_value[i] = f.GetInt32(row, 110 + i);
-      e.effect_misc_value_b[i] = f.GetInt32(row, 113 + i);
-      e.effect_trigger_spell[i] = f.GetUInt32(row, 116 + i);
-      e.effect_points_per_combo[i] = f.GetFloat(row, 119 + i);
+      e.effect[i] = f.GetUInt32(row, 61 + i);
+      e.effect_die_sides[i] = f.GetInt32(row, 64 + i);
+      e.effect_real_points_per_lvl[i] = f.GetFloat(row, 73 + i);
+      e.effect_base_points[i] = f.GetInt32(row, 76 + i);
+      e.effect_mechanic[i] = f.GetUInt32(row, 79 + i);
+      e.effect_implicit_target_a[i] = f.GetUInt32(row, 82 + i);
+      e.effect_implicit_target_b[i] = f.GetUInt32(row, 85 + i);
+      e.effect_radius_index[i] = f.GetUInt32(row, 88 + i);
+      e.effect_apply_aura[i] = f.GetUInt32(row, 91 + i);
+      e.effect_amplitude[i] = f.GetUInt32(row, 94 + i);
+      e.effect_value_multiplier[i] = f.GetFloat(row, 97 + i);
+      e.effect_chain_target[i] = f.GetUInt32(row, 100 + i);
+      e.effect_item_type[i] = f.GetUInt32(row, 103 + i);
+      e.effect_misc_value[i] = f.GetInt32(row, 106 + i);
+      e.effect_trigger_spell[i] = f.GetUInt32(row, 109 + i);
+      e.effect_points_per_combo[i] = f.GetFloat(row, 112 + i);
     }
 
-    DBC_U32_ARRAY(effect_spell_class_mask, 122)
+    e.mana_cost_percentage = f.GetUInt32(row, 156);
+    e.start_recovery_category = f.GetUInt32(row, 157);
+    e.start_recovery_time = f.GetUInt32(row, 158);
+    e.max_target_level = f.GetUInt32(row, 159);
+    e.spell_family_name = f.GetUInt32(row, 160);
+    e.spell_family_flags[0] = f.GetUInt32(row, 161);
+    e.spell_family_flags[1] = f.GetUInt32(row, 162);
+    e.max_affected_targets = f.GetUInt32(row, 163);
+    e.dmg_class = f.GetUInt32(row, 164);
+    e.prevention_type = f.GetUInt32(row, 165);
+    e.stance_bar_order = f.GetUInt32(row, 166);
 
     e.spell_visual[0] = f.GetUInt32(row, 115);
     e.spell_icon_id = f.GetUInt32(row, 117);

@@ -21,6 +21,9 @@ LearnedSpellCatalog ClassifyLearnedSpell(
   if ((spell.attributes & kSpellAttr0HiddenClientside) != 0u) {
     return LearnedSpellCatalog::HiddenClientside;
   }
+  if (spell.cast_ui != 0u) {
+    return LearnedSpellCatalog::HiddenClientside;
+  }
   if ((spell.attributes & kSpellAttr0TradeSpell) != 0u) {
     return LearnedSpellCatalog::TradeSkill;
   }

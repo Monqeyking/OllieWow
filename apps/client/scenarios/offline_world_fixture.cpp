@@ -3,6 +3,7 @@
 #include "openwow/game/actions/model/action_assignments.h"
 #include "openwow/game/object_guid.h"
 #include "openwow/game/object_types.h"
+#include "openwow/game/skill_line_ability_lookup.h"
 #include "openwow/game/update_fields.h"
 #include "openwow/game/update_object_parser.h"
 #include "openwow/network/protocol/wotlk/opcodes.h"
@@ -270,6 +271,37 @@ bool ParseSuccessfully(const std::vector<std::uint8_t>& payload,
   return openwow::game::ParseUpdateObject(payload.data(), payload.size(), handler);
 }
 
+bool ValidateClassicSpellSkillLineFixtures() {
+  using openwow::data::dbc::SkillLineAbilityEntry;
+  using openwow::data::dbc::SkillRaceClassInfoEntry;
+
+  constexpr std::uint32_t ORC_MASK = 1u << (2u - 1u);
+  constexpr std::uint32_t SHAMAN_MASK = 1u << (7u - 1u);
+  const std::array<SkillLineAbilityEntry, 3> abilities{{
+      {.id = 1u, .skill_id = 237u, .spell_id = 403u,
+       .race_mask = ORC_MASK, .class_mask = SHAMAN_MASK},
+      {.id = 2u, .skill_id = 261u, .spell_id = 403u,
+       .race_mask = ORC_MASK, .class_mask = SHAMAN_MASK},
+      {.id = 3u, .skill_id = 262u, .spell_id = 331u,
+       .race_mask = ORC_MASK, .class_mask = SHAMAN_MASK},
+  }};
+  const std::array<SkillRaceClassInfoEntry, 3> skill_lines{{
+      {.id = 1u, .skill_id = 237u, .race_mask = ORC_MASK,
+       .class_mask = SHAMAN_MASK},
+      {.id = 2u, .skill_id = 261u, .race_mask = ORC_MASK,
+       .class_mask = SHAMAN_MASK},
+      {.id = 3u, .skill_id = 262u, .race_mask = ORC_MASK,
+       .class_mask = SHAMAN_MASK},
+  }};
+
+  const auto* lightning = openwow::game::FindSkillLineAbilityForRaceClassSpell(
+      abilities, skill_lines, 2u, 7u, 403u);
+  const auto* healing = openwow::game::FindSkillLineAbilityForRaceClassSpell(
+      abilities, skill_lines, 2u, 7u, 331u);
+  return lightning != nullptr && lightning->skill_id == 237u &&
+         healing != nullptr && healing->skill_id == 262u;
+}
+
 }
 
 openwow::net::wotlk::WorldPacket BuildInitialSpells() {
@@ -277,7 +309,7 @@ openwow::net::wotlk::WorldPacket BuildInitialSpells() {
       openwow::net::wotlk::Opcode::SMSG_INITIAL_SPELLS);
   packet.AppendU8(0u);
   packet.AppendU16(1u);
-  packet.AppendU32(kPrimaryActionSpell);
+  packet.AppendU16(static_cast<std::uint16_t>(kPrimaryActionSpell));
   packet.AppendU16(0u);
   packet.AppendU16(0u);
   return packet;
@@ -285,21 +317,18 @@ openwow::net::wotlk::WorldPacket BuildInitialSpells() {
 
 openwow::net::wotlk::WorldPacket BuildActionAssignments() {
   using openwow::game::actions::Action;
-  using openwow::game::actions::ActionAssignmentSyncState;
   using openwow::game::actions::ActionKind;
   using openwow::game::actions::ActionSlot;
 
   openwow::net::wotlk::WorldPacket packet(
       openwow::net::wotlk::Opcode::SMSG_ACTION_BUTTONS);
-  packet.payload.reserve(1u + ActionSlot::kCount * sizeof(std::uint32_t));
-  packet.AppendU8(
-      static_cast<std::uint8_t>(ActionAssignmentSyncState::kUpdate));
+  packet.payload.reserve(120u * sizeof(std::uint32_t));
 
   constexpr auto primary_action =
       Action::Create(ActionKind::kSpell, kPrimaryActionSpell);
   static_assert(primary_action.has_value());
   packet.AppendU32(primary_action->Encode());
-  for (std::size_t slot = 1; slot < ActionSlot::kCount; ++slot) {
+  for (std::size_t slot = 1; slot < 120; ++slot) {
     packet.AppendU32(0u);
   }
   return packet;
@@ -334,6 +363,10 @@ openwow::net::wotlk::WorldPacket BuildVisibleCreatureCreates(
 
 bool ValidateClassicUpdateObjectFixtures() {
   using namespace openwow::game;
+
+  if (!ValidateClassicSpellSkillLineFixtures()) {
+    return false;
+  }
 
   const std::array<std::pair<TypeID, ObjectGuid>, 6> create_fixtures{{
       {TypeID::kPlayer, ObjectGuid(0x0102030405060708ull)},

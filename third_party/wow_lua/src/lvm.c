@@ -675,6 +675,13 @@ void luaV_execute (lua_State *L, int nexeccalls) {
       }
       case OP_TFORLOOP: {
         StkId cb = ra + 3;
+        /* Classic 1.12 also accepts the Lua 5.0 shorthand `for k, v in table do`.
+        ** Lua 5.0 changes a table generator into the global `next` iterator at
+        ** loop entry; restore that compatibility before the first call. */
+        if (ttistable(ra)) {
+          setobjs2s(L, ra+1, ra);
+          setobj2s(L, ra, luaH_getstr(hvalue(gt(L)), luaS_new(L, "next")));
+        }
         setobjs2s(L, cb+2, ra+2);
         setobjs2s(L, cb+1, ra+1);
         setobjs2s(L, cb, ra);

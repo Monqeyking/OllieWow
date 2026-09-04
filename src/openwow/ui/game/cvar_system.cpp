@@ -2014,6 +2014,12 @@ void CVarSystem::RegisterDefaults() {
   RegisterCVar("ffxSpecial", "1", F::Archive, "full screen test effect");
   RegisterCVar("spellEffectLevel", "9", F::Archive, "Spell effect detail level");
   RegisterCVar("textureFilteringMode", "1", F::Archive, "Texture filtering mode");
+  // Classic Options.lua still queries these legacy client CVars by name.
+  // Keep the names available to the Vanilla UI while their renderer wiring is
+  // completed separately.
+  RegisterCVar("anisotropic", "1", F::Archive, "Anisotropic filtering level");
+  RegisterCVar("pixelShaders", "1", F::Archive, "Pixel shaders enabled");
+  RegisterCVar("M2UseShaders", "1", F::Archive, "Vertex animation shaders enabled");
   RegisterCVar("UIFaster", "3", F::Archive, "UI acceleration option");
   RegisterCVar("textureCacheSize", "32", F::Archive, "Texture cache size in bytes");
   RegisterCVar("gxTextureCacheSize", "0", F::Archive, "GX Texture Cache Size");
@@ -2040,6 +2046,8 @@ void CVarSystem::RegisterDefaults() {
   RegisterCVar("Sound_EnableErrorSpeech", "1", F::Archive, "error speech");
   RegisterCVar("Sound_MasterVolume", "1.0", F::Archive,
                "master volume (0.0 to 1.0)");
+  RegisterCVar("MasterSoundEffects", "1", F::Archive,
+               "Enable all sound effects");
 
   RegisterCVar("Sound_SFXVolume", "1.0", F::Archive,
                "sound volume (0.0 to 1.0)");
@@ -2601,6 +2609,8 @@ void CVarSystem::RegisterDefaults() {
   RegisterCVar("timeMgrAlarmTime", "0", F::Account, "Alarm time");
   RegisterCVar("timeMgrUseLocalTime", "0", F::Account, "Use local time");
   RegisterCVar("showTutorials", "1", F::Account, "Show tutorials");
+  RegisterCVar("statusBarText", "0", F::Account,
+               "Show status bar text");
   RegisterCVar("gameTip", "0", F::Archive, "Next loading-screen tip index");
   RegisterCVar("showGameTips", "1", F::Archive, "Show game tips");
   RegisterCVar("showItemLevel", "0", F::Account, "Show item level");

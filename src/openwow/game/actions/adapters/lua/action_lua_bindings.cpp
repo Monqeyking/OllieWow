@@ -28,6 +28,10 @@ int LuaGetBonusBarOffset(lua_State* L);
 int LuaGetActionBarPage(lua_State* L);
 int LuaChangeActionBarPage(lua_State* L);
 int LuaGetActionBarToggles(lua_State* L);
+int LuaMultiBar1IsVisible(lua_State* L);
+int LuaMultiBar2IsVisible(lua_State* L);
+int LuaMultiBar3IsVisible(lua_State* L);
+int LuaMultiBar4IsVisible(lua_State* L);
 int LuaActionHasRange(lua_State* L);
 int LuaIsActionInRange(lua_State* L);
 int LuaIsEquippedAction(lua_State* L);
@@ -63,6 +67,10 @@ constexpr openwow::ui::LuaGlobalBinding kActionLuaBindings[] = {
     {"GetActionBarPage", LuaGetActionBarPage},
     {"ChangeActionBarPage", LuaChangeActionBarPage},
     {"GetActionBarToggles", LuaGetActionBarToggles},
+    {"MultiBar1_IsVisible", LuaMultiBar1IsVisible},
+    {"MultiBar2_IsVisible", LuaMultiBar2IsVisible},
+    {"MultiBar3_IsVisible", LuaMultiBar3IsVisible},
+    {"MultiBar4_IsVisible", LuaMultiBar4IsVisible},
     {"ActionHasRange", LuaActionHasRange},
     {"IsActionInRange", LuaIsActionInRange},
     {"IsEquippedAction", LuaIsEquippedAction},

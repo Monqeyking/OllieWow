@@ -312,14 +312,14 @@ bool SpellBook::HandleInitialSpells(const std::uint8_t* data, std::size_t len) {
   parsed_spells.reserve(spell_count);
   bool truncated = false;
   for (std::uint16_t i = 0; i < spell_count; ++i) {
-    std::uint32_t spell_id = 0;
-    std::uint16_t slot_id = 0;
-    if (!reader.ReadU32(spell_id) || !reader.ReadU16(slot_id)) {
+    std::uint16_t spell_id = 0;
+    std::uint16_t unused = 0;
+    if (!reader.ReadU16(spell_id) || !reader.ReadU16(unused)) {
       truncated = true;
       break;
     }
     parsed_spells.insert(spell_id);
-    initial_spells.push_back(PendingInitialSpell{spell_id, slot_id});
+    initial_spells.push_back(PendingInitialSpell{spell_id, unused});
   }
 
   std::uint16_t cooldown_count = 0;
@@ -329,12 +329,14 @@ bool SpellBook::HandleInitialSpells(const std::uint8_t* data, std::size_t len) {
 
   for (std::uint16_t i = 0; !truncated && i < cooldown_count; ++i) {
     SpellCooldown cd;
-    if (!reader.ReadU32(cd.spell_id) || !reader.ReadU16(cd.item_id) ||
+    std::uint16_t spell_id = 0;
+    if (!reader.ReadU16(spell_id) || !reader.ReadU16(cd.item_id) ||
         !reader.ReadU16(cd.category) || !reader.ReadU32(cd.cooldown_ms) ||
         !reader.ReadU32(cd.category_cooldown_ms)) {
       truncated = true;
       break;
     }
+    cd.spell_id = spell_id;
     cd.start_time_s = core::GameClock::GetTickCountSeconds();
     parsed_cooldowns.push_back(cd);
   }
@@ -361,22 +363,21 @@ bool SpellBook::HandleInitialSpells(const std::uint8_t* data, std::size_t len) {
 }
 
 bool SpellBook::HandleLearnedSpell(const std::uint8_t* data, std::size_t len) {
-  if (len < 6) return false;
+  if (len < 4) return false;
 
   PacketReader reader(data, len);
 
   std::uint32_t spell_id;
-  std::uint16_t unk;
+  constexpr std::uint16_t kNoActionBarSlot = 0;
   if (!reader.ReadU32(spell_id)) return false;
-  if (!reader.ReadU16(unk)) return false;
 
   PreloadLearnedSpellStreamingVisuals(dbc_loader_, spell_id);
 
   spells_.insert(spell_id);
   ApplyLearnedMultiCastSpellUpdates(
-      *this, spell_id, [this, spell_id, unk]() {
+      *this, spell_id, [this, spell_id]() {
         if (effects_.spell_learned) {
-          effects_.spell_learned(spell_id, unk != 0, 0);
+          effects_.spell_learned(spell_id, false, kNoActionBarSlot);
         }
       });
   if (auto* active_player = map_runtime_.objects().GetActivePlayer();
@@ -387,18 +388,19 @@ bool SpellBook::HandleLearnedSpell(const std::uint8_t* data, std::size_t len) {
       effects_.refresh_active_player_mutation_ui();
     }
   } else {
-    pending_initial_spells_.push_back(PendingInitialSpell{spell_id, unk});
+    pending_initial_spells_.push_back(
+        PendingInitialSpell{spell_id, kNoActionBarSlot});
   }
   return true;
 }
 
 bool SpellBook::HandleRemovedSpell(const std::uint8_t* data, std::size_t len) {
-  if (len < 4) return false;
+  if (len < 2) return false;
 
   PacketReader reader(data, len);
 
-  std::uint32_t spell_id;
-  if (!reader.ReadU32(spell_id)) return false;
+  std::uint16_t spell_id = 0;
+  if (!reader.ReadU16(spell_id)) return false;
 
   spells_.erase(spell_id);
   cooldowns_.erase(spell_id);
@@ -451,13 +453,14 @@ bool SpellBook::HandleRemovedSpell(const std::uint8_t* data, std::size_t len) {
 }
 
 bool SpellBook::HandleSupercededSpell(const std::uint8_t* data, std::size_t len) {
-  if (len < 8) return false;
+  if (len < 4) return false;
 
   PacketReader reader(data, len);
 
-  std::uint32_t old_spell_id, new_spell_id;
-  if (!reader.ReadU32(old_spell_id)) return false;
-  if (!reader.ReadU32(new_spell_id)) return false;
+  std::uint16_t old_spell_id = 0;
+  std::uint16_t new_spell_id = 0;
+  if (!reader.ReadU16(old_spell_id)) return false;
+  if (!reader.ReadU16(new_spell_id)) return false;
 
   spells_.erase(old_spell_id);
   cooldowns_.erase(old_spell_id);

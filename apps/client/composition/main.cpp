@@ -464,7 +464,7 @@ int RunClientProcess(int argc, char** argv) {
   (void)SDL_SetHint(SDL_HINT_MOUSE_FOCUS_CLICKTHROUGH, "1");
 
   SDL_Window* window = SDL_CreateWindow(
-      "World of Warcraft", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 1280, 720,
+      "World of Warcraft", 0, 0, 1280, 720,
       SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI);
   if (!window) {
     if (startup_trace.has_value()) startup_trace->Add("platform.window_create.fail");

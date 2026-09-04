@@ -60,7 +60,7 @@ bool IsClassicMvpDbc(const std::string_view filename) {
   // Keep this list tied to the current Classic world-entry MVP. The full
   // catalog remains available for later Classic feature work, but loading it
   // eagerly retains a large amount of data that the MVP never reads.
-  static constexpr std::array<std::string_view, 78> kClassicMvpTables = {
+  static constexpr std::array<std::string_view, 80> kClassicMvpTables = {
       "DBFilesClient\\AreaTable.dbc",
       "DBFilesClient\\AnimationData.dbc",
       "DBFilesClient\\CharBaseInfo.dbc",
@@ -120,7 +120,9 @@ bool IsClassicMvpDbc(const std::string_view filename) {
       "DBFilesClient\\SoundEntries.dbc",
       "DBFilesClient\\SoundEntriesAdvanced.dbc",
       "DBFilesClient\\Spell.dbc",
+      "DBFilesClient\\SpellCastTimes.dbc",
       "DBFilesClient\\SpellIcon.dbc",
+      "DBFilesClient\\SpellRange.dbc",
       "DBFilesClient\\SpellVisual.dbc",
       "DBFilesClient\\SpellVisualEffectName.dbc",
       "DBFilesClient\\SpellVisualKit.dbc",

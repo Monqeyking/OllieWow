@@ -5,6 +5,7 @@
 #include <StormLib.h>
 
 #include "openwow/core/console.h"
+#include "openwow/core/cvar.h"
 #include "openwow/core/decimal_parse.h"
 #include "openwow/platform/adapters/sdl/platform_layer.h"
 #include "openwow/core/storm_cmd.h"
@@ -175,7 +176,7 @@ constexpr std::array<float, 8> kStartupParticleDensityTable{{
 }};
 
 struct GxRegistrationDefaults {
-  std::string window = "0";
+  std::string window = "1";
   std::string maximize = "0";
   std::string color_bits = "24";
   std::string depth_bits = "24";
@@ -1093,7 +1094,7 @@ GxDisplayCVarState BuildRegisteredDefaultDisplayState() {
   state.color_bits = GetDefaultDisplaySeedValue(sys, "gxColorBits", state.color_bits.c_str());
   state.depth_bits = GetDefaultDisplaySeedValue(sys, "gxDepthBits", state.depth_bits.c_str());
   state.window_mode =
-      ParseDisplayInteger(GetDefaultDisplaySeedValue(sys, "gxWindow", "0"), state.window_mode);
+      ParseDisplayInteger(GetDefaultDisplaySeedValue(sys, "gxWindow", "1"), state.window_mode);
   const auto [width, height] = ParseDisplayResolution(
       GetDefaultDisplaySeedValue(sys, "gxResolution", "1024x768"), state.width, state.height);
   state.width = width;
@@ -1313,6 +1314,11 @@ bool GxApplyPendingDisplayCVars() {
   bool applied_any = false;
   for (const std::string_view name : kPendingDisplayCVarNames) {
     applied_any = sys.ApplyPendingValue(std::string(name)) || applied_any;
+  }
+  if (applied_any) {
+    // Display CVars are read-only until gxRestart applies them. Persist the
+    // committed value immediately so logout/quit cannot lose the window mode.
+    (void)CVar_FlushToFile();
   }
   return applied_any;
 }

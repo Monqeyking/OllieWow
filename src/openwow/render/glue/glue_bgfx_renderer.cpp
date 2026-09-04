@@ -738,6 +738,7 @@ void GlueBgfxRenderer::RenderGlue(openwow::ui::glue::GlueWidgetRuntime& widgets,
 
   impl_->models.PruneWidgetInstances(widgets);
   impl_->models.BeginAnimationFrame(widgets, resolved_delta_ms);
+  impl_->models.UpdateEffectsFrame(resolved_delta_ms);
   if (widgets.ConsumeModelFFXViewportDirty()) {
     impl_->ClearPostProcessCache();
   }

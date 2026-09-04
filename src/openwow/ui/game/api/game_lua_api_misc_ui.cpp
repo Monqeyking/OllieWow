@@ -25,6 +25,7 @@
 #include "openwow/game/active_player_environment.h"
 #include "openwow/game/c_input_control.h"
 #include "openwow/game/client_config.h"
+#include "openwow/game/chat_cache.h"
 #include "openwow/game/comsat_client.h"
 #include "openwow/game/currency_system.h"
 #include "openwow/game/game_misc_utils.h"
@@ -1844,6 +1845,43 @@ int LuaCanResetTutorials(lua_State *L) {
     lua_pushnil(L);
   }
   return 1;
+}
+
+int LuaGetGuildRecruitmentMode(lua_State *L) {
+  (void)L;
+  lua_pushnumber(
+      L, openwow::ui::game::CVarSystem::Instance().GetCVarBool(
+             "guildRecruitmentChannel")
+             ? 1.0
+             : 0.0);
+  return 1;
+}
+
+int LuaSetGuildRecruitmentMode(lua_State *L) {
+  const bool enabled = ScriptReadBoolArgOrDefault(L, 1, true);
+  if (auto *session = GetWorldSession(L); session != nullptr) {
+    openwow::game::SetGuildRecruitmentChannelAutoJoin(*session, enabled);
+  } else {
+    openwow::ui::game::CVarSystem::Instance().SetCVar(
+        "guildRecruitmentChannel", enabled ? "1" : "0", true);
+  }
+  return 0;
+}
+
+int LuaTutorialsEnabled(lua_State *L) {
+  (void)L;
+  lua_pushnumber(
+      L, openwow::ui::game::CVarSystem::Instance().GetCVarBool("showTutorials")
+             ? 1.0
+             : 0.0);
+  return 1;
+}
+
+int LuaOptionsUpdateTutorials(lua_State *L) {
+  const bool enabled = ScriptReadBoolArgOrDefault(L, 1, true);
+  openwow::ui::game::CVarSystem::Instance().SetCVar(
+      "showTutorials", enabled ? "1" : "0", true);
+  return 0;
 }
 
 int LuaEquipmentSetContainsLockedItems(lua_State *L) {

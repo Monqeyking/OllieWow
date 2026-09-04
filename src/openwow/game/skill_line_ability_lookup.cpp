@@ -3,14 +3,6 @@
 namespace openwow::game {
 namespace {
 
-[[nodiscard]] bool UsesTradeSkillLookupFallback(
-    const std::optional<SkillRaceClassIdentity>& active_identity,
-    const std::uint8_t race, const std::uint8_t player_class) {
-  return active_identity.has_value() && active_identity->race != 0 &&
-         active_identity->player_class != 0 && active_identity->race != race &&
-         active_identity->player_class != player_class;
-}
-
 }
 
 bool SkillRaceClassMaskMatches(const std::uint32_t mask,
@@ -69,14 +61,11 @@ const data::dbc::SkillLineAbilityEntry* FindSkillLineAbilityForRaceClassSpell(
     const std::span<const data::dbc::SkillRaceClassInfoEntry> race_class_entries,
     const std::uint8_t race, const std::uint8_t player_class,
     const std::uint32_t spell_id,
-    const std::optional<SkillRaceClassIdentity> active_identity) {
+    const std::optional<SkillRaceClassIdentity> /*active_identity*/) {
   if (spell_id == 0) {
     return nullptr;
   }
 
-  const bool use_first_match =
-      UsesTradeSkillLookupFallback(active_identity, race, player_class);
-  const data::dbc::SkillLineAbilityEntry* match = nullptr;
   for (const auto& entry : ability_entries) {
     if (entry.spell_id != spell_id ||
         !SkillLineAbilityMatchesRaceClass(entry, race, player_class)) {
@@ -88,14 +77,12 @@ const data::dbc::SkillLineAbilityEntry* FindSkillLineAbilityForRaceClassSpell(
       continue;
     }
 
-    if (use_first_match) {
-      return &entry;
-    }
-
-    match = &entry;
+    // Benilla's Classic catalog keeps the first valid row in file order. This
+    // matters for spells that have multiple race/class skill-line entries.
+    return &entry;
   }
 
-  return match;
+  return nullptr;
 }
 
 bool GetMinSkillValueForSpell(

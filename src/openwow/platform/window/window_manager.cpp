@@ -6,6 +6,7 @@
 
 #include "openwow/foundation/diagnostics/logging.h"
 
+#include <algorithm>
 #include <cmath>
 
 #if defined(__APPLE__)
@@ -26,6 +27,43 @@ void ApplyMinimumClientSize(SDL_Window* window,
     SDL_SetWindowMinimumSize(window,
                              static_cast<int>(min_width),
                              static_cast<int>(min_height));
+}
+
+const char* WindowModeName(const WindowMode mode) {
+    switch (mode) {
+        case WindowMode::Fullscreen: return "fullscreen";
+        case WindowMode::WindowedFullscreen: return "fullscreen-desktop";
+        case WindowMode::Windowed: return "windowed";
+    }
+    return "unknown";
+}
+
+void LogWindowState(const char* stage, SDL_Window* window, const WindowMode requested,
+                    const int bordered_requested) {
+    if (window == nullptr) {
+        return;
+    }
+
+    int width = 0;
+    int height = 0;
+    int x = 0;
+    int y = 0;
+    SDL_GetWindowSize(window, &width, &height);
+    SDL_GetWindowPosition(window, &x, &y);
+    const Uint32 flags = SDL_GetWindowFlags(window);
+    openwow::diagnostics::Log(
+        openwow::diagnostics::LogLevel::kWarn,
+        std::string("WindowManager: ") + stage +
+            " requested=" + WindowModeName(requested) +
+            " flags=0x" + std::to_string(flags) +
+            " fullscreen=" + ((flags & SDL_WINDOW_FULLSCREEN) != 0 ? "1" : "0") +
+            " fullscreen_desktop=" +
+                ((flags & SDL_WINDOW_FULLSCREEN_DESKTOP) != 0 ? "1" : "0") +
+            " borderless=" + ((flags & SDL_WINDOW_BORDERLESS) != 0 ? "1" : "0") +
+            " maximized=" + ((flags & SDL_WINDOW_MAXIMIZED) != 0 ? "1" : "0") +
+            " bordered_requested=" + std::to_string(bordered_requested) +
+            " size=" + std::to_string(width) + "x" + std::to_string(height) +
+            " pos=" + std::to_string(x) + "," + std::to_string(y));
 }
 
 }
@@ -337,12 +375,41 @@ bool WindowManager::ApplyDisplayMode(const DisplayModeRequest& request) {
     }
 
     mode_ = mode;
+    int bordered_requested = 0;
     if (mode == WindowMode::Windowed) {
+        SDL_SetWindowBordered(sdl_window, SDL_TRUE);
+        bordered_requested = 1;
         if (request.maximize) {
             SDL_MaximizeWindow(sdl_window);
         } else {
             SDL_RestoreWindow(sdl_window);
-            SetResolution(pixel_width, pixel_height);
+
+            uint32_t windowed_width = pixel_width;
+            uint32_t windowed_height = pixel_height;
+            const int display_index = SDL_GetWindowDisplayIndex(sdl_window);
+            SDL_Rect usable_bounds{};
+            int border_left = 0;
+            int border_right = 0;
+            int border_top = 0;
+            int border_bottom = 0;
+            if (display_index >= 0 &&
+                SDL_GetDisplayUsableBounds(display_index, &usable_bounds) == 0 &&
+                SDL_GetWindowBordersSize(sdl_window, &border_top, &border_left,
+                                         &border_bottom, &border_right) == 0) {
+                const int max_client_width = usable_bounds.w - border_left - border_right;
+                const int max_client_height = usable_bounds.h - border_top - border_bottom;
+                if (max_client_width > 0) {
+                    windowed_width = std::min(windowed_width,
+                                              static_cast<uint32_t>(max_client_width));
+                }
+                if (max_client_height > 0) {
+                    windowed_height = std::min(windowed_height,
+                                               static_cast<uint32_t>(max_client_height));
+                }
+                SDL_SetWindowPosition(sdl_window, usable_bounds.x + border_left,
+                                       usable_bounds.y + border_top);
+            }
+            SetResolution(windowed_width, windowed_height);
         }
     } else {
         int width = 0;
@@ -353,6 +420,7 @@ bool WindowManager::ApplyDisplayMode(const DisplayModeRequest& request) {
                           static_cast<uint32_t>(height));
         }
     }
+    LogWindowState("ApplyDisplayMode", sdl_window, mode, bordered_requested);
     return true;
 }
 
