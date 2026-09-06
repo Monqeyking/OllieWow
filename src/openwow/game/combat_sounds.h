@@ -3,6 +3,7 @@
 
 #include <cstdint>
 namespace openwow::audio { class SoundRuntime; }
+namespace openwow::game { class CGUnit_C; }
 
 namespace openwow::game {
 
@@ -19,6 +20,10 @@ std::uint32_t PlayWoundDeathSound(openwow::audio::SoundRuntime& sound_runtime,
                                    const float* position,
                                    bool half_volume,
                                    bool use_subtype);
+
+void PlayCombatVictimInjurySound(CGUnit_C& victim, std::uint32_t hit_info,
+                                 std::uint32_t damage,
+                                 std::uint8_t victim_state);
 
 int PlayCombatMissSound(openwow::audio::SoundRuntime& sound_runtime,
                         bool is_one_handed, const float* position,

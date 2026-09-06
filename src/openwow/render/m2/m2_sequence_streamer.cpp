@@ -1,6 +1,7 @@
 #include "openwow/render/m2/m2_sequence_streamer.h"
 
 #include "openwow/data/model/m2_external_sequence_tracks.h"
+#include "openwow/data/model/m2_model.h"
 #include "openwow/foundation/diagnostics/logging.h"
 #include "openwow/runtime/scheduling/thread_pool_system.h"
 
@@ -351,9 +352,25 @@ void M2SequenceStreamer::Pump(const ResumePending &resume_pending) {
       } else {
         if (path_it != state.sequences_by_path.end()) {
           for (const std::uint16_t index : path_it->second) {
-            state.residency[index] = completion.retryable
-                                         ? SequenceResidency::kUnloaded
-                                         : SequenceResidency::kFailed;
+            // The external file is missing or unusable. When the model
+            // already carries inline keyframes for the sequence (Classic
+            // files do even with the resident bit clear), use those instead
+            // of retrying the missing file forever: the pose pipeline then
+            // resolves instead of clamping to the bind pose.
+            const bool inline_recovered =
+                data::model::M2ModelSequenceHasInlineTrackData(
+                    resource.model_data, index);
+            if (inline_recovered) {
+              state.residency[index] = SequenceResidency::kInline;
+              diagnostics::Log(
+                  diagnostics::LogLevel::kInfo,
+                  "M2: using inline tracks for missing external sequence " +
+                      completion.path + " for model " + resource.model_path);
+            } else {
+              state.residency[index] = completion.retryable
+                                           ? SequenceResidency::kUnloaded
+                                           : SequenceResidency::kFailed;
+            }
           }
         }
         if (!completion.retryable) {

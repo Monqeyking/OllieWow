@@ -64,6 +64,14 @@ bool M2ModelHasAnimationId(const data::model::M2Model& model,
 std::uint32_t ResolveM2AnimationId(const data::model::M2Model& model,
                                    const std::uint32_t animation_id,
                                    const M2AnimationAliasLookup& alias_lookup) {
+  // Classic M2s carry a model-specific, precomputed substitute for each
+  // requested AnimationData.dbc id. It must win over the generic alias walk:
+  // a creature can omit Run(5) while baking its available locomotion sequence
+  // into this table.
+  if (animation_id < model.playable_animation_lookup.size()) {
+    return model.playable_animation_lookup[animation_id].resolved_animation_id;
+  }
+
   std::uint32_t resolved_animation_id = animation_id;
 
   if (!IsValidAnimationBehaviorId(resolved_animation_id)

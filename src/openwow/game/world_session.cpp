@@ -841,6 +841,13 @@ WorldSession::WorldSession(openwow::data::DBCacheRuntime& db_cache_runtime,
   cbs.on_update_object_batch_finished = [this](const bool committed) {
     update_object_batch_active_ = false;
     if (committed) {
+      // Benilla evaluates death after the complete descriptor snapshot is
+      // visible.  OpenWow receives the same information through callbacks;
+      // reconcile streamed corpses once more at the batch boundary so a
+      // create/update ordering cannot leave them in Stand.
+      objects().ForEachUnit([this](const ObjectGuid &, CGUnit_C &unit) {
+        unit.Animation().EnsureDeathPresentation(*this);
+      });
       FlushInventoryReplicaTransaction();
       return;
     }
@@ -863,6 +870,18 @@ WorldSession::WorldSession(openwow::data::DBCacheRuntime& db_cache_runtime,
         unit.SetOpacityTarget(unit.GetModelOpacity(), 0u);
       }
       unit.Animation().RefreshSelectedStandAnimation(*this, 0u, ~0u);
+      if (unit.State().IsDead()) {
+        openwow::diagnostics::Log(
+            openwow::diagnostics::LogLevel::kInfo,
+            "DeathTrace: initial_dead guid=" +
+                std::to_string(unit.GetGuid().GetRawValue()) +
+                " health=" + std::to_string(unit.State().GetHealth()) +
+                " dynflags=" +
+                std::to_string(unit.State().GetDynamicFlags()) +
+                " stand=" +
+                std::to_string(unit.Animation().GetStandState()));
+        unit.Animation().EnsureDeathPresentation(*this, true);
+      }
 
       const auto tick = core::GameClock::GetTickCount32();
       UnitVehicle_RebuildCreatePassengerAttachment(
@@ -937,6 +956,7 @@ WorldSession::WorldSession(openwow::data::DBCacheRuntime& db_cache_runtime,
         unit.SetOpacityTarget(unit.GetModelOpacity(), 0u);
       }
       unit.Animation().RefreshSelectedStandAnimation(*this, 0u, ~0u);
+      unit.Animation().EnsureDeathPresentation(*this, true);
       unit.Mount().ApplyDisplayChange(
           unit, *this, unit.Mount().DisplayId(unit));
       const auto tick = core::GameClock::GetTickCount32();

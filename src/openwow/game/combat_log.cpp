@@ -1108,8 +1108,10 @@ bool CombatLog::HandleSpellNonMeleeDamageLog(PacketReader& r,
   evt.type = CombatEventType::kSpellDamage;
   if (!r.ReadPackedGuid(evt.target) || !r.ReadPackedGuid(evt.source))
     return false;
-  if (!r.ReadU32(evt.spell_id) || !r.ReadU32(evt.amount) ||
-      !r.ReadU32(evt.overkill))
+  // Classic SMSG_SPELLNONMELEEDAMAGELOG has no WotLK overkill field. The
+  // server layout is: spell, damage, school, absorb, resist, periodic,
+  // unused, blocked, hit-info, extended-data flag.
+  if (!r.ReadU32(evt.spell_id) || !r.ReadU32(evt.amount))
     return false;
   if (!r.ReadU8(evt.school_mask)) return false;
   if (!r.ReadU32(evt.absorb) || !r.ReadU32(evt.resist)) return false;
@@ -1493,6 +1495,85 @@ bool CombatLog::HandleAttackerStateUpdate(
     absorbed_total += sub_damage.absorbed;
     resisted_total += sub_damage.resisted;
   }
+
+  // Classic emits center floating combat text synchronously when the melee
+  // packet is received. UNIT_COMBAT below is a separate unit-frame/world
+  // feedback path.
+  if (CombatText_IsActiveUnit(update.victim.GetRawValue())) {
+    auto& dispatcher = ui::game::ScriptEventDispatch::Get();
+    const auto fire_word = [&](const std::uint32_t index) {
+      if (const char* type = CombatTextMsgType_GetString(index);
+          type != nullptr) {
+        dispatcher.FireCombatTextUpdate(type);
+      }
+    };
+
+    switch (update.victim_state) {
+      case VictimState::kDodge:
+        fire_word(CombatTextMsgIdx::kDodge);
+        break;
+      case VictimState::kParry:
+        fire_word(CombatTextMsgIdx::kParry);
+        break;
+      case VictimState::kBlock:
+        if (update.total_damage != 0 && update.blocked_amount != 0) {
+          dispatcher.FireCombatTextUpdate(
+              CombatTextMsgType_GetString(CombatTextMsgIdx::kBlock),
+              static_cast<int>(update.total_damage),
+              static_cast<int>(update.blocked_amount));
+        } else {
+          fire_word(CombatTextMsgIdx::kBlock);
+        }
+        break;
+      case VictimState::kEvade:
+        fire_word(CombatTextMsgIdx::kEvade);
+        break;
+      case VictimState::kImmune:
+        fire_word(CombatTextMsgIdx::kImmune);
+        break;
+      case VictimState::kDeflect:
+        fire_word(CombatTextMsgIdx::kDeflect);
+        break;
+      default:
+        if (update.total_damage != 0) {
+          if (absorbed_total != 0) {
+            dispatcher.FireCombatTextUpdate(
+                CombatTextMsgType_GetString(CombatTextMsgIdx::kAbsorb),
+                static_cast<int>(update.total_damage),
+                static_cast<int>(absorbed_total));
+          } else if (update.blocked_amount != 0) {
+            dispatcher.FireCombatTextUpdate(
+                CombatTextMsgType_GetString(CombatTextMsgIdx::kBlock),
+                static_cast<int>(update.total_damage),
+                static_cast<int>(update.blocked_amount));
+          } else if (resisted_total != 0) {
+            dispatcher.FireCombatTextUpdate(
+                CombatTextMsgType_GetString(CombatTextMsgIdx::kResist),
+                static_cast<int>(update.total_damage),
+                static_cast<int>(resisted_total));
+          } else {
+            if (const char* type = CombatTextMsgType_GetString(
+                    update.hit_info & HitInfoFlag::kCriticalHit
+                        ? CombatTextMsgIdx::kDamageCrit
+                        : CombatTextMsgIdx::kDamage);
+                type != nullptr) {
+              dispatcher.FireCombatTextUpdate(
+                  type, static_cast<int>(update.total_damage));
+            }
+          }
+        } else if (has_hit_info(HitInfoFlag::kFullAbsorb) ||
+                   has_hit_info(HitInfoFlag::kPartialAbsorb)) {
+          fire_word(CombatTextMsgIdx::kAbsorb);
+        } else if (has_hit_info(HitInfoFlag::kFullResist) ||
+                   has_hit_info(HitInfoFlag::kPartialResist)) {
+          fire_word(CombatTextMsgIdx::kResist);
+        } else {
+          fire_word(CombatTextMsgIdx::kMiss);
+        }
+        break;
+    }
+  }
+
   evt.absorb = absorbed_total;
   evt.resist = resisted_total;
   evt.school_mask = static_cast<std::uint8_t>(school_mask & 0xFFu);

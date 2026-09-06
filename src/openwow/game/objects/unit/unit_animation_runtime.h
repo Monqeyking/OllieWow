@@ -138,12 +138,22 @@ public:
 
   void PlayAttackAnimation(std::uint32_t hit_info, std::uint32_t melee_spell_id);
 
+  // Reconcile a dead unit after descriptor/model publication.  This is
+  // intentionally idempotent: the Benilla driver keeps death above the
+  // movement/stand selector every frame, while OpenWow reaches those points
+  // through callbacks.
+  void EnsureDeathPresentation(const WorldSession &session,
+                               bool streamed_in_corpse = false);
+
   void PlayWoundReaction(const WorldSession &session, bool critical);
 
   void ApplyAttackerStateRecordToVictim(const WorldSession &session,
                                         std::uint32_t hit_info);
 
-  void PlayMeleeContactReaction(std::uint8_t victim_state, std::uint32_t damage);
+  void PlayMeleeContactReaction(const WorldSession &session,
+                                std::uint8_t victim_state,
+                                std::uint32_t damage,
+                                std::uint32_t hit_info);
   void QueueCombatAudioResult(std::uint64_t victim_guid,
                               std::uint32_t hit_info,
                               std::uint32_t damage,
@@ -434,6 +444,7 @@ private:
 
   bool stand_selector_refresh_pending_{false};
   bool death_transition_played_{false};
+  bool death_pose_settle_pending_{false};
   PendingCombatAudioResult pending_combat_audio_{};
 
   mutable std::uint32_t animation_model_ready_instance_id_{0};

@@ -2151,21 +2151,28 @@ void UnitPresentationRuntime::OnModelLoaded(WorldSession &session,
             animation_bone_6.present);
   }
 
-  if (ModelAnimationsReady()) {
-    owner_.Animation().RefreshSelectedStandAnimation(session, 1,
-                                   0xFFFFFFFF);
+  const bool model_animations_ready = ModelAnimationsReady();
+  if (owner_.State().IsDead()) {
+    // A corpse can be created before its descriptors or M2 are fully
+    // published. Reconcile the state here, but do not restart a death request
+    // that was already installed by the object-publication callback.
+    owner_.Animation().EnsureDeathPresentation(session);
+  } else if (model_animations_ready) {
+    owner_.Animation().RefreshSelectedStandAnimation(session, 1, 0xFFFFFFFF);
+  }
 
+  if (model_animations_ready) {
     const auto anim_id = owner_.Animation().GetCurrentAnimationId();
     if (anim_id.has_value()) {
       const auto *dbc = owner_.dbc_loader();
       if (dbc) {
-        const auto *anim_entry = dbc->animation_data().LookupEntry(anim_id.value());
+        const auto *anim_entry =
+            dbc->animation_data().LookupEntry(anim_id.value());
         if (anim_entry && anim_entry->behavior_id == 127) {
           owner_.Animation().ClearSelectedStandAnimationState();
         }
       }
     }
-
   }
 
   const auto pending_aura_visual_id =

@@ -523,9 +523,12 @@ void UnitInteractionRuntime::RightClickInteract(
   }
 
   const auto &player = *player_obj;
-  const bool is_hostile = player.Interaction().IsHostileTo(owner_) ||
-                          IsHostileTo(player);
-  if (!is_hostile) {
+  // Vanilla's right-click attack branch is based on whether the unit can be
+  // attacked, not only on the strict red/hostile reaction bucket.  Neutral
+  // creatures that are attackable must therefore enter the same attack path.
+  const bool is_attackable =
+      player.Interaction().CanInitiateAutoAttack(owner_);
+  if (!is_attackable) {
     if (!IsFriendlyUnitInteractionInRangeOrStartAutoApproach(
             *session, owner_, player)) {
       return;
@@ -998,10 +1001,22 @@ void UnitInteractionRuntime::HandleDeathStateTransition(WorldSession &session) {
     return;
   }
   death_state_active_ = true;
+  const auto current_cast_id = owner_.Casts().GetCurrentCast().spell_id;
+  const auto channel_cast_id = owner_.Casts().GetChannelCast().spell_id;
   owner_.Movement().StopLocomotionForDeath(session);
   owner_.Loot().ClearCorpseReadyTick();
   owner_.Animation().ResetAuraAnimationVisualState(session);
   owner_.SpellVisuals().ClearCreatureInfo();
+  if (current_cast_id != 0u) {
+    owner_.SpellVisuals().QueueCastVisualStop(current_cast_id);
+  }
+  if (channel_cast_id != 0u) {
+    owner_.SpellVisuals().QueueCastVisualStop(channel_cast_id);
+  }
+  owner_.Casts().ClearCurrentCast();
+  owner_.Casts().ClearChannelCast();
+  owner_.Animation().SetChannelingActionLock(false);
+  owner_.Animation().EndSpellVisualStandAnimation(session);
   CompleteAutoAttackInteraction(false, true);
   CancelSpellCastsOnUnitDeath(session);
   if (owner_.GetGuid() == CGObject_C::GetActivePlayerGuid()) {

@@ -3,8 +3,35 @@
 
 #include "openwow/audio/playback/sound_runtime.h"
 #include "openwow/data/formats/dbc/dbc_enums.h"
+#include "openwow/game/creature_sound.h"
+#include "openwow/game/objects/cgunit.h"
+#include "openwow/game/unit_combat.h"
 
 namespace openwow::game {
+
+void PlayCombatVictimInjurySound(CGUnit_C& victim,
+                                 const std::uint32_t hit_info,
+                                 const std::uint32_t damage,
+                                 const std::uint8_t victim_state) {
+  // Benilla's SwingImpact wound-vocal ladder: a real landed hit only. Full
+  // absorb/resist and parry/block are handled by their own combat sounds.
+  if (damage == 0u ||
+      (hit_info & (unit_combat::AttackHitFlags::kFullAbsorb |
+                   unit_combat::AttackHitFlags::kFullResist)) != 0u ||
+      victim_state == 3u || victim_state == 4u) {
+    return;
+  }
+
+  std::uint32_t sound_type =
+      static_cast<std::uint32_t>(CreatureSoundType::Injury);
+  if ((hit_info & unit_combat::AttackHitFlags::kCrushing) != 0u) {
+    sound_type = static_cast<std::uint32_t>(CreatureSoundType::InjuryCrush);
+  } else if ((hit_info & unit_combat::AttackHitFlags::kCriticalHit) != 0u) {
+    sound_type =
+        static_cast<std::uint32_t>(CreatureSoundType::InjuryCritical);
+  }
+  victim.Sound().PlayCreatureSound(victim, sound_type, false);
+}
 
 std::uint32_t PlayWoundDeathSound(audio::SoundRuntime& sound_runtime,
                                    std::uint32_t sound_class,

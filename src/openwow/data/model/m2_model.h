@@ -32,6 +32,7 @@ struct M2Header {
   M2Array global_sequences;
   M2Array animations;
   M2Array animation_lookup;
+  M2Array playable_animation_lookup;
   M2Array bones;
   M2Array key_bone_lookup;
   M2Array vertices;
@@ -295,6 +296,17 @@ struct M2AnimationSequenceRecord {
   std::uint16_t alias_next{0};
 };
 
+// Classic v256 stores the model's precomputed answer for each requested
+// AnimationData.dbc id. The second field is the directional/variant hint
+// carried by the client table; retain the complete row even though current
+// locomotion only needs the resolved id.
+struct M2PlayableAnimationRecord {
+  std::uint16_t resolved_animation_id{0};
+  std::uint16_t direction_flags{0};
+};
+static_assert(sizeof(M2PlayableAnimationRecord) == 4,
+              "Classic M2 playable animation record expected to be 4 bytes.");
+
 inline constexpr std::uint32_t kM2SequenceFlagPlayOnce = 0x1u;
 inline constexpr std::uint32_t kM2SequenceFlagLoading = 0x10u;
 inline constexpr std::uint32_t kM2SequenceFlagDataResident = 0x20u;
@@ -456,6 +468,7 @@ struct M2Model {
   std::vector<std::uint32_t> animation_durations_ms;
   std::vector<M2AnimationSequenceRecord> animation_sequences;
   std::vector<std::uint16_t> animation_lookup;
+  std::vector<M2PlayableAnimationRecord> playable_animation_lookup;
 
   std::vector<std::uint16_t> first_sequence_index_by_animation_id;
   std::vector<M2Bone> bones;
@@ -490,6 +503,12 @@ struct M2Model {
 };
 
 void RebuildM2BonePoseIndex(M2Model &model);
+
+// True when any bone carries keyframe data for the sequence (translation,
+// rotation or scale segment). Used to prefer already-parsed inline track data
+// over a missing external .anim file instead of retrying that file forever.
+[[nodiscard]] bool M2ModelSequenceHasInlineTrackData(
+    const M2Model &model, std::size_t sequence_index) noexcept;
 
 struct SkinHeader {
   char magic[4]{};

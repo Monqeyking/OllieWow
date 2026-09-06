@@ -781,6 +781,10 @@ bool IsTextureRegionTag(std::string_view tag) {
 bool IsRuntimeWidgetTag(std::string_view tag) {
   const std::string lower = openwow::text::ToLowerAscii(std::string(tag));
   if (lower == "frame" || lower == "button" || lower == "checkbutton" ||
+      // Classic FrameXML uses LootButton as a Button-derived custom widget
+      // tag.  Keep the authored tag/contract, but materialize it through the
+      // ordinary Button runtime just like the vanilla client does.
+      lower == "lootbutton" ||
       lower == "editbox" || lower == "messageframe" || lower == "scrollframe" ||
       lower == "scrollingmessageframe" || lower == "slider" || lower == "simplehtml" ||
       lower == "statusbar" || lower == "colorselect" || lower == "model" ||
@@ -799,6 +803,9 @@ std::string NormalizeWidgetKind(std::string_view tag) {
   const std::string lower = openwow::text::ToLowerAscii(kind);
   if (lower == "buttontext") {
     return "FontString";
+  }
+  if (lower == "lootbutton") {
+    return "Button";
   }
   if (lower == "modelffx") {
     return "ModelFFX";

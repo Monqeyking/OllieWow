@@ -357,6 +357,13 @@ struct RenderInstance {
 
   std::uint32_t game_object_collision_state{0};
 
+  // CreatureDisplayInfo/CreatureModelData scale for unit/player displays
+  // (OBJECT scale x DBC scale is the reference composition). 1.0 for
+  // everything else; refreshed in ResolveDisplayId alongside the model path.
+  // Kept out of the cache-line-critical head of this struct (see the
+  // offsetof asserts in object_renderer.cpp).
+  float display_scale{1.0f};
+
   [[nodiscard]] const std::string &CharacterAppearanceKey() const noexcept {
     static const std::string kNoCharacterAppearanceKey;
     return character_appearance_key != nullptr ? *character_appearance_key

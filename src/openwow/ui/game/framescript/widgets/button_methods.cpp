@@ -117,6 +117,20 @@ void ApplyButtonMethods(lua_State *L) {
   }, 0);
   lua_setfield(L, f, "SetText");
 
+  // Classic's native CLootButton exposes SetSlot.  LootFrame.xml calls it on
+  // every visible loot row; the native button then performs the take action
+  // after the Lua OnClick handler, while modified clicks are reserved for
+  // the handler's inspect/link behaviour.
+  lua_pushcclosure(L, [](lua_State *Ls) -> int {
+    if (!lua_istable(Ls, 1) || !lua_isnumber(Ls, 2)) {
+      return 0;
+    }
+    lua_pushinteger(Ls, lua_tointeger(Ls, 2));
+    lua_setfield(Ls, 1, "__ow_loot_slot");
+    return 0;
+  }, 0);
+  lua_setfield(L, f, "SetSlot");
+
   lua_pushcclosure(L, [](lua_State *Ls) -> int {
     const int self = ValidateFrameObjectSelf(Ls, "Button");
     const int argument_count = lua_gettop(Ls) - 1;
@@ -358,6 +372,36 @@ void ApplyButtonMethods(lua_State *L) {
     lua_pushstring(Ls, btn);
     lua_pushboolean(Ls, is_down);
     FireScript(Ls, 1, "PostClick", 2);
+
+    lua_getfield(Ls, 1, "__ow_loot_slot");
+    const bool has_loot_slot = lua_isnumber(Ls, -1) != 0;
+    const lua_Integer loot_slot = has_loot_slot ? lua_tointeger(Ls, -1) : 0;
+    lua_pop(Ls, 1);
+    if (has_loot_slot) {
+      bool modified = false;
+      lua_getglobal(Ls, "IsModifierKeyDown");
+      if (lua_isfunction(Ls, -1)) {
+        if (lua_pcall(Ls, 0, 1, 0) == LUA_OK) {
+          modified = lua_toboolean(Ls, -1) != 0;
+          lua_pop(Ls, 1);
+        } else {
+          lua_pop(Ls, 1);
+        }
+      } else {
+        lua_pop(Ls, 1);
+      }
+      if (!modified) {
+        lua_getglobal(Ls, "LootSlot");
+        if (lua_isfunction(Ls, -1)) {
+          lua_pushinteger(Ls, loot_slot);
+          if (lua_pcall(Ls, 1, 0, 0) != LUA_OK) {
+            lua_pop(Ls, 1);
+          }
+        } else {
+          lua_pop(Ls, 1);
+        }
+      }
+    }
 
     lua_pushboolean(Ls, 0);
     lua_setfield(Ls, 1, "__ow_click_in_progress");

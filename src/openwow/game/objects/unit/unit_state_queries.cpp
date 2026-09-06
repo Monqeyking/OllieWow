@@ -4,6 +4,7 @@
 #include "openwow/game/object_manager.h"
 #include "openwow/game/objects/cgplayer.h"
 #include "openwow/game/query_cache.h"
+#include "openwow/game/emote_validation.h"
 #include "openwow/data/formats/dbc/dbc_loader.h"
 
 namespace openwow::game {
@@ -29,7 +30,15 @@ bool UnitStateRuntime::IsInCombat() const {
 }
 
 bool UnitStateRuntime::IsDead() const {
-  return GetHealth() == 0;
+  // The Classic client does not treat an object with an empty health block as
+  // a corpse yet.  A streamed-in corpse has MAXHEALTH, but HEALTH may be
+  // omitted because zero is the create-field default (Benilla's
+  // unit_is_dead() predicate uses the same guard).  Without this check an
+  // object could enter the death animation before its descriptors were
+  // complete and then miss the later dead-state presentation pass.
+  return (GetMaxHealth() > 0u && GetHealth() == 0u) ||
+         (GetDynamicFlags() & kUnitDynFlagDead) != 0u ||
+         owner_.Animation().GetStandState() == kStandStateDead;
 }
 
 bool UnitStateRuntime::IsDeadOrGhost() const {

@@ -361,7 +361,7 @@ namespace guild_rights {
   inline constexpr std::uint32_t kLeader             = 0x00100000;
 }
 
-static constexpr std::uint32_t kRankFlagMasks[17] = {
+static constexpr std::uint32_t kRankFlagMasks[13] = {
     0x00000001,
     0x00000002,
     0x00000004,
@@ -375,10 +375,6 @@ static constexpr std::uint32_t kRankFlagMasks[17] = {
     0x00004000,
     0x00008000,
     0x00010000,
-    0x00020000,
-    0x00040000,
-    0x00080000,
-    0x00100000,
 };
 
 static const ::openwow::game::GuildRank* TryGetActivePlayerGuildRank(
@@ -1614,10 +1610,10 @@ int LuaGetTabardInfo(lua_State* L) {
 int LuaGuildControlGetRankFlags(lua_State* L) {
   const auto& control = ::openwow::game::GuildSystem::Get().GetControlState();
 
-  for (int i = 0; i < 17; ++i) {
+  for (std::size_t i = 0; i < std::size(kRankFlagMasks); ++i) {
     lua_pushwowbool(L, (control.rights & kRankFlagMasks[i]) != 0);
   }
-  return 17;
+  return static_cast<int>(std::size(kRankFlagMasks));
 }
 
 int LuaGuildControlSetRankFlag(lua_State* L) {
@@ -1627,7 +1623,8 @@ int LuaGuildControlSetRankFlag(lua_State* L) {
 
   const int flag_index = static_cast<int>(lua_tonumber(L, 1)) - 1;
   const bool enabled = lua_toboolean(L, 2) != 0;
-  if (flag_index >= 0 && flag_index < 17) {
+  if (flag_index >= 0 &&
+      static_cast<std::size_t>(flag_index) < std::size(kRankFlagMasks)) {
     ::openwow::game::GuildSystem::Get().SetControlRankFlagMask(
         kRankFlagMasks[flag_index], enabled);
   }

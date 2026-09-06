@@ -36,12 +36,12 @@ bool MonsterMoveManager::ParseMonsterMove(PacketReader& r,
   if (transport) {
     out.has_transport = true;
     if (!r.ReadPackedGuid(out.transport)) return false;
-    std::uint8_t seat;
-    if (!r.ReadU8(seat)) return false;
-    out.transport_seat = static_cast<std::int8_t>(seat);
   }
 
-  if (!r.ReadU8(out.unk_byte)) return false;
+  // The Classic SMSG_MONSTER_MOVE writer sends the position immediately after
+  // the mover (and optional transport) GUID. There is no seat/transition byte
+  // in this packet; treating the first position byte as one shifts the entire
+  // payload and makes every normal spline look malformed.
   out.transition_payload_offset = r.Position();
 
   if (!r.ReadFloat(out.position.x)) return false;
@@ -95,8 +95,12 @@ bool MonsterMoveManager::ParseWaypoints(PacketReader& r,
   std::uint32_t count;
   if (!r.ReadU32(count)) return false;
 
-  bool use_catmull = (out.spline_flags &
-                      (SplineFlag::kFlying | SplineFlag::kCatmullRom)) != 0;
+  // Layout switch on the server wire bit: 0x200 Flying IS the CatmullRom mode
+  // (MoveSplineFlag::Mask_CatmullRom, Source/.../MoveSplineFlag.h:77). The old
+  // check used post-Classic bits (0x2000/0x40000); 0x40000 on this wire is
+  // Final_Angle facing, so angle-faced splines were misparsed as CatmullRom.
+  constexpr std::uint32_t kWireFlyingCatmullRom = 0x00000200u;
+  bool use_catmull = (out.spline_flags & kWireFlyingCatmullRom) != 0;
   out.catmull_rom = use_catmull;
 
   if (use_catmull) {
@@ -110,8 +114,18 @@ bool MonsterMoveManager::ParseWaypoints(PacketReader& r,
     }
   } else {
 
+    // Linear layout: destination + (count-1) packed offsets. Two Classic
+    // corrections vs the old WotLK form:
+    // - Offsets are destination-relative (offset = destination - point,
+    //   Source/.../packet_builder.cpp WriteLinearPath:100; Benilla
+    //   monster_move.rs:101), NOT midpoint-relative. The midpoint form bent
+    //   every chase sideways (wrong tangent/facing, wrong arc length/speed).
+    // - Short paths carry no offsets at all: the server skips its offset
+    //   loop when last_idx <= 1 (packet_builder.cpp:94), so count <= 2 is
+    //   just the destination (Benilla monster_move.rs:105). Reading phantom
+    //   offsets over-ran the body and dropped the packet.
     const std::size_t packed_point_count =
-        count >= 2u ? static_cast<std::size_t>(count - 1u) : 0u;
+        count > 2u ? static_cast<std::size_t>(count - 1u) : 0u;
     const std::size_t required =
         sizeof(float) * 3u + packed_point_count * sizeof(std::uint32_t);
     if (required > r.Remaining()) return false;
@@ -121,15 +135,10 @@ bool MonsterMoveManager::ParseWaypoints(PacketReader& r,
     if (!r.ReadFloat(dest.y)) return false;
     if (!r.ReadFloat(dest.z)) return false;
 
-    if (count < 2u) {
+    if (packed_point_count == 0u) {
       out.waypoints.push_back(dest);
       return true;
     }
-
-    Vec3 mid;
-    mid.x = (out.position.x + dest.x) * 0.5f;
-    mid.y = (out.position.y + dest.y) * 0.5f;
-    mid.z = (out.position.z + dest.z) * 0.5f;
 
     out.waypoints.resize(count);
     out.waypoints[count - 1] = dest;
@@ -139,9 +148,9 @@ bool MonsterMoveManager::ParseWaypoints(PacketReader& r,
       if (!r.ReadU32(packed)) return false;
       Vec3 offset = UnpackWaypoint(packed);
 
-      out.waypoints[i].x = mid.x - offset.x;
-      out.waypoints[i].y = mid.y - offset.y;
-      out.waypoints[i].z = mid.z - offset.z;
+      out.waypoints[i].x = dest.x - offset.x;
+      out.waypoints[i].y = dest.y - offset.y;
+      out.waypoints[i].z = dest.z - offset.z;
     }
   }
 

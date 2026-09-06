@@ -3007,13 +3007,6 @@ void GameLoop::FinalizeWorldEntryRuntime() {
       const ObjectGuid active_player_guid = objects.GetActivePlayerGuid();
       const ObjectGuid source_guid(evt.source);
       const ObjectGuid target_guid(evt.target);
-      const auto *target_obj = objects.Get(target_guid);
-      if (!target_obj)
-        return;
-      const float wx = target_obj->GetX();
-      const float wy = target_obj->GetY();
-      const float wz = target_obj->GetZ() + 2.5f;
-
       const auto* source_unit = objects.GetUnit(source_guid);
       const bool source_is_direct_player = source_guid == active_player_guid;
       const bool source_is_active_player_controlled =
@@ -3022,6 +3015,35 @@ void GameLoop::FinalizeWorldEntryRuntime() {
            source_unit->Interaction().GetControllingPlayerGuid() ==
                active_player_guid);
       const auto& cvars = ui::game::CVarSystem::Instance();
+      const bool is_damage_event =
+          evt.type == CombatEventType::kMeleeAttack ||
+          evt.type == CombatEventType::kSpellDamage ||
+          evt.type == CombatEventType::kPeriodicDamage;
+      if (is_damage_event) {
+        openwow::diagnostics::Log(
+            openwow::diagnostics::LogLevel::kInfo,
+            "FctTrace: event=" + std::to_string(static_cast<int>(evt.type)) +
+                " source=" + std::to_string(evt.source.GetRawValue()) +
+                " target=" + std::to_string(evt.target.GetRawValue()) +
+                " amount=" + std::to_string(evt.amount) +
+                " active=" + std::to_string(active_player_guid.GetRawValue()) +
+                " target_found=" +
+                std::to_string(objects.Get(target_guid) != nullptr) +
+                " direct=" + std::to_string(source_is_direct_player) +
+                " controlled=" +
+                std::to_string(source_is_active_player_controlled) +
+                " enabled=" +
+                std::to_string(cvars.GetCVarBool("enableCombatText")) +
+                " damage=" +
+                std::to_string(cvars.GetCVarBool("CombatDamage")));
+      }
+
+      const auto *target_obj = objects.Get(target_guid);
+      if (!target_obj)
+        return;
+      const float wx = target_obj->GetX();
+      const float wy = target_obj->GetY();
+      const float wz = target_obj->GetZ() + 2.5f;
 
       switch (evt.type) {
       case CombatEventType::kMeleeAttack:
@@ -3045,7 +3067,8 @@ void GameLoop::FinalizeWorldEntryRuntime() {
             static_cast<std::int32_t>(evt.amount), is_physical_type,
             evt.critical, source_is_direct_player,
             evt.type == CombatEventType::kPeriodicDamage,
-            cvars.GetCVarBool("CombatDamage"),
+            cvars.GetCVarBool("enableCombatText") &&
+                cvars.GetCVarBool("CombatDamage"),
             cvars.GetCVarBool("CombatLogPeriodicSpells"),
             cvars.GetCVarBool("PetMeleeDamage"),
             cvars.GetCVarBool("PetSpellDamage"));
@@ -3055,12 +3078,18 @@ void GameLoop::FinalizeWorldEntryRuntime() {
           floating_text_.AddText(
               wx, wy, wz, display->text, color,
               static_cast<std::uint32_t>(display->type), display->color);
+          openwow::diagnostics::Log(
+              openwow::diagnostics::LogLevel::kInfo,
+              "FctTrace: AddText target=" +
+                  std::to_string(evt.target.GetRawValue()) +
+                  " amount=" + std::to_string(evt.amount));
         }
         break;
       }
       case CombatEventType::kSpellMiss: {
         if (target_guid == active_player_guid ||
             !source_is_active_player_controlled ||
+            !cvars.GetCVarBool("enableCombatText") ||
             !cvars.GetCVarBool("CombatDamage")) {
           break;
         }
@@ -4099,13 +4128,10 @@ void GameLoop::UpdateSelectionDecals() {
       target_guid != active_player_guid) {
     if (const auto *const target_unit = objects.GetUnit(target_guid);
         target_unit != nullptr) {
-      if (openwow::ui::game::GameUI_IsUIVisible()) {
-        SubmitUnitSelectionDecals(*target_unit, target_guid, now_ms);
-      }
+      SubmitUnitSelectionDecals(*target_unit, target_guid, now_ms);
     } else if (const auto *const target_object =
                    objects.GetGameObject(target_guid);
                target_object != nullptr) {
-
       const float model_radius = ResolveGameObjectRingRadius(*target_object);
       const float radius = std::min(model_radius * target_object->GetScale(),
                                     kGameObjectRingMaxRadius);

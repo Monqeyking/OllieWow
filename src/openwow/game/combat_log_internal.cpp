@@ -903,7 +903,7 @@ bool SpellCombatLog_ReadFromPacket(SpellCombatLogData& out,
     out.victim_guid = g.GetRawValue();
   }
 
-  if (!r.ReadU32(out.total_damage) || !r.ReadU32(out.overkill)) return false;
+  if (!r.ReadU32(out.total_damage)) return false;
 
   std::uint8_t num_schools{0};
   if (!r.ReadU8(num_schools)) return false;
@@ -913,46 +913,18 @@ bool SpellCombatLog_ReadFromPacket(SpellCombatLogData& out,
     float absorb_pct;
     if (!r.ReadFloat(absorb_pct)) return false;
     out.absorb_pct[i] = absorb_pct;
-    if (!r.ReadU32(out.resist[i])) return false;
+    if (!r.ReadU32(out.absorbed[i])) return false;
+    if (!r.ReadU32(out.resisted[i])) return false;
   }
 
-  if ((out.hit_flags & 0x60) != 0) {
-    for (std::uint8_t i = 0; i < num_schools && i < 2; ++i) {
-      if (!r.ReadU32(out.absorbed[i])) return false;
-    }
-  }
-
-  if ((out.hit_flags & 0x180) != 0) {
-    for (std::uint8_t i = 0; i < num_schools && i < 2; ++i) {
-      if (!r.ReadU32(out.resisted[i])) return false;
-    }
-  }
-
-  std::uint8_t victim_state{0};
-  if (!r.ReadU8(victim_state)) return false;
-  out.victim_state = victim_state;
+  std::uint32_t victim_state{0};
+  if (!r.ReadU32(victim_state)) return false;
+  out.victim_state = static_cast<std::uint8_t>(victim_state);
 
   if (!r.ReadU32(out.attacker_state) || !r.ReadU32(out.melee_spell_id))
     return false;
 
-  if ((out.hit_flags & 0x2000) != 0) {
-    if (!r.ReadU32(out.blocked)) return false;
-  }
-
-  if ((out.hit_flags & 0x800000) != 0) {
-    if (!r.ReadU32(out.rage_gained)) return false;
-  }
-
-  if ((out.hit_flags & 1) != 0) {
-    if (!r.ReadU32(out.ext_unk)) return false;
-    for (int i = 0; i < 8; ++i) {
-      if (!r.ReadFloat(out.ext_floats[i])) return false;
-    }
-    for (int i = 0; i < 4; ++i) {
-      if (!r.ReadFloat(out.ext_rolls[i])) return false;
-    }
-    if (!r.ReadU32(out.ext_extra)) return false;
-  }
+  if (!r.ReadU32(out.blocked)) return false;
 
   bytes_read = r.Position();
   return true;

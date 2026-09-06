@@ -493,9 +493,21 @@ void ObjectManager::AdvanceSplineMovement(
     Vec3 position = spline->GetCurrentPosition();
     float facing = spline->GetCurrentFacing();
     const auto velocity = spline->GetCurrentVelocity();
-    const bool locomoting = spline->IsActive() &&
-                            velocity.x * velocity.x + velocity.y * velocity.y >
-                                0.0018490001f;
+    // Benilla `unify`: a creature path animates from its average path speed
+    // (total length / duration) with epsilon 0.1, not from the instantaneous
+    // frame velocity. The instant velocity drops to ~0 at spline ends while
+    // the unit is still path-walking, which flickered locomotion to Stand.
+    const std::uint32_t spline_duration_ms = spline->GetDuration();
+    const float spline_avg_speed =
+        spline_duration_ms != 0u
+            ? spline->GetTotalArcLength() /
+                  (static_cast<float>(spline_duration_ms) / 1000.0f)
+            : 0.0f;
+    constexpr float kSplineLocomotionEpsilon = 0.1f;
+    const bool locomoting =
+        spline->IsActive() &&
+        (spline_avg_speed > kSplineLocomotionEpsilon ||
+         velocity.x * velocity.x + velocity.y * velocity.y > 0.0018490001f);
     unit.Movement().ApplySplineMovementPose(
         position, facing, locomoting,
         (spline->GetSplineFlags() & SplineFlag::kBackward) != 0u,

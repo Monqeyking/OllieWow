@@ -63,7 +63,14 @@ void AddHardcodedOneShotEffect(const WorldSession &session, CGUnit_C &unit,
   create_info.effect_name = effect_name;
   create_info.flags = CEffectFlags::kPendingDestroy;
   create_info.attachment_point = static_cast<std::int32_t>(*attachment_point);
-  (void)CEffect_C::AddEffect(session, create_info);
+  auto *const created_effect = CEffect_C::AddEffect(session, create_info);
+  if (created_effect != nullptr &&
+      created_effect->GetModelInstanceId() != 0u) {
+    // Pending-destroy effects finish only after their model sequence ends.
+    // Start the one-shot sequence explicitly; AddEffect creates the M2
+    // instance but intentionally does not select an animation by itself.
+    (void)m2->SetAnimation(created_effect->GetModelInstanceId(), 0u);
+  }
 }
 
 namespace {

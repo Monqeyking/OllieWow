@@ -81,21 +81,26 @@ void TraceMovementSelection(const CGUnit_C &unit, const std::uint32_t previous_f
                             const std::uint32_t current_flags,
                             const std::uint16_t requested_animation,
                             const bool accepted) {
-  if (!MoveTraceEnabled() || !unit.IsActivePlayer()) {
+  if (!MoveTraceEnabled() ||
+      (!unit.IsActivePlayer() && unit.GetTypeId() != TypeID::kUnit)) {
     return;
   }
   const auto &request = unit.Animation().GetPlaybackRequest();
   const std::string message =
       "MoveTrace: select guid=" +
-      std::to_string(unit.GetGuid().GetRawValue()) +
-      " flags=" + std::to_string(previous_flags) + "->" +
-      std::to_string(current_flags) +
-      " requested=" + std::to_string(requested_animation) +
-      " accepted=" + (accepted ? "1" : "0") +
-      " active=" + std::to_string(request.animation_id) +
-      " resolved=" + std::to_string(unit.Animation().GetResolvedPlaybackAnimationId()) +
-      " serial=" + std::to_string(request.serial) +
-      " looping=" + (request.looping ? "1" : "0");
+          std::to_string(unit.GetGuid().GetRawValue()) +
+          " flags=" + std::to_string(previous_flags) + "->" +
+          std::to_string(current_flags) +
+          " requested=" + std::to_string(requested_animation) +
+          " accepted=" + (accepted ? "1" : "0") +
+          " active=" + std::to_string(request.animation_id) +
+          " resolved=" + std::to_string(unit.Animation().GetResolvedPlaybackAnimationId()) +
+          " serial=" + std::to_string(request.serial) +
+          " looping=" + (request.looping ? "1" : "0") +
+          " face_move=" + std::to_string(unit.GetMovementInfo().orientation) +
+          " face_body=" + std::to_string(unit.Movement().BodyFacing()) +
+          " face_smooth=" +
+          std::to_string(unit.Movement().SmoothBodyFacing());
   openwow::diagnostics::Log(openwow::diagnostics::LogLevel::kInfo, message);
 }
 
@@ -122,7 +127,11 @@ constexpr std::int32_t kSheatheStateRanged = 2;
 constexpr std::int32_t kFallAnimationId = 40;
 constexpr std::uint8_t kStandStateDead = 7u;
 constexpr std::uint16_t kHoverStandAnimationId = 193u;
-constexpr std::uint16_t kDeadTransitionAnimationId = 466u;
+// Classic death transition is Death (1), one-shot held at the end (Benilla
+// DEATH=1, byte-verified real death handler 0x625190). The previous 466 is a
+// post-Classic id whose classic DBC row does not resolve to a death clip, so
+// killed units showed no death animation at all.
+constexpr std::uint16_t kDeadTransitionAnimationId = 1u;
 constexpr std::uint16_t kAlternateDeadTransitionAnimationId = 131u;
 constexpr std::uint16_t kFlightTransitionTakeoffAnimationId = 37u;
 constexpr std::uint16_t kFlightTransitionLandingAnimationId = 187u;
@@ -281,6 +290,25 @@ std::array<std::uint32_t, 5> g_speech_emote_slots{};
 
 [[nodiscard]] bool IsValidUnitAnimationId(const std::uint32_t animation_id) {
   return animation_id < kInvalidUnitAnimationId;
+}
+
+[[nodiscard]] constexpr bool IsLocomotionAnimationId(
+    const std::uint16_t animation_id) noexcept {
+  switch (animation_id) {
+  case render::AnimId::kWalk:
+  case render::AnimId::kRun:
+  case render::AnimId::kWalkBackwards:
+  case render::AnimId::kSwim:
+  case render::AnimId::kSwimLeft:
+  case render::AnimId::kSwimRight:
+  case render::AnimId::kSwimBackwards:
+  case render::AnimId::kStealthWalk:
+  case render::AnimId::kFly:
+  case render::AnimId::kSprint:
+    return true;
+  default:
+    return false;
+  }
 }
 
 [[nodiscard]] bool IsUsableSpellVisualAnimationId(
@@ -896,18 +924,6 @@ void UnitAnimationRuntime::HandleAnimationEvent(WorldSession& session,
 
   if (event.route == UnitAnimationEventRoute::kCombat) {
     HandleCombatAudioAnimationEvent(session, fourcc, position);
-
-    if (fourcc == unit_combat::kFourCC_CPP && pending_combat_audio_.active) {
-      auto* const objects = owner_.object_manager();
-      auto* const victim =
-          objects != nullptr
-              ? objects->GetMutableUnit(ObjectGuid(pending_combat_audio_.victim_guid))
-              : nullptr;
-      if (victim != nullptr) {
-        victim->Animation().PlayMeleeContactReaction(
-            pending_combat_audio_.victim_state, pending_combat_audio_.damage);
-      }
-    }
     unit_combat::UnitCombat_HandleAnimEvent(&owner_, fourcc, event_data, position, 0);
     return;
   }
@@ -1607,8 +1623,15 @@ bool UnitAnimationRuntime::RequestPlayback(const std::uint16_t animation_id,
   const std::uint32_t requested_behavior =
       ResolveAnimationBehaviorId(owner_, animation_id);
 
-  if (IsEmoteAnimationStateBlocked() &&
-      !IsDeadAnimationFamily(requested_behavior)) {
+  // The dead-animation exemption must test the animation-id domain:
+  // IsDeadAnimationFamily holds animation ids (1 Death, 6 Dead, ...), while
+  // requested_behavior lives in the behavior domain. Testing only the
+  // behavior rejected Death itself on a dead unit (health < 1 blocks
+  // everything), so corpses never played their transition.
+  const bool dead_animation_request =
+      IsDeadAnimationFamily(animation_id) ||
+      IsDeadAnimationFamily(requested_behavior);
+  if (IsEmoteAnimationStateBlocked() && !dead_animation_request) {
     return false;
   }
 
@@ -1616,10 +1639,11 @@ bool UnitAnimationRuntime::RequestPlayback(const std::uint16_t animation_id,
       requested_behavior != kSubmergeBehaviorId &&
       requested_behavior != kSubmergedBehaviorId &&
       requested_behavior != kBirthBehaviorId &&
-      !IsDeadAnimationFamily(requested_behavior)) {
+      !dead_animation_request) {
     return false;
   }
-  if ((emote_internal_flags_ & kEmoteInternalFlagAnimationBehavior458) != 0u) {
+  if ((emote_internal_flags_ & kEmoteInternalFlagAnimationBehavior458) != 0u &&
+      !dead_animation_request) {
     return false;
   }
 
@@ -1655,6 +1679,18 @@ bool UnitAnimationRuntime::RequestPlayback(const std::uint16_t animation_id,
     resolved_behavior = ResolveAnimationBehaviorId(owner_, resolved_row);
     looping = AnimationSequenceLoops(resolved_row);
     rider_substituted = true;
+  }
+
+  // Benilla keeps a combat one-shot on the upper-body channel while movement
+  // changes only its locomotion base. A normal commit here would erase the
+  // swing as soon as the next movement update arrives.
+  if (!rider_substituted && playback_request_.upper_body_only &&
+      IsLocomotionAnimationId(submit_row)) {
+    playback_request_.base_animation_id = submit_row;
+    playback_request_.base_looping = looping;
+    playback_request_.base_bypass_alias_resolution = bypass_alias_resolution;
+    current_anim_group_ = submit_row;
+    return true;
   }
 
   if ((!restart || rider_substituted) &&
@@ -1831,9 +1867,11 @@ void UnitAnimationRuntime::HandleMovementAnimation(
       return;
     }
 
-    if (PrimaryM2ModelContainsAnimation(owner_,
-                                        static_cast<std::uint32_t>(
-                                            render::AnimId::kDead))) {
+    if (PrimaryM2ModelContainsAnimation(
+            owner_, static_cast<std::uint32_t>(render::AnimId::kDeath))) {
+      RequestPlayback(render::AnimId::kDeath, false);
+    } else if (PrimaryM2ModelContainsAnimation(
+                   owner_, static_cast<std::uint32_t>(render::AnimId::kDead))) {
       RequestPlayback(render::AnimId::kDead, false);
     }
     return;
@@ -1955,6 +1993,54 @@ void UnitAnimationRuntime::PlayAttackAnimation(const std::uint32_t hit_info,
   RequestPlayback(attack, false, true);
 }
 
+void UnitAnimationRuntime::EnsureDeathPresentation(
+    const WorldSession &session, const bool streamed_in_corpse) {
+  if (!owner_.State().IsDead()) {
+    return;
+  }
+
+  if (streamed_in_corpse) {
+    // Benilla settles a corpse that streamed in dead at Death's final sample,
+    // rather than replaying the collapse from a standing pose.
+    death_pose_settle_pending_ = true;
+  }
+
+  // Do not restart a corpse that is already presenting a death-family
+  // animation.  This makes the reconciliation safe from the per-publication
+  // and per-descriptor callbacks used for streamed-in corpses.
+  const bool death_request_installed =
+      IsDeadAnimationFamily(playback_request_.animation_id) ||
+      IsDeadAnimationFamily(playback_request_.base_animation_id);
+  if (!death_request_installed) {
+    // Force is required when an earlier create callback queued Death before
+    // the M2 was ready: the request latch may already be set while the actual
+    // playback request is still Stand.
+    PlayDeadTransitionAnimation(session, true);
+  }
+
+  if (!death_pose_settle_pending_ || !IsPrimaryM2ModelStreamedFor(owner_)) {
+    return;
+  }
+
+  const auto instance_id = owner_.GetPrimaryM2InstanceId();
+  auto *const m2 = owner_.m2_system();
+  if (instance_id == 0u || m2 == nullptr) {
+    return;
+  }
+
+  const auto request = GetPlaybackRequest();
+  const auto animation_id = GetResolvedPlaybackAnimationId();
+  const auto duration_ms = ResolveAnimationDurationMs(request.animation_id);
+  if (animation_id >= kInvalidUnitAnimationId || duration_ms == 0u) {
+    return;
+  }
+
+  if (m2->SetAnimationSample(instance_id, animation_id, duration_ms, 0.0f,
+                             true) == render::m2::M2ResultStatus::kReady) {
+    death_pose_settle_pending_ = false;
+  }
+}
+
 void UnitAnimationRuntime::ApplyAttackerStateRecordToVictim(
     const WorldSession &session, const std::uint32_t hit_info) {
 
@@ -2020,12 +2106,18 @@ void UnitAnimationRuntime::PlayWoundReaction(const WorldSession &session,
 }
 
 void UnitAnimationRuntime::PlayMeleeContactReaction(
-    const std::uint8_t victim_state, const std::uint32_t damage) {
+    const WorldSession &session, const std::uint8_t victim_state,
+    const std::uint32_t damage, const std::uint32_t hit_info) {
   if (owner_.State().IsDead() || GetStandState() == kStandStateDead) {
     return;
   }
   std::optional<std::uint16_t> animation;
   switch (victim_state) {
+  case 1u:
+    if (damage != 0u) {
+      PlayWoundReaction(session, (hit_info & kHitInfoCriticalHit) != 0u);
+    }
+    return;
   case kVictimStateDodge:
   case kVictimStateDeflect:
     animation = render::AnimId::kDodge;
@@ -2033,12 +2125,14 @@ void UnitAnimationRuntime::PlayMeleeContactReaction(
   case kVictimStateParry:
     animation = GetWeaponBasedParryAnimationId();
     break;
-  default:
+  case 4u:
     if (damage == 0u) {
       return;
     }
     animation = render::AnimId::kShieldBlock;
     break;
+  default:
+    return;
   }
 
   if (!animation.has_value()) {
@@ -2107,13 +2201,6 @@ void UnitAnimationRuntime::HandleCombatAudioAnimationEvent(
     }
     pending_combat_audio_ = {};
     return;
-  }
-
-  if (auto *const victim = session.objects().GetMutableUnit(
-          ObjectGuid(pending_combat_audio_.victim_guid));
-      victim != nullptr) {
-    victim->Animation().ApplyAttackerStateRecordToVictim(
-        session, pending_combat_audio_.hit_info);
   }
 
   if (is_attack_hit_event) {
@@ -3017,6 +3104,15 @@ void UnitAnimationRuntime::HandleStandStateTransition(
 
 void UnitAnimationRuntime::PlayDeadTransitionAnimation(const WorldSession &session,
                                            const bool force_replay) {
+  openwow::diagnostics::Log(
+      openwow::diagnostics::LogLevel::kInfo,
+      "DeathTrace: play_dead guid=" +
+          std::to_string(owner_.GetGuid().GetRawValue()) +
+          " health=" + std::to_string(owner_.State().GetHealth()) +
+          " dynflags=" + std::to_string(owner_.State().GetDynamicFlags()) +
+          " stand=" + std::to_string(GetStandState()) +
+          " forced=" + (force_replay ? "1" : "0") +
+          " latched=" + (death_transition_played_ ? "1" : "0"));
   if (!force_replay && death_transition_played_) {
     return;
   }
@@ -3035,6 +3131,17 @@ void UnitAnimationRuntime::PlayDeadTransitionAnimation(const WorldSession &sessi
     }
   }
   PlayEmoteAnimation(static_cast<std::int32_t>(animation_id), 0u);
+  const auto &request = owner_.Animation().GetPlaybackRequest();
+  openwow::diagnostics::Log(
+      openwow::diagnostics::LogLevel::kInfo,
+      "DeathTrace: play_dead_result guid=" +
+          std::to_string(owner_.GetGuid().GetRawValue()) +
+          " requested=" + std::to_string(animation_id) +
+          " active=" + std::to_string(request.animation_id) +
+          " resolved=" +
+          std::to_string(owner_.Animation().GetResolvedPlaybackAnimationId()) +
+          " serial=" + std::to_string(request.serial) +
+          " looping=" + (request.looping ? "1" : "0"));
 }
 
 void UnitAnimationRuntime::HandleMovementOpcodeAnimationSideEffects(
@@ -3674,6 +3781,12 @@ bool UnitAnimationRuntime::ResolveStandStateCategoryAnimation(
 void UnitAnimationRuntime::RefreshSelectedStandAnimation(
     const WorldSession &session, const std::uint32_t animation_flags,
     const std::uint32_t selector_flags) {
+  // Death overrides everything (Benilla driver death-override): a corpse
+  // keeps its Death/clamped pose. Without this any selector refresh (movement
+  // stop, speed change, spline settle) stands the corpse back up.
+  if (owner_.State().IsDead()) {
+    return;
+  }
 
   struct PreviousStandStatePublisher {
     UnitAnimationRuntime *runtime;
@@ -3831,8 +3944,6 @@ bool UnitAnimationRuntime::IsUpperBodyOnlyAnimation(
     const std::uint32_t current_animation_id) const {
 
   if (current_animation_id >= kInvalidUnitAnimationId) return false;
-
-  if (HasActiveSpellVisualStandAnimationSource()) return false;
 
   const auto incoming_behavior =
       ResolveAnimationBehaviorId(owner_, incoming_animation_id);
@@ -4058,6 +4169,11 @@ void UnitAnimationRuntime::HandleAnimSequenceEnd(const WorldSession &session,
                                      std::uint32_t, std::uint32_t,
                                      std::uint32_t emote_state,
                                      bool has_remaining) {
+  // A finished Death one-shot must keep its clamped end pose; any follow-up
+  // (selector/idle) would stand the corpse back up.
+  if (owner_.State().IsDead()) {
+    return;
+  }
 
   if (Dance().Get().IsActive()) {
     Dance().Get(owner_, session).ContinuationCheck();

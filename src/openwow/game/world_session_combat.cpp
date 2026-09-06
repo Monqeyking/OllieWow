@@ -7,6 +7,7 @@
 #include "openwow/game/actions/adapters/protocol/wotlk_action_packets.h"
 #include "openwow/game/chat_message_formatters.h"
 #include "openwow/game/combat_manager.h"
+#include "openwow/game/combat_sounds.h"
 #include "openwow/game/combat_log_display.h"
 #include "openwow/game/combat_log_internal.h"
 #include "openwow/game/combat/death/adapters/ui/area_spirit_healer_controller.h"
@@ -27,6 +28,7 @@
 #include "openwow/game/spell_packet_visual_dispatch.h"
 #include "openwow/game/spell_runtime_values.h"
 #include "openwow/game/targeting.h"
+#include "openwow/game/unit_combat.h"
 #include "openwow/game/spell_target_resolver.h"
 #include "openwow/game/script_event_helpers.h"
 #include "openwow/game/spell_query_bridge.h"
@@ -69,6 +71,25 @@ constexpr std::uint32_t kUnitSpellcastChannelStopEvent = 0x14du;
 constexpr int kTalentWipeInvalidTrainerSystemMessage = 0x1c5;
 
 constexpr float kTalentWipeInteractionPadding = 4.0f;
+
+void ApplySpellVictimReaction(WorldSession& session, const CombatEvent& event) {
+  if ((event.type != CombatEventType::kSpellDamage &&
+       event.type != CombatEventType::kPeriodicDamage) ||
+      event.amount == 0u) {
+    return;
+  }
+
+  auto* const victim = session.objects().GetMutableUnit(event.target);
+  if (victim == nullptr) {
+    return;
+  }
+
+  victim->Animation().PlayWoundReaction(session, event.critical);
+  const auto hit_info = event.critical
+                            ? unit_combat::AttackHitFlags::kCriticalHit
+                            : 0u;
+  PlayCombatVictimInjurySound(*victim, hit_info, event.amount, 1u);
+}
 
 [[nodiscard]] bool IsDuelOpponentOf(const WorldSession& session,
                                     const CGUnit_C& unit,
@@ -1574,7 +1595,14 @@ void WorldSession::HandleAttackStop(const net::wotlk::WorldPacket& pkt) {
 }
 
 void WorldSession::HandleSpellNonMeleeDamageLog(const net::wotlk::WorldPacket& pkt) {
-  combat_log_.HandleSpellNonMeleeDamageLog(pkt.payload.data(), pkt.payload.size());
+  const auto event_count = combat_log_.event_count();
+  if (!combat_log_.HandleSpellNonMeleeDamageLog(pkt.payload.data(),
+                                                pkt.payload.size())) {
+    return;
+  }
+  if (combat_log_.event_count() > event_count) {
+    ApplySpellVictimReaction(*this, combat_log_.events().back());
+  }
 }
 
 void WorldSession::HandleSpellHealLog(const net::wotlk::WorldPacket& pkt) {
@@ -1734,25 +1762,50 @@ void WorldSession::HandleSendAllCombatLog(const net::wotlk::WorldPacket& pkt) {
 
       case net::wotlk::Opcode::SMSG_PERIODICAURALOG:
         ApplyPeriodicAuraPowerPrediction(*this, reader);
-        if (!combat_log_.HandlePeriodicAuraLog(objects(), reader,
-                                               timestamp_offset_ms)) {
-          return;
+        {
+          const auto event_count = combat_log_.event_count();
+          if (!combat_log_.HandlePeriodicAuraLog(objects(), reader,
+                                                 timestamp_offset_ms)) {
+            return;
+          }
+          for (std::size_t i = event_count; i < combat_log_.event_count(); ++i) {
+            ApplySpellVictimReaction(*this, combat_log_.events()[i]);
+          }
         }
         break;
 
       case net::wotlk::Opcode::SMSG_SPELLNONMELEEDAMAGELOG:
-        if (!combat_log_.HandleSpellNonMeleeDamageLog(reader, timestamp_offset_ms)) {
-          return;
+        {
+          const auto event_count = combat_log_.event_count();
+          if (!combat_log_.HandleSpellNonMeleeDamageLog(
+                  reader, timestamp_offset_ms)) {
+            return;
+          }
+          if (combat_log_.event_count() > event_count) {
+            ApplySpellVictimReaction(*this, combat_log_.events().back());
+          }
         }
         break;
 
       case net::wotlk::Opcode::SMSG_ATTACKERSTATEUPDATE:
-        if (!combat_.HandleAttackerStateUpdate(reader) ||
-            !combat_.last_state_update().has_value()) {
-          return;
+        {
+          if (!combat_.HandleAttackerStateUpdate(reader) ||
+              !combat_.last_state_update().has_value()) {
+            return;
+          }
+          combat_log_.HandleAttackerStateUpdate(
+              *combat_.last_state_update(), timestamp_offset_ms);
+          const auto& asu = *combat_.last_state_update();
+          if (auto* const victim = objects().GetMutableUnit(asu.victim);
+              victim != nullptr) {
+            victim->Animation().PlayMeleeContactReaction(
+                *this, static_cast<std::uint8_t>(asu.victim_state),
+                asu.total_damage, asu.hit_info);
+            PlayCombatVictimInjurySound(
+                *victim, asu.hit_info, asu.total_damage,
+                static_cast<std::uint8_t>(asu.victim_state));
+          }
         }
-        combat_log_.HandleAttackerStateUpdate(
-            *combat_.last_state_update(), timestamp_offset_ms);
         break;
 
       case net::wotlk::Opcode::SMSG_SPELLDISPELLOG:
@@ -1829,8 +1882,26 @@ void WorldSession::HandleAttackerStateUpdate(const net::wotlk::WorldPacket& pkt)
   ApplyAttackerStateRagePrediction(*this, pkt);
   combat_log_.HandleAttackerStateUpdate(asu);
 
+  if (auto* const victim = objects().GetMutableUnit(asu.victim);
+      victim != nullptr) {
+    victim->Animation().PlayMeleeContactReaction(
+        *this, static_cast<std::uint8_t>(asu.victim_state), asu.total_damage,
+        asu.hit_info);
+    PlayCombatVictimInjurySound(
+        *victim, asu.hit_info, asu.total_damage,
+        static_cast<std::uint8_t>(asu.victim_state));
+  }
+
   if (auto* const attacker = objects().GetMutableUnit(asu.attacker);
       attacker != nullptr) {
+    if (static_cast<std::uint8_t>(asu.victim_state) != 0u) {
+      attacker->Sound().PlayCreatureSound(
+          *attacker,
+          (asu.hit_info & unit_combat::AttackHitFlags::kCriticalHit) != 0u
+              ? static_cast<std::uint32_t>(CreatureSoundType::ExertionCritical)
+              : static_cast<std::uint32_t>(CreatureSoundType::Exertion),
+          false);
+    }
     if (attacker->Animation().GetCachedSheatheState() != 1) {
       attacker->Animation().ChangeSheatheStateAndNotifyServer(1, true, false);
     }
@@ -1838,16 +1909,19 @@ void WorldSession::HandleAttackerStateUpdate(const net::wotlk::WorldPacket& pkt)
         asu.victim.GetRawValue(), asu.hit_info, asu.total_damage,
         asu.overkill, static_cast<std::uint8_t>(asu.victim_state));
     attacker->Animation().PlayAttackAnimation(asu.hit_info, asu.melee_spell_id);
-  } else if (auto* const victim = objects().GetMutableUnit(asu.victim);
-             victim != nullptr) {
-    victim->Animation().ApplyAttackerStateRecordToVictim(*this, asu.hit_info);
   }
 }
 
 void WorldSession::HandlePeriodicAuraLog(const net::wotlk::WorldPacket& pkt) {
   ApplyPeriodicAuraPowerPrediction(*this, pkt);
-  combat_log_.HandlePeriodicAuraLog(objects(), pkt.payload.data(),
-                                    pkt.payload.size());
+  const auto event_count = combat_log_.event_count();
+  if (!combat_log_.HandlePeriodicAuraLog(objects(), pkt.payload.data(),
+                                         pkt.payload.size())) {
+    return;
+  }
+  for (std::size_t i = event_count; i < combat_log_.event_count(); ++i) {
+    ApplySpellVictimReaction(*this, combat_log_.events()[i]);
+  }
 }
 
 void WorldSession::HandleAuraUpdate(const net::wotlk::WorldPacket& pkt) {

@@ -53,7 +53,6 @@ bool CombatManager::HandleAttackerStateUpdate(PacketReader& r) {
   if (!r.ReadPackedGuid(upd.attacker)) return false;
   if (!r.ReadPackedGuid(upd.victim)) return false;
   if (!r.ReadU32(upd.total_damage)) return false;
-  if (!r.ReadU32(upd.overkill)) return false;
 
   std::uint8_t sub_count;
   if (!r.ReadU8(sub_count)) return false;
@@ -63,41 +62,17 @@ bool CombatManager::HandleAttackerStateUpdate(PacketReader& r) {
     if (!r.ReadU32(sub.school_mask)) return false;
     if (!r.ReadFloat(sub.damage_float)) return false;
     if (!r.ReadU32(sub.damage)) return false;
+    if (!r.ReadU32(sub.absorbed)) return false;
+    if (!r.ReadU32(sub.resisted)) return false;
     upd.sub_damages.push_back(sub);
   }
 
-  if (upd.hit_info & (HitInfoFlag::kFullAbsorb | HitInfoFlag::kPartialAbsorb)) {
-    for (auto& sub : upd.sub_damages) {
-      if (!r.ReadU32(sub.absorbed)) return false;
-    }
-  }
-
-  if (upd.hit_info & (HitInfoFlag::kFullResist | HitInfoFlag::kPartialResist)) {
-    for (auto& sub : upd.sub_damages) {
-      if (!r.ReadU32(sub.resisted)) return false;
-    }
-  }
-
-  std::uint8_t victim_state_raw;
-  if (!r.ReadU8(victim_state_raw)) return false;
+  std::uint32_t victim_state_raw;
+  if (!r.ReadU32(victim_state_raw)) return false;
   upd.victim_state = static_cast<VictimState>(victim_state_raw);
   if (!r.ReadU32(upd.attacker_state)) return false;
   if (!r.ReadU32(upd.melee_spell_id)) return false;
-
-  if (upd.hit_info & HitInfoFlag::kBlock) {
-    if (!r.ReadU32(upd.blocked_amount)) return false;
-  }
-
-  if (upd.hit_info & HitInfoFlag::kRageGain) {
-    std::uint32_t rage;
-    if (!r.ReadU32(rage)) return false;
-  }
-
-  if (upd.hit_info & HitInfoFlag::kUnk1) {
-
-    if (!r.HasBytes(48)) return false;
-    r.Skip(48);
-  }
+  if (!r.ReadU32(upd.blocked_amount)) return false;
 
   last_state_update_ = upd;
   return true;
@@ -289,6 +264,8 @@ bool CombatManager::HandleLogXpGain(const std::uint8_t* data,
   if (!r.ReadU32(info.xp_total)) return false;
   if (!r.ReadU8(info.xp_type)) return false;
   if (info.xp_type == 0) {
+    std::uint32_t base_xp;
+    if (!r.ReadU32(base_xp)) return false;
     float group_rate;
     if (r.ReadFloat(group_rate)) {
       info.group_rate = group_rate;

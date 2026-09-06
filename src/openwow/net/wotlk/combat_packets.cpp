@@ -59,11 +59,6 @@ std::size_t RdPackedGuid(const std::uint8_t* data, std::size_t len,
   return off + consumed;
 }
 
-std::size_t Skip(std::size_t off, std::size_t n, std::size_t len) {
-  if (off + n > len) return 0;
-  return off + n;
-}
-
 }
 
 std::size_t CombatReadPackedGuid(const std::uint8_t* data,
@@ -90,9 +85,6 @@ ParseAttackerStateUpdate(const std::uint8_t* data, std::size_t len) {
   off = RdU32(data, len, off, out.total_damage);
   if (off == 0) return std::nullopt;
 
-  off = RdU32(data, len, off, out.overkill);
-  if (off == 0) return std::nullopt;
-
   std::uint8_t sub_count;
   off = RdU8(data, len, off, sub_count);
   if (off == 0) return std::nullopt;
@@ -105,24 +97,14 @@ ParseAttackerStateUpdate(const std::uint8_t* data, std::size_t len) {
     if (off == 0) return std::nullopt;
     off = RdU32(data, len, off, out.sub_damages[i].damage);
     if (off == 0) return std::nullopt;
+    off = RdU32(data, len, off, out.sub_damages[i].absorbed);
+    if (off == 0) return std::nullopt;
+    off = RdU32(data, len, off, out.sub_damages[i].resisted);
+    if (off == 0) return std::nullopt;
   }
 
-  if (out.hit_info & (CombatHitInfo::kFullAbsorb | CombatHitInfo::kPartialAbsorb)) {
-    for (auto& sub : out.sub_damages) {
-      off = RdU32(data, len, off, sub.absorbed);
-      if (off == 0) return std::nullopt;
-    }
-  }
-
-  if (out.hit_info & (CombatHitInfo::kFullResist | CombatHitInfo::kPartialResist)) {
-    for (auto& sub : out.sub_damages) {
-      off = RdU32(data, len, off, sub.resisted);
-      if (off == 0) return std::nullopt;
-    }
-  }
-
-  std::uint8_t vs;
-  off = RdU8(data, len, off, vs);
+  std::uint32_t vs;
+  off = RdU32(data, len, off, vs);
   if (off == 0) return std::nullopt;
   out.victim_state = static_cast<CombatVictimState>(vs);
 
@@ -132,20 +114,8 @@ ParseAttackerStateUpdate(const std::uint8_t* data, std::size_t len) {
   off = RdU32(data, len, off, out.melee_spell_id);
   if (off == 0) return std::nullopt;
 
-  if (out.hit_info & CombatHitInfo::kBlock) {
-    off = RdU32(data, len, off, out.blocked_amount);
-    if (off == 0) return std::nullopt;
-  }
-
-  if (out.hit_info & CombatHitInfo::kRageGain) {
-    off = RdU32(data, len, off, out.rage_gain);
-    if (off == 0) return std::nullopt;
-  }
-
-  if (out.hit_info & CombatHitInfo::kUnk1) {
-    off = Skip(off, 48, len);
-    if (off == 0) return std::nullopt;
-  }
+  off = RdU32(data, len, off, out.blocked_amount);
+  if (off == 0) return std::nullopt;
 
   return out;
 }
@@ -266,6 +236,9 @@ ParseLogXpGain(const std::uint8_t* data, std::size_t len) {
   if (off == 0) return std::nullopt;
 
   if (out.xp_type == 0) {
+    std::uint32_t base_xp;
+    off = RdU32(data, len, off, base_xp);
+    if (off == 0) return std::nullopt;
 
     float rate;
     auto next = RdFloat(data, len, off, rate);

@@ -79,11 +79,21 @@ bool MoveTraceEnabled() {
   return enabled;
 }
 
+bool M2DiagEnabled() {
+  static const bool enabled = [] {
+    const char *value = std::getenv("OPENWOW_M2_DIAG");
+    return value != nullptr && value[0] != '\0' && std::strcmp(value, "0") != 0;
+  }();
+  return enabled;
+}
+
 void TraceAnimationClock(const RenderInstance &inst, const float dt,
                          const std::uint32_t duration_ms,
                          const std::uint32_t before_ms,
                          const std::uint32_t after_ms) {
-  if (!MoveTraceEnabled() || inst.type_id != game::TypeID::kPlayer) {
+  if (!MoveTraceEnabled() ||
+      (inst.type_id != game::TypeID::kPlayer &&
+       inst.type_id != game::TypeID::kUnit)) {
     return;
   }
   const auto &request = inst.unit_animation;
@@ -216,7 +226,17 @@ constexpr std::array<std::uint32_t, 4> kCharacterReplaceableTextureTypes{
       sequence.sequence.move_speed == 0.0f) {
     return kUnscaledPlaybackRate;
   }
-  return locomotion_speed / std::abs(sequence.sequence.move_speed);
+  // Benilla `scaled_rate` (decisions 0903/0912): a sequence moveSpeed covers
+  // ground at the model's authored size, so scale the divisor by the rendered
+  // world scale (object scale x DBC display scale). abs() only on the scale;
+  // a signed (backwards, negative) moveSpeed intentionally stays at 1x via
+  // the move_speed == 0 guard path and the divisor > 0 check below.
+  const float divisor = sequence.sequence.move_speed *
+                        std::abs(instance.scale * instance.display_scale);
+  if (!(divisor > 0.0f)) {
+    return kUnscaledPlaybackRate;
+  }
+  return locomotion_speed / divisor;
 }
 
 [[nodiscard]] std::uint32_t ResolveLocomotionPhaseStartMs(
@@ -374,8 +394,9 @@ void ReconcileItemVisualChildren(m2::M2System &m2_system, ModelAttachmentBinding
     }
   }
 
+  const float composed_scale = inst.scale * inst.display_scale;
   return BuildM2ModelInstanceTransform(render_x, render_y, render_z,
-                                       inst.orientation, inst.scale);
+                                       inst.orientation, composed_scale);
 }
 
 [[nodiscard]] bool HasPathSuffix(const std::string &path, const std::string_view suffix) {
@@ -725,7 +746,9 @@ void ObjectRenderer::Update(float dt) {
     inst.animation.Update(dt * inst.animation_playback_rate, anim_duration_ms);
     const std::uint32_t animation_time_after =
         inst.animation.current_time_ms();
-    if (MoveTraceEnabled() && inst.type_id == game::TypeID::kPlayer &&
+    if (MoveTraceEnabled() &&
+        (inst.type_id == game::TypeID::kPlayer ||
+         inst.type_id == game::TypeID::kUnit) &&
         (animation_sample_frame_ % 30u == 0u ||
          animation_time_before == 0u ||
          (animation_time_before != animation_time_after &&
@@ -871,7 +894,9 @@ void ObjectRenderer::PrepareVisibleInstances(
         fallback_used = true;
         inst.animation_sample_ready = prepare.SamplePresentation(request);
       }
-      if (MoveTraceEnabled() && inst.type_id == game::TypeID::kPlayer &&
+      if (MoveTraceEnabled() &&
+          (inst.type_id == game::TypeID::kPlayer ||
+           inst.type_id == game::TypeID::kUnit) &&
           (animation_sample_frame_ % 30u) == 0u) {
         const auto info = inst.m2_instance_id != 0u
                               ? m2_system_.QueryInstanceAnimationInfo(
@@ -886,10 +911,33 @@ void ObjectRenderer::PrepareVisibleInstances(
         const float bone0_x = bone_data.size() >= 16u ? bone_data[12u] : 0.0f;
         const float bone0_y = bone_data.size() >= 16u ? bone_data[13u] : 0.0f;
         const float bone0_z = bone_data.size() >= 16u ? bone_data[14u] : 0.0f;
+        const auto model_readiness = inst.m2_model_id != 0u
+                                         ? m2_system_.QueryModelReadiness(
+                                               inst.m2_model_id)
+                                         : m2::M2ModelReadinessQuery{};
+        const auto instance_readiness =
+            inst.m2_instance_id != 0u
+                ? m2_system_.QueryInstanceReadiness(inst.m2_instance_id)
+                : m2::M2InstanceReadinessQuery{};
         openwow::diagnostics::Log(
             openwow::diagnostics::LogLevel::kInfo,
             "MoveTrace: sample guid=" +
                 std::to_string(inst.guid.GetRawValue()) +
+                " display=" + std::to_string(inst.display_id) +
+                " model=" + std::to_string(inst.m2_model_id) +
+                " path=" + inst.model_path +
+                " mloaded=" + (model_readiness.loaded ? "1" : "0") +
+                " mready=" +
+                ((model_readiness.loaded && model_readiness.render_ready)
+                     ? "1"
+                     : "0") +
+                " iready=" +
+                std::to_string(
+                    static_cast<int>(instance_readiness.status)) +
+                " userial=" + std::to_string(inst.unit_animation.serial) +
+                " uresolved=" +
+                std::to_string(
+                    inst.unit_animation.resolved_animation_id) +
                 " m2=" + std::to_string(inst.m2_instance_id) +
                 " initial=" + (initial_sample ? "1" : "0") +
                 " fallback=" + (fallback_used ? "1" : "0") +
@@ -2003,9 +2051,16 @@ void ObjectRenderer::ApplyProjection(RenderInstance &inst, ObjectProjection &&pr
     ReleaseDestructibleM2StateBindings(inst);
   }
 
-  if (inst.unit_animation.serial != projection.unit_animation.serial ||
+  const bool playback_changed =
+      inst.unit_animation.serial != projection.unit_animation.serial ||
       inst.unit_animation.resolved_animation_id !=
-          projection.unit_animation.resolved_animation_id) {
+          projection.unit_animation.resolved_animation_id;
+  const bool base_changed =
+      inst.unit_animation.resolved_base_animation_id !=
+          projection.unit_animation.resolved_base_animation_id ||
+      inst.unit_animation.base_looping != projection.unit_animation.base_looping;
+
+  if (playback_changed || base_changed) {
 
     const std::uint32_t locomotion_phase_ms = ResolveLocomotionPhaseStartMs(
         m2_system_, inst, projection.unit_animation.resolved_base_animation_id,
@@ -2014,7 +2069,7 @@ void ObjectRenderer::ApplyProjection(RenderInstance &inst, ObjectProjection &&pr
         projection.unit_animation.resolved_base_animation_id,
         projection.unit_animation.base_looping, locomotion_phase_ms);
 
-    if (projection.unit_animation.upper_body_only) {
+    if (projection.unit_animation.upper_body_only && playback_changed) {
       inst.upper_animation.Restart(
           projection.unit_animation.resolved_animation_id,
           projection.unit_animation.looping);
@@ -2176,18 +2231,33 @@ void ObjectRenderer::ResolveDisplayId(RenderInstance &inst) {
     inst.model_path.clear();
     ClearM2Binding(inst);
     inst.render_asset_kind = RenderAssetKind::kUnknown;
+    inst.display_scale = 1.0f;
     inst.needs_display_resolve = false;
     inst.needs_model_load = false;
     return;
   }
 
   std::string path;
+  inst.display_scale = 1.0f;
 
   switch (inst.type_id) {
   case game::TypeID::kUnit:
   case game::TypeID::kPlayer:
     inst.creature_render_state_key = {};
     path = display_info_.ResolveCreatureModel(inst.display_id);
+    // GetCreatureModelScale is data-driven (CDI x CMD); 1.0 when the row is
+    // missing, so unknown displays keep today's size instead of vanishing.
+    if (display_info_.IsReady()) {
+      inst.display_scale = display_info_.GetCreatureModelScale(inst.display_id);
+      if (M2DiagEnabled()) {
+        openwow::diagnostics::Log(
+            openwow::diagnostics::LogLevel::kInfo,
+            "M2Diag: display scale display=" +
+                std::to_string(inst.display_id) +
+                " display_scale=" + std::to_string(inst.display_scale) +
+                " object_scale=" + std::to_string(inst.scale));
+      }
+    }
     break;
   case game::TypeID::kGameObject:
     path = display_info_.ResolveGameObjectModel(inst.display_id);

@@ -2700,26 +2700,22 @@ void WorldSession::ResolvePendingTradeSkillLinkNameQuery(const std::uint64_t gui
 
 void WorldSession::HandleNameQueryResponse(const net::wotlk::WorldPacket &pkt) {
   PacketReader reader(pkt.payload.data(), pkt.payload.size());
-  ObjectGuid guid;
-  if (!reader.ReadPackedGuid(guid)) {
+  std::uint64_t raw_guid = 0;
+  if (!reader.ReadU64(raw_guid)) {
     return;
   }
-  std::uint8_t response_type = 0;
-  if (!reader.ReadU8(response_type)) {
+  std::string name;
+  if (!reader.ReadCString(name, 64)) {
     return;
   }
-  const bool name_query_requeued = response_type == 2;
-  const bool name_lookup_failed = response_type != 0 && response_type != 2 && response_type != 3;
-  const bool name_cache_updated = response_type == 0 || response_type == 3;
-  const bool has_full_name_record = response_type == 0;
+  const ObjectGuid guid(raw_guid);
+  const bool name_lookup_failed = name.empty();
+  const bool name_cache_updated = true;
+  const bool has_full_name_record = !name.empty();
   const bool pending_raid_roster_name_query =
       pending_raid_roster_name_queries_.contains(guid.GetRawValue());
 
   if (!query_cache_.HandleNameQueryResponse(pkt.payload.data(), pkt.payload.size())) {
-    return;
-  }
-
-  if (name_query_requeued) {
     return;
   }
 
@@ -2760,6 +2756,9 @@ void WorldSession::HandleNameQueryResponse(const net::wotlk::WorldPacket &pkt) {
                              cached_name->class_id);
     ui::game::AutoComplete::Get().UpdateRecentPlayerGuidName(
         guid.GetRawValue(), FormatAutoCompletePlayerName(*cached_name), false);
+  }
+  if (name_cache_updated) {
+    ui::game::ScriptEventDispatch::Get().FireUnitName(guid.GetRawValue());
   }
   ResolvePendingSocialNameQueries(guid.GetRawValue(), name_lookup_failed);
   for (std::uint32_t i = 0; i < battlefield_position_name_updates; ++i) {

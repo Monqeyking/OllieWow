@@ -63,7 +63,7 @@ inline constexpr uint32_t kRecordSize_ItemText = 8000;
 
 inline constexpr uint32_t kVersion_Creature = 1;
 inline constexpr uint32_t kVersion_GameObject = 1;
-inline constexpr uint32_t kVersion_Item = 5;
+inline constexpr uint32_t kVersion_Item = 6;
 inline constexpr uint32_t kVersion_ItemName = 1;
 inline constexpr uint32_t kVersion_Quest = 3;
 inline constexpr uint32_t kVersion_PageText = 1;

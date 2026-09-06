@@ -32,6 +32,7 @@ constexpr std::size_t kGameObjectStringMaxBytes = 0x400;
 constexpr std::size_t kItemNameMaxBytes = 400;
 constexpr std::size_t kItemDescriptionMaxBytes = 0x400;
 constexpr std::size_t kItemMaxStats = 10;
+constexpr std::size_t kItemMaxDamages = 5;
 constexpr std::size_t kNpcTextStringMaxBytes = 3000;
 
 bool StoreRetailWdbRecord(openwow::data::DBCacheRuntime& runtime,
@@ -215,13 +216,10 @@ bool QueryCache::FinishUint32CallbackDrainLocked(
 bool QueryCache::HandleNameQueryResponse(const std::uint8_t *data, std::size_t len) {
   PacketReader r(data, len);
 
-  ObjectGuid guid;
-  if (!r.ReadPackedGuid(guid))
+  std::uint64_t raw_guid = 0;
+  if (!r.ReadU64(raw_guid))
     return false;
-
-  std::uint8_t response_type;
-  if (!r.ReadU8(response_type))
-    return false;
+  const ObjectGuid guid(raw_guid);
 
   const auto finish_name_update = [&](PlayerNameInfo info) {
     std::vector<QueryCallback> callbacks;
@@ -249,65 +247,28 @@ bool QueryCache::HandleNameQueryResponse(const std::uint8_t *data, std::size_t l
     return true;
   };
 
-  const auto fail_name_query = [&]() {
-    std::vector<QueryCallback> callbacks;
-    {
-      std::lock_guard lock(mutex_);
-      callbacks = ResolveNameQueryCallbacksLocked(guid.GetRawValue(), true);
-    }
-
-    for (auto &callback : callbacks) {
-      callback(false);
-    }
-
-    {
-      std::lock_guard lock(mutex_);
-      FinishNameQueryCallbackDrainLocked(guid.GetRawValue());
-    }
-    return true;
-  };
-
-  if (response_type == 3) {
-    PlayerNameInfo info;
-    info.guid = guid;
-    info.name = "?";
-    return finish_name_update(std::move(info));
-  }
-
-  if (response_type == 2) {
-    std::lock_guard lock(mutex_);
-    name_queries_.Requeue(guid.GetRawValue());
-    return true;
-  }
-
-  if (response_type != 0) {
-    return fail_name_query();
-  }
-
   PlayerNameInfo info;
   info.guid = guid;
   if (!r.ReadCString(info.name, kNameCacheMaxNameBytes))
     return false;
   if (!r.ReadCString(info.realm_name, kNameCacheMaxRealmBytes))
     return false;
-  if (!r.ReadU8(info.race))
-    return false;
-  if (!r.ReadU8(info.sex))
-    return false;
-  if (!r.ReadU8(info.class_id))
-    return false;
 
-  std::uint8_t declined;
-  if (!r.ReadU8(declined))
+  // The local Classic/MaNGOS response uses full u32 fields.  The old parser
+  // treated the first name byte as a WotLK response-status byte, so every
+  // successful response was rejected before it reached the cache.
+  std::uint32_t race = 0;
+  std::uint32_t sex = 0;
+  std::uint32_t class_id = 0;
+  if (!r.ReadU32(race))
     return false;
-  info.declined = (declined != 0);
-
-  if (info.declined) {
-    for (auto &dn : info.declined_names) {
-      if (!r.ReadCString(dn, kNameCacheMaxDeclinedBytes))
-        return false;
-    }
-  }
+  if (!r.ReadU32(sex))
+    return false;
+  if (!r.ReadU32(class_id))
+    return false;
+  info.race = static_cast<std::uint8_t>(race);
+  info.sex = static_cast<std::uint8_t>(sex);
+  info.class_id = static_cast<std::uint8_t>(class_id);
 
   return finish_name_update(std::move(info));
 }
@@ -353,8 +314,10 @@ bool QueryCache::HandleCreatureQueryResponse(const std::uint8_t *data,
   }
   if (!r.ReadCString(info.sub_name, kCreatureStringMaxBytes))
     return false;
-  if (!r.ReadCString(info.icon_name, kCreatureStringMaxBytes))
-    return false;
+
+  // The local Classic/MaNGOS response has no icon string and only contains
+  // the seven u32 fields followed by civilian/racial-leader bytes.
+  info.icon_name.clear();
   if (!r.ReadU32(info.type_flags))
     return false;
   if (!r.ReadU32(info.creature_type))
@@ -363,25 +326,17 @@ bool QueryCache::HandleCreatureQueryResponse(const std::uint8_t *data,
     return false;
   if (!r.ReadU32(info.rank))
     return false;
-  for (auto &kc : info.kill_credit) {
-    if (!r.ReadU32(kc))
-      return false;
-  }
-  for (auto &did : info.display_ids) {
-    if (!r.ReadU32(did))
-      return false;
-  }
-  if (!r.ReadFloat(info.mod_health))
+  std::uint32_t ignored = 0;
+  if (!r.ReadU32(ignored)) // unknown / wdbField11
     return false;
-  if (!r.ReadFloat(info.mod_mana))
+  if (!r.ReadU32(ignored)) // pet spell list id / wdbField12
+    return false;
+  if (!r.ReadU32(info.display_ids[0]))
+    return false;
+  std::uint8_t civilian = 0;
+  if (!r.ReadU8(civilian))
     return false;
   if (!r.ReadU8(info.racial_leader))
-    return false;
-  for (auto &qi : info.quest_items) {
-    if (!r.ReadU32(qi))
-      return false;
-  }
-  if (!r.ReadU32(info.movement_id))
     return false;
   if (consumed_bytes != nullptr) {
     *consumed_bytes = r.Position();
@@ -555,12 +510,6 @@ bool QueryCache::HandleItemQuerySingleResponse(const std::uint8_t *data,
   }
   if (!r.ReadU32(info.subclass))
     return false;
-  {
-    std::int32_t v;
-    if (!r.ReadI32(v))
-      return false;
-    info.sound_override = v;
-  }
   if (!r.ReadCString(info.name, kItemNameMaxBytes))
     return false;
   std::string skip;
@@ -577,8 +526,6 @@ bool QueryCache::HandleItemQuerySingleResponse(const std::uint8_t *data,
     info.quality = static_cast<ItemQuality>(value);
   }
   if (!r.ReadU32(info.flags))
-    return false;
-  if (!r.ReadU32(info.flags2))
     return false;
   if (!r.ReadU32(info.buy_price))
     return false;
@@ -620,45 +567,35 @@ bool QueryCache::HandleItemQuerySingleResponse(const std::uint8_t *data,
   if (!r.ReadU32(info.required_reputation_rank))
     return false;
 
-  {
-    std::int32_t value = 0;
-    if (!r.ReadI32(value))
-      return false;
-    info.max_count = static_cast<std::uint32_t>(value);
-  }
-  {
-    std::int32_t value = 0;
-    if (!r.ReadI32(value))
-      return false;
-    info.stackable = static_cast<std::uint32_t>(value);
-  }
+  if (!r.ReadU32(info.max_count))
+    return false;
+  if (!r.ReadU32(info.stackable))
+    return false;
   if (!r.ReadU32(info.container_slots))
     return false;
 
-  std::uint32_t stats_count;
-  if (!r.ReadU32(stats_count))
-    return false;
-  if (stats_count > kItemMaxStats)
-    return false;
-  for (std::uint32_t i = 0; i < stats_count; ++i) {
+  for (std::size_t i = 0; i < kItemMaxStats; ++i) {
     if (!r.ReadU32(info.stats[i].type))
       return false;
     if (!r.ReadI32(info.stats[i].value))
       return false;
   }
 
-  if (!r.ReadU32(info.scaling_stat_distribution))
-    return false;
-  if (!r.ReadU32(info.scaling_stat_value))
-    return false;
-
-  for (auto &dmg : info.damage) {
-    if (!r.ReadFloat(dmg.min_damage))
+  for (std::size_t i = 0; i < kItemMaxDamages; ++i) {
+    float min_damage = 0.0f;
+    float max_damage = 0.0f;
+    std::uint32_t type = 0;
+    if (!r.ReadFloat(min_damage))
       return false;
-    if (!r.ReadFloat(dmg.max_damage))
+    if (!r.ReadFloat(max_damage))
       return false;
-    if (!r.ReadU32(dmg.type))
+    if (!r.ReadU32(type))
       return false;
+    if (i < info.damage.size()) {
+      info.damage[i].min_damage = min_damage;
+      info.damage[i].max_damage = max_damage;
+      info.damage[i].type = type;
+    }
   }
 
   {
@@ -730,8 +667,6 @@ bool QueryCache::HandleItemQuerySingleResponse(const std::uint8_t *data,
 
   if (!r.ReadU32(info.random_property))
     return false;
-  if (!r.ReadU32(info.random_suffix))
-    return false;
   if (!r.ReadU32(info.block))
     return false;
 
@@ -745,34 +680,6 @@ bool QueryCache::HandleItemQuerySingleResponse(const std::uint8_t *data,
   if (!r.ReadU32(info.map))
     return false;
   if (!r.ReadU32(info.bag_family))
-    return false;
-  if (!r.ReadU32(info.totem_category))
-    return false;
-
-  for (auto &s : info.sockets) {
-    if (!r.ReadU32(s.color))
-      return false;
-    if (!r.ReadU32(s.content))
-      return false;
-  }
-  if (!r.ReadU32(info.socket_bonus))
-    return false;
-  if (!r.ReadU32(info.gem_properties))
-    return false;
-
-  {
-    std::uint32_t rds_u;
-    if (!r.ReadU32(rds_u))
-      return false;
-    info.required_disenchant_skill = rds_u;
-  }
-  if (!r.ReadFloat(info.armor_damage_modifier))
-    return false;
-  if (!r.ReadU32(info.duration))
-    return false;
-  if (!r.ReadU32(info.item_limit_category))
-    return false;
-  if (!r.ReadU32(info.holiday_id))
     return false;
   if (consumed_bytes != nullptr) {
     *consumed_bytes = r.Position();

@@ -1212,7 +1212,15 @@ void UnitMovementRuntime::UpdateBodyFacing(float *vehicle_facing) {
   } else {
 
     float target_facing = owner_.GetLocalFacing();
-    if (!ActiveSpellSuppressesBodyFacingTargetTracking(owner_)) {
+    // Benilla display-facing: while directionally moving, the body stays
+    // pinned to the raw wire facing. Target/interact tracking only owns the
+    // body while standing, otherwise strafing/backpedaling renders rotated.
+    const bool moving_directionally =
+        (mi.flags & (kMoveFlagForward | kMoveFlagBackward |
+                     kMoveFlagStrafeLeft | kMoveFlagStrafeRight)) != 0u ||
+        HasActiveSplineLocomotion();
+    if (!moving_directionally &&
+        !ActiveSpellSuppressesBodyFacingTargetTracking(owner_)) {
       const auto *body_facing_target = [&]() -> const CGUnit_C * {
         if (owner_.Animation().StandSelectionInteractionTargetGuid() != 0u) {
           const auto* const objects = owner_.object_manager();
@@ -1443,6 +1451,21 @@ void UnitMovementRuntime::UpdateSmoothBodyFacing(const float dt_seconds) {
     smooth_body_facing_velocity_ = 0.0f;
     smooth_body_facing_blend_ = 0.0f;
 
+    SettleBodyTwistBoneOverrides();
+    return;
+  }
+
+  // Benilla drive_display_facing (net/motion/facing.rs): the smoother governs
+  // standing turns only. A directionally-moving unit renders its raw facing;
+  // the path sampler owns the yaw. Smoothing movers stalls the rendered yaw
+  // up to the max-lag clamp behind every curve (measured ~90 deg on chases).
+  // Strafe keeps the offset blend below (Benilla ease_strafe_yaw equivalent).
+  const bool moving_forward_or_back =
+      (flags & kForwardBackwardMask) != 0u || HasActiveSplineLocomotion();
+  if (moving_forward_or_back && (flags & kStrafeMask) == 0u) {
+    smooth_body_facing_ = body_facing_;
+    smooth_body_facing_velocity_ = 0.0f;
+    smooth_body_facing_blend_ = 0.0f;
     SettleBodyTwistBoneOverrides();
     return;
   }

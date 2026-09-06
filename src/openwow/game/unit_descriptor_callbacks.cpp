@@ -18,6 +18,7 @@
 #include "openwow/game/tutorial_system.h"
 #include "openwow/game/update_fields.h"
 #include "openwow/game/world_session.h"
+#include "openwow/foundation/diagnostics/logging.h"
 #include "openwow/runtime/time/game_clock.h"
 #include "openwow/ui/game/api/game_lua_api_action.h"
 #include "openwow/ui/game/game_events.h"
@@ -27,8 +28,25 @@
 #include <array>
 #include <cstdint>
 #include <cstring>
+#include <string>
 
 namespace openwow::game {
+
+namespace {
+
+constexpr std::uint16_t UnitSectionOffset(const std::uint16_t field) {
+  return static_cast<std::uint16_t>(
+      (static_cast<std::uint32_t>(field) -
+       static_cast<std::uint32_t>(OBJECT_END)) * sizeof(std::uint32_t));
+}
+
+constexpr std::uint16_t PlayerSectionOffset(const std::uint16_t field) {
+  return static_cast<std::uint16_t>(
+      (static_cast<std::uint32_t>(field) -
+       static_cast<std::uint32_t>(UNIT_END)) * sizeof(std::uint32_t));
+}
+
+}
 
 void CGUnit_C::OnLevelChanged(const WorldSession& session) {
 
@@ -336,17 +354,34 @@ int OnHealthFieldChanged(ObjectManager &objects, WorldSession &session,
     return 1;
   }
   auto *const unit = objects.GetMutableUnit(ObjectGuid(guid));
-  if (unit == nullptr || (old_value > 0) == (*new_value > 0)) {
+  if (unit == nullptr) {
     return 1;
   }
-  if (*new_value <= 0) {
+  const bool was_dead = old_value <= 0;
+  const bool is_dead = *new_value <= 0;
+  // A relogged corpse can observe 0 -> 0: the create block omits zero-valued
+  // HEALTH, so there is no positive-to-zero edge to trigger the normal death
+  // callback.  Keep processing the dead observation; the presentation helper
+  // itself is idempotent.
+  if (!is_dead && was_dead == is_dead) {
+    return 1;
+  }
+  openwow::diagnostics::Log(
+      openwow::diagnostics::LogLevel::kInfo,
+      "DeathTrace: health_transition guid=" +
+          std::to_string(unit->GetGuid().GetRawValue()) +
+          " old=" + std::to_string(old_value) +
+          " new=" + std::to_string(*new_value) +
+          " dynflags=" + std::to_string(unit->State().GetDynamicFlags()) +
+          " stand=" + std::to_string(unit->Animation().GetStandState()));
+  if (is_dead) {
     if (unit->IsActiveMover()) {
       if (auto *const input = GetInputControlSingleton(); input != nullptr) {
         input->ProcessMovementNow(core::GameClock::GetTickCount32(), true);
       }
     }
     unit->Interaction().HandleDeathStateTransition(session);
-    unit->Animation().PlayDeadTransitionAnimation(session, false);
+    unit->Animation().EnsureDeathPresentation(session);
   } else {
     unit->Interaction().HandleAliveStateTransition(session, false);
   }
@@ -374,11 +409,20 @@ int OnDynamicFlagsChanged(ObjectManager &objects, WorldSession &session,
     TutorialSystem::Instance().TriggerTutorial(6u);
   }
   if (((old_flags ^ new_flags) & kUnitDynFlagDead) != 0u) {
+    openwow::diagnostics::Log(
+        openwow::diagnostics::LogLevel::kInfo,
+        "DeathTrace: dynamic_transition guid=" +
+            std::to_string(raw_guid) +
+            " old=" + std::to_string(old_flags) +
+            " new=" + std::to_string(new_flags) +
+            " health=" + std::to_string(unit->State().GetHealth()) +
+            " stand=" + std::to_string(unit->Animation().GetStandState()));
     auto &dispatch = ui::game::ScriptEventDispatch::Get();
     dispatch.FireUnitHealth(raw_guid);
     dispatch.FireUnitPowerSpecific(raw_guid, unit->State().GetPowerType());
     if ((new_flags & kUnitDynFlagDead) != 0u) {
       unit->Interaction().HandleDeathStateTransition(session);
+      unit->Animation().PlayDeadTransitionAnimation(session, false);
     } else {
       unit->Interaction().HandleAliveStateTransition(session, true);
     }
@@ -434,29 +478,38 @@ void RegisterUnitDescriptorCallbacks(WorldSession& session) {
   };
 
   record(registry.RegisterTypeSectionCallback(
-      TypeID::kUnit, 0x00, 16,
+      TypeID::kUnit, UnitSectionOffset(UNIT_FIELD_CHARM),
+      4 * sizeof(std::uint32_t),
       [&session](const DescriptorFieldChangeView& change) {
         if (!change.is_create) {
           OnComboTargetDescriptorChanged(session, change);
         }
       }));
 
-  for (std::uint16_t off = 0xC8; off < 0xD4; off += 4) {
+  constexpr std::uint16_t kVirtualItemDisplayByteBase =
+      UnitSectionOffset(UNIT_VIRTUAL_ITEM_DISPLAY);
+  constexpr std::uint16_t kVirtualItemDisplayByteEnd =
+      UnitSectionOffset(UNIT_VIRTUAL_ITEM_INFO);
+  for (std::uint16_t off = kVirtualItemDisplayByteBase;
+       off < kVirtualItemDisplayByteEnd; off += sizeof(std::uint32_t)) {
     record(registry.RegisterTypeSectionCallback(
-        TypeID::kUnit, off, 4,
-        [](const DescriptorFieldChangeView& v) {
+        TypeID::kUnit, off, sizeof(std::uint32_t),
+        [kVirtualItemDisplayByteBase](const DescriptorFieldChangeView& v) {
           auto* const objects = v.object.object_manager();
           auto* unit = objects != nullptr ? objects->GetMutableUnit(v.guid)
                                           : nullptr;
           if (unit != nullptr) {
-            const std::uint32_t slot = (v.offset_bytes - 0xC8) / 4;
+            const std::uint32_t slot =
+                (v.offset_bytes - kVirtualItemDisplayByteBase) /
+                sizeof(std::uint32_t);
             unit->OnVirtualItemDisplayChanged(slot);
           }
         }));
   }
 
   record(registry.RegisterTypeSectionCallback(
-      TypeID::kUnit, 0xC0, 4,
+      TypeID::kUnit, UnitSectionOffset(UNIT_FIELD_LEVEL),
+      sizeof(std::uint32_t),
       [&session](const DescriptorFieldChangeView& v) {
         const auto guid_raw = v.guid.GetRawValue();
         auto* const objects = v.object.object_manager();
@@ -470,15 +523,21 @@ void RegisterUnitDescriptorCallbacks(WorldSession& session) {
       }));
 
   {
-    constexpr std::uint16_t kVisibleItemSectionByteBase = 0x21C;
-    constexpr std::uint16_t kVisibleItemStrideBytes = 8;
     constexpr std::uint32_t kVisibleItemSlotCount = 19;
+    constexpr std::uint16_t kVisibleItemSectionByteBase =
+        PlayerSectionOffset(PLAYER_VISIBLE_ITEM_1_CREATOR);
+    constexpr std::uint16_t kVisibleItemStrideBytes = static_cast<std::uint16_t>(
+        ((static_cast<std::uint32_t>(PLAYER_VISIBLE_ITEM_LAST_CREATOR) -
+          static_cast<std::uint32_t>(PLAYER_VISIBLE_ITEM_1_CREATOR)) /
+         (kVisibleItemSlotCount - 1u)) * sizeof(std::uint32_t));
+    constexpr std::uint16_t kVisibleItemSectionSize = static_cast<std::uint16_t>(
+        kVisibleItemStrideBytes * kVisibleItemSlotCount);
     constexpr std::uint32_t kRangedEquipSlot = 17;
 
     constexpr std::int32_t kSheatheStateRanged = 2;
     record(registry.RegisterTypeSectionCallback(
-        TypeID::kPlayer, kVisibleItemSectionByteBase,
-        kVisibleItemStrideBytes * kVisibleItemSlotCount,
+      TypeID::kPlayer, kVisibleItemSectionByteBase,
+        kVisibleItemSectionSize,
         [&session](const DescriptorFieldChangeView& v) {
           const std::uint32_t slot =
               (v.offset_bytes - kVisibleItemSectionByteBase) /
@@ -538,7 +597,8 @@ void RegisterUnitDescriptorCallbacks(WorldSession& session) {
       }));
 
   record(registry.RegisterTypeSectionCallback(
-      TypeID::kUnit, 0x48, 4,
+      TypeID::kUnit, UnitSectionOffset(UNIT_FIELD_HEALTH),
+      sizeof(std::uint32_t),
       [&session](const DescriptorFieldChangeView& v) {
         const auto guid = v.guid.GetRawValue();
         std::int32_t new_health = 0;
@@ -556,9 +616,11 @@ void RegisterUnitDescriptorCallbacks(WorldSession& session) {
         }
       }));
 
-  for (std::uint16_t off = 0x4C; off <= 0x64; off += 4) {
+  for (std::uint16_t off = UnitSectionOffset(UNIT_FIELD_POWER1);
+       off <= UnitSectionOffset(UNIT_FIELD_POWER7);
+       off += sizeof(std::uint32_t)) {
     record(registry.RegisterTypeSectionCallback(
-        TypeID::kUnit, off, 4,
+        TypeID::kUnit, off, sizeof(std::uint32_t),
         [off, &session](const DescriptorFieldChangeView& v) {
           auto* const objects = v.object.object_manager();
           if (objects != nullptr) {
@@ -569,9 +631,11 @@ void RegisterUnitDescriptorCallbacks(WorldSession& session) {
         }));
   }
 
-  for (std::uint16_t off = 0x6C; off <= 0x84; off += 4) {
+  for (std::uint16_t off = UnitSectionOffset(UNIT_FIELD_MAXPOWER1);
+       off <= UnitSectionOffset(UNIT_FIELD_MAXPOWER7);
+       off += sizeof(std::uint32_t)) {
     record(registry.RegisterTypeSectionCallback(
-        TypeID::kUnit, off, 4,
+        TypeID::kUnit, off, sizeof(std::uint32_t),
         [off, &session](const DescriptorFieldChangeView& v) {
           auto* const objects = v.object.object_manager();
           if (objects != nullptr) {
@@ -583,7 +647,7 @@ void RegisterUnitDescriptorCallbacks(WorldSession& session) {
   }
 
   record(registry.RegisterTypeSectionCallback(
-      TypeID::kUnit, 0x47, 1,
+      TypeID::kUnit, UnitSectionOffset(UNIT_FIELD_BYTES_0) + 3, 1,
       [&session](const DescriptorFieldChangeView& v) {
         auto* const objects = v.object.object_manager();
         if (objects != nullptr) {
@@ -593,14 +657,18 @@ void RegisterUnitDescriptorCallbacks(WorldSession& session) {
       }));
 
   record(registry.RegisterTypeSectionCallback(
-      TypeID::kUnit, 0xDC, 4,
+      TypeID::kUnit, UnitSectionOffset(UNIT_FIELD_AURA),
+      static_cast<std::uint16_t>(
+          UnitSectionOffset(UNIT_FIELD_AURAAPPLICATIONS_LAST) -
+          UnitSectionOffset(UNIT_FIELD_AURA) + sizeof(std::uint32_t)),
       [](const DescriptorFieldChangeView& v) {
         const auto guid_raw = v.guid.GetRawValue();
         openwow::ui::game::ScriptEventDispatch::Get().FireUnitAura(guid_raw);
       }));
 
   record(registry.RegisterTypeSectionCallback(
-      TypeID::kUnit, 0xD4, 4,
+      TypeID::kUnit, UnitSectionOffset(UNIT_FIELD_FLAGS),
+      sizeof(std::uint32_t),
       [&session](const DescriptorFieldChangeView& v) {
         auto* const objects = v.object.object_manager();
         auto* unit = objects != nullptr ? objects->GetMutableUnit(v.guid)
@@ -615,7 +683,8 @@ void RegisterUnitDescriptorCallbacks(WorldSession& session) {
       }));
 
   record(registry.RegisterTypeSectionCallback(
-      TypeID::kUnit, 0xD8, 4,
+      TypeID::kUnit, UnitSectionOffset(UNIT_CHANNEL_SPELL),
+      sizeof(std::uint32_t),
       [](const DescriptorFieldChangeView& v) {
         const auto guid = v.guid.GetRawValue();
         std::uint32_t new_val = 0;
@@ -630,7 +699,7 @@ void RegisterUnitDescriptorCallbacks(WorldSession& session) {
       }));
 
   record(registry.RegisterTypeSectionCallback(
-      TypeID::kUnit, 0x112, 1,
+      TypeID::kUnit, UnitSectionOffset(UNIT_FIELD_BYTES_1) + 2, 1,
       [&session](const DescriptorFieldChangeView& v) {
         const auto guid = v.guid.GetRawValue();
         std::uint8_t new_byte = 0;
@@ -649,7 +718,8 @@ void RegisterUnitDescriptorCallbacks(WorldSession& session) {
       }));
 
   record(registry.RegisterTypeSectionCallback(
-      TypeID::kUnit, 0x1D1, 1,
+      TypeID::kUnit, UnitSectionOffset(UNIT_FIELD_FLAGS),
+      sizeof(std::uint32_t),
       [&session](const DescriptorFieldChangeView& v) {
 
         auto* const objects = v.object.object_manager();
@@ -664,7 +734,7 @@ void RegisterUnitDescriptorCallbacks(WorldSession& session) {
       }));
 
   record(registry.RegisterTypeSectionCallback(
-      TypeID::kUnit, 0x113, 1,
+      TypeID::kUnit, UnitSectionOffset(UNIT_FIELD_BYTES_1) + 3, 1,
       [](const DescriptorFieldChangeView& v) {
         auto* const objects = v.object.object_manager();
         if (objects != nullptr) {
@@ -673,7 +743,8 @@ void RegisterUnitDescriptorCallbacks(WorldSession& session) {
       }));
 
   record(registry.RegisterTypeSectionCallback(
-      TypeID::kUnit, 0xFC, 4,
+      TypeID::kUnit, UnitSectionOffset(UNIT_FIELD_MOUNTDISPLAYID),
+      sizeof(std::uint32_t),
       [&session](const DescriptorFieldChangeView& v) {
         auto* const objects = v.object.object_manager();
         if (objects != nullptr) {
@@ -683,7 +754,8 @@ void RegisterUnitDescriptorCallbacks(WorldSession& session) {
       }));
 
   record(registry.RegisterTypeSectionCallback(
-      TypeID::kUnit, 0xC4, 4,
+      TypeID::kUnit, UnitSectionOffset(UNIT_FIELD_FACTIONTEMPLATE),
+      sizeof(std::uint32_t),
       [&session](const DescriptorFieldChangeView& v) {
         auto* const objects = v.object.object_manager();
         if (objects != nullptr) {
@@ -692,7 +764,8 @@ void RegisterUnitDescriptorCallbacks(WorldSession& session) {
       }));
 
   record(registry.RegisterTypeSectionCallback(
-      TypeID::kUnit, 0x18, 16,
+      TypeID::kUnit, UnitSectionOffset(UNIT_FIELD_SUMMONEDBY),
+      4 * sizeof(std::uint32_t),
       [&session](const DescriptorFieldChangeView& v) {
 
         const auto unit_guid = v.guid;
@@ -727,7 +800,8 @@ void RegisterUnitDescriptorCallbacks(WorldSession& session) {
       }));
 
   record(registry.RegisterTypeSectionCallback(
-      TypeID::kUnit, 0xF4, 4,
+      TypeID::kUnit, UnitSectionOffset(UNIT_FIELD_DISPLAYID),
+      sizeof(std::uint32_t),
       [&session](const DescriptorFieldChangeView& v) {
         auto* const objects = v.object.object_manager();
         if (objects != nullptr) {
@@ -737,7 +811,7 @@ void RegisterUnitDescriptorCallbacks(WorldSession& session) {
       }));
 
   record(registry.RegisterTypeSectionCallback(
-      TypeID::kUnit, 0x110, 1,
+      TypeID::kUnit, UnitSectionOffset(UNIT_FIELD_BYTES_1), 1,
       [&session](const DescriptorFieldChangeView& v) {
         auto* const objects = v.object.object_manager();
         auto* const unit =
@@ -755,13 +829,14 @@ void RegisterUnitDescriptorCallbacks(WorldSession& session) {
       }));
 
   record(registry.RegisterTypeSectionCallback(
-      TypeID::kUnit, 0x1D3, 1,
+      TypeID::kUnit, UnitSectionOffset(UNIT_FIELD_BYTES_2) + 3, 1,
       [](const DescriptorFieldChangeView& v) {
         CGUnit_C::OnShapeshiftFormChanged(v.guid.GetRawValue());
       }));
 
   record(registry.RegisterTypeSectionCallback(
-      TypeID::kUnit, 0x130, 4,
+      TypeID::kUnit, UnitSectionOffset(UNIT_NPC_FLAGS),
+      sizeof(std::uint32_t),
       [&session](const DescriptorFieldChangeView& v) {
         const auto guid = v.guid.GetRawValue();
         std::uint32_t new_val = 0;
@@ -779,7 +854,8 @@ void RegisterUnitDescriptorCallbacks(WorldSession& session) {
       }));
 
   record(registry.RegisterTypeSectionCallback(
-      TypeID::kUnit, 0x134, 4,
+      TypeID::kUnit, UnitSectionOffset(UNIT_NPC_EMOTESTATE),
+      sizeof(std::uint32_t),
       [&session](const DescriptorFieldChangeView& v) {
         auto* const objects = v.object.object_manager();
         auto* const unit =
@@ -797,7 +873,8 @@ void RegisterUnitDescriptorCallbacks(WorldSession& session) {
       }));
 
   record(registry.RegisterTypeSectionCallback(
-      TypeID::kUnit, 0x118, 4,
+      TypeID::kUnit, UnitSectionOffset(UNIT_FIELD_PET_NAME_TIMESTAMP),
+      sizeof(std::uint32_t),
       [](const DescriptorFieldChangeView& v) {
         const auto guid_raw = v.guid.GetRawValue();
         auto& dispatch = openwow::ui::game::ScriptEventDispatch::Get();
@@ -805,7 +882,9 @@ void RegisterUnitDescriptorCallbacks(WorldSession& session) {
       }));
 
   record(registry.RegisterTypeSectionCallback(
-      TypeID::kUnit, 0x124, 4,
+      TypeID::kUnit,
+      UnitSectionOffset(UNIT_DYNAMIC_FLAGS),
+      sizeof(std::uint32_t),
       [&session](const DescriptorFieldChangeView& v) {
         const auto guid = v.guid.GetRawValue();
         std::uint32_t new_val = 0;
@@ -822,21 +901,34 @@ void RegisterUnitDescriptorCallbacks(WorldSession& session) {
         }
       }));
 
-  record(registry.RegisterTypeSectionCallback(
-      TypeID::kUnit, 0x38, 12,
+  const auto refresh_channel_state =
       [&session](const DescriptorFieldChangeView& v) {
-        const auto guid = v.guid.GetRawValue();
-        const std::uint32_t* new_ptr =
-            v.new_words.empty() ? nullptr : v.new_words.data();
         auto* const objects = v.object.object_manager();
-        if (objects != nullptr) {
-          CGUnit_C::OnChannelObjectOrSpellChanged(*objects, session, guid,
-                                                  new_ptr);
+        auto* const unit =
+            objects != nullptr ? objects->GetMutableUnit(v.guid) : nullptr;
+        if (objects == nullptr || unit == nullptr) {
+          return;
         }
-      }));
+
+        const std::array<std::uint32_t, 3> channel_state = {
+            unit->GetUInt32(UNIT_FIELD_CHANNEL_OBJECT),
+            unit->GetUInt32(static_cast<std::uint16_t>(UNIT_FIELD_CHANNEL_OBJECT + 1)),
+            unit->GetUInt32(UNIT_CHANNEL_SPELL),
+        };
+        CGUnit_C::OnChannelObjectOrSpellChanged(
+            *objects, session, v.guid.GetRawValue(), channel_state.data());
+      };
 
   record(registry.RegisterTypeSectionCallback(
-      TypeID::kUnit, 0x114, 4,
+      TypeID::kUnit, UnitSectionOffset(UNIT_FIELD_CHANNEL_OBJECT),
+      2 * sizeof(std::uint32_t), refresh_channel_state));
+  record(registry.RegisterTypeSectionCallback(
+      TypeID::kUnit, UnitSectionOffset(UNIT_CHANNEL_SPELL),
+      sizeof(std::uint32_t), refresh_channel_state));
+
+  record(registry.RegisterTypeSectionCallback(
+      TypeID::kUnit, UnitSectionOffset(UNIT_FIELD_PETNUMBER),
+      sizeof(std::uint32_t),
       [](const DescriptorFieldChangeView& v) {
         const auto guid_raw = v.guid.GetRawValue();
         auto& dispatch = openwow::ui::game::ScriptEventDispatch::Get();
@@ -865,7 +957,7 @@ void RegisterUnitDescriptorCallbacks(WorldSession& session) {
       }));
 
   record(registry.RegisterTypeSectionCallback(
-      TypeID::kUnit, 0x1D0, 1,
+      TypeID::kUnit, UnitSectionOffset(UNIT_FIELD_BYTES_2), 1,
       [](const DescriptorFieldChangeView& v) {
 
         auto* const objects = v.object.object_manager();
@@ -879,7 +971,8 @@ void RegisterUnitDescriptorCallbacks(WorldSession& session) {
       }));
 
   record(registry.RegisterTypeSectionCallback(
-      TypeID::kUnit, 0x30, 8,
+      TypeID::kUnit, UnitSectionOffset(UNIT_FIELD_TARGET),
+      2 * sizeof(std::uint32_t),
       [](const DescriptorFieldChangeView& v) {
         if (auto* const objects = v.object.object_manager(); objects != nullptr) {
           CGUnit_C::OnTargetFieldChanged(*objects, v.guid.GetRawValue());
@@ -887,7 +980,8 @@ void RegisterUnitDescriptorCallbacks(WorldSession& session) {
       }));
 
   record(registry.RegisterTypeSectionCallback(
-      TypeID::kUnit, 0x230, 4,
+      TypeID::kUnit, UnitSectionOffset(UNIT_FIELD_HOVERHEIGHT),
+      sizeof(std::uint32_t),
       [](const DescriptorFieldChangeView& v) {
         auto* const objects = v.object.object_manager();
         if (objects != nullptr) {

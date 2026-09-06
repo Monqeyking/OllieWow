@@ -6,6 +6,7 @@
 #include "openwow/game/interaction_range.h"
 #include "openwow/game/objects/cgcorpse.h"
 #include "openwow/game/objects/cggameobject.h"
+#include "openwow/game/objects/cgplayer.h"
 #include "openwow/game/objects/cgunit.h"
 #include "openwow/game/objects/unit/unit_movement_runtime.h"
 #include "openwow/game/player_control_runtime.h"
@@ -1302,7 +1303,8 @@ AttackStartOutcome TargetingSystem::StartAttack(std::uint64_t guid, bool keep_fo
   }
 
   const auto& target_unit = static_cast<const CGUnit_C&>(*target);
-  if (!IsInAttackRange(target_unit)) {
+  const bool in_attack_range = IsInAttackRange(target_unit);
+  if (!in_attack_range && spell_id != 0u) {
     StopAttackFollow();
     return trace_outcome(suppress_range_error
                              ? no_action
@@ -1320,10 +1322,24 @@ AttackStartOutcome TargetingSystem::StartAttack(std::uint64_t guid, bool keep_fo
     NotifyAttackStateChanged();
   }
 
-  StopAttackFollow();
+  if (in_attack_range) {
+    StopAttackFollow();
+  } else {
+    StartAttackFollow();
+  }
   if (!attack_swing_active_ || attack_swing_target_guid_ != guid ||
       attack_stop_pending_) {
-    SendAttackSwing(guid);
+    if (spell_id == 0u) {
+      if (auto* const active_player = session_->objects().GetActivePlayer();
+          active_player != nullptr) {
+        active_player->EngageTarget(*session_, ObjectGuid(guid),
+                                    suppress_range_error);
+      } else {
+        SendAttackSwing(guid);
+      }
+    } else {
+      SendAttackSwing(guid);
+    }
     attack_swing_active_ = true;
     attack_swing_target_guid_ = guid;
   }

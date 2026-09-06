@@ -3,12 +3,65 @@
 #include "openwow/render/m2/m2_model_repository.h"
 #include "openwow/render/m2/m2_skin_profile.h"
 #include "openwow/render/m2/m2_texture_unit_preparation.h"
+#include "openwow/foundation/diagnostics/logging.h"
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
+#include <cstring>
 #include <limits>
+#include <string>
 
 namespace openwow::render::m2 {
+
+namespace {
+
+[[nodiscard]] bool M2ModelDiagEnabled() {
+  static const bool enabled = [] {
+    const char *value = std::getenv("OPENWOW_M2_DIAG");
+    return value != nullptr && value[0] != '\0' && std::strcmp(value, "0") != 0;
+  }();
+  return enabled;
+}
+
+void TraceParsedModelAnimationTable(const std::string &path,
+                                    const data::model::M2Model &model) {
+  if (!M2ModelDiagEnabled()) {
+    return;
+  }
+  std::string first_ids;
+  std::string first_flags;
+  std::size_t external_count = 0u;
+  const std::size_t shown =
+      std::min<std::size_t>(model.animation_sequences.size(), 12u);
+  for (std::size_t i = 0; i < shown; ++i) {
+    if (i != 0u) {
+      first_ids += ",";
+      first_flags += ",";
+    }
+    first_ids += std::to_string(model.animation_sequences[i].animation_id);
+    first_flags += std::to_string(model.animation_sequences[i].flags);
+  }
+  for (const auto &sequence : model.animation_sequences) {
+    if (data::model::M2SequenceUsesExternalData(sequence)) {
+      ++external_count;
+    }
+  }
+  openwow::diagnostics::Log(
+      openwow::diagnostics::LogLevel::kInfo,
+      "M2Diag: model path=" + path +
+          " version=" + std::to_string(model.header.version) +
+          " sequences=" +
+          std::to_string(model.animation_sequences.size()) +
+          " external=" + std::to_string(external_count) +
+          " playable=" +
+          std::to_string(model.playable_animation_lookup.size()) +
+          " bones=" + std::to_string(model.bones.size()) +
+          " first_ids=[" + first_ids + "]" + " first_flags=[" +
+          first_flags + "]");
+}
+
+}
 
 M2PreparedModel::M2PreparedModel() = default;
 M2PreparedModel::~M2PreparedModel() = default;
@@ -135,6 +188,7 @@ M2ModelPrepareResult PrepareM2ModelPackage(
             .reason = M2ResultReason::kParseFailed,
             .detail = parsed.error};
   }
+  TraceParsedModelAnimationTable(identity.load_path, parsed.model);
 
   detail::M2ModelResource resource;
   resource.model_path = identity.load_path;

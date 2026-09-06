@@ -87,15 +87,22 @@ struct ExternalSequenceSources {
   std::vector<std::vector<std::uint8_t>> blobs;
   std::vector<int> reader_index_by_sequence;
   std::vector<bool> expects_external_data;
+  // Classic v256 files keep usable track data inline even when the sequence
+  // flags lack the WotLK "resident" bit (proven by the reference client,
+  // which has no .anim concept). When set and the external file is missing,
+  // track readers fall back to the inline data instead of storing empty sets.
+  bool allow_inline_fallback{false};
 };
 
 ExternalSequenceSources
 BuildExternalSequenceSources(const std::vector<M2AnimationSequenceRecord> &animation_sequences,
                              std::string_view model_path,
-                             const M2ExternalFileLoader *external_file_loader) {
+                             const M2ExternalFileLoader *external_file_loader,
+                             const bool allow_inline_fallback = false) {
   ExternalSequenceSources sources;
   sources.reader_index_by_sequence.assign(animation_sequences.size(), -1);
   sources.expects_external_data.assign(animation_sequences.size(), false);
+  sources.allow_inline_fallback = allow_inline_fallback;
   sources.readers.reserve(animation_sequences.size());
   sources.blobs.reserve(animation_sequences.size());
 
@@ -486,14 +493,22 @@ bool ReadTrackData(const BinaryReader &r, const M2TrackHeader &h,
     const bool expects_external_data = per_sequence_track && external_sources != nullptr &&
                                        i < external_sources->expects_external_data.size() &&
                                        external_sources->expects_external_data[i];
+    bool inline_fallback = false;
     if (expects_external_data) {
       const int reader_index = external_sources->reader_index_by_sequence[i];
       if (reader_index < 0 ||
           static_cast<std::size_t>(reader_index) >= external_sources->readers.size()) {
-        out->AppendEmptySet();
-        continue;
+        if (!external_sources->allow_inline_fallback) {
+          out->AppendEmptySet();
+          continue;
+        }
+        // The external file is missing; fall through to the inline reader
+        // below. When the inline offsets are invalid the sequence keeps
+        // today's empty-set behavior instead of failing the whole model.
+        inline_fallback = true;
+      } else {
+        source_reader = &external_sources->readers[static_cast<std::size_t>(reader_index)];
       }
-      source_reader = &external_sources->readers[static_cast<std::size_t>(reader_index)];
     }
 
     const auto times = source_reader->ReadVector<std::uint32_t>(
@@ -507,6 +522,10 @@ bool ReadTrackData(const BinaryReader &r, const M2TrackHeader &h,
     const auto values =
         source_reader->ReadVector<T>(static_cast<std::size_t>(v_arr.offset), value_count);
     if (!times.has_value() || !values.has_value()) {
+      if (inline_fallback) {
+        out->AppendEmptySet();
+        continue;
+      }
       if (expects_external_data) {
         if (error)
           *error = "M2: external sequence track data out of bounds";
@@ -551,19 +570,28 @@ bool ReadDiscreteTrackTimes(const BinaryReader &r, const M2DiscreteTrackHeader &
     const bool expects_external_data = per_sequence_track && external_sources != nullptr &&
                                        i < external_sources->expects_external_data.size() &&
                                        external_sources->expects_external_data[i];
+    bool inline_fallback = false;
     if (expects_external_data) {
       const int reader_index = external_sources->reader_index_by_sequence[i];
       if (reader_index < 0 ||
           static_cast<std::size_t>(reader_index) >= external_sources->readers.size()) {
-        out->times_ms.emplace_back();
-        continue;
+        if (!external_sources->allow_inline_fallback) {
+          out->times_ms.emplace_back();
+          continue;
+        }
+        inline_fallback = true;
+      } else {
+        source_reader = &external_sources->readers[static_cast<std::size_t>(reader_index)];
       }
-      source_reader = &external_sources->readers[static_cast<std::size_t>(reader_index)];
     }
 
     const auto times = source_reader->ReadVector<std::uint32_t>(
         static_cast<std::size_t>(t_arr.offset), static_cast<std::size_t>(t_arr.count));
     if (!times.has_value()) {
+      if (inline_fallback) {
+        out->times_ms.emplace_back();
+        continue;
+      }
       if (expects_external_data) {
         if (error)
           *error = "M2: external sequence event track data out of bounds";
@@ -741,11 +769,13 @@ std::optional<M2HeaderFixedPrefixParse> ReadM2HeaderFixedPrefix(
   const auto global_sequences = ReadM2Array(r, &off);
   const auto animations = ReadM2Array(r, &off);
   const auto animation_lookup = ReadM2Array(r, &off);
+  std::optional<M2Array> playable_animation_lookup;
   if (h.version == kClassicM2Version) {
     // Classic v256 has a playable-animation lookup array between the normal
-    // animation lookup and the bone array.  It is not needed by the current
-    // renderer, but it must be consumed to keep every following offset exact.
-    if (!ReadM2Array(r, &off)) {
+    // animation lookup and the bone array. Keep it so animation requests can
+    // resolve through the model's own Classic-compatible mapping.
+    playable_animation_lookup = ReadM2Array(r, &off);
+    if (!playable_animation_lookup) {
       if (error) *error = "M2: truncated playable animation lookup";
       return std::nullopt;
     }
@@ -761,6 +791,7 @@ std::optional<M2HeaderFixedPrefixParse> ReadM2HeaderFixedPrefix(
   h.global_sequences = *global_sequences;
   h.animations = *animations;
   h.animation_lookup = *animation_lookup;
+  h.playable_animation_lookup = playable_animation_lookup.value_or(M2Array{});
   h.bones = *bones;
   h.key_bone_lookup = *key_bone_lookup;
   h.vertices = *vertices;
@@ -896,6 +927,27 @@ std::vector<std::uint16_t> BuildM2FirstSequenceIndexByAnimationId(
 
 bool M2SequenceUsesExternalData(const M2AnimationSequenceRecord &sequence) noexcept {
   return (sequence.flags & kM2SequenceFlagDataResident) == 0u;
+}
+
+bool M2ModelSequenceHasInlineTrackData(const M2Model &model,
+                                       const std::size_t sequence_index) noexcept {
+  const auto has_keys = [sequence_index](const auto &track) noexcept {
+    if (track.segments.empty()) {
+      return false;
+    }
+    // Classic files may share one timeline across sequences; per-sequence
+    // tables address their own slot. Clamp shared tables to slot 0.
+    const std::size_t slot =
+        std::min(sequence_index, track.segments.size() - 1u);
+    return !track.SetTimes(slot).empty();
+  };
+  for (const auto &bone : model.bones) {
+    if (has_keys(bone.translation) || has_keys(bone.rotation) ||
+        has_keys(bone.scaling)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 std::optional<std::size_t> ResolveM2SequenceDataOwner(
@@ -1177,8 +1229,20 @@ M2LoadResult LoadM2FromBytes(const std::vector<std::uint8_t> &bytes,
     out.model.animation_lookup = *lookup;
   }
 
+  if (h.playable_animation_lookup.count > 0) {
+    const auto lookup = r.ReadVector<M2PlayableAnimationRecord>(
+        static_cast<std::size_t>(h.playable_animation_lookup.offset),
+        static_cast<std::size_t>(h.playable_animation_lookup.count));
+    if (!lookup.has_value()) {
+      out.error = "M2: playable_animation_lookup out of bounds";
+      return out;
+    }
+    out.model.playable_animation_lookup = *lookup;
+  }
+
   const ExternalSequenceSources external_sequence_sources = BuildExternalSequenceSources(
-      out.model.animation_sequences, virtual_path, &external_file_loader);
+      out.model.animation_sequences, virtual_path, &external_file_loader,
+      classic);
 
   if (h.render_flags.count > 0) {
     const std::size_t count = static_cast<std::size_t>(h.render_flags.count);
