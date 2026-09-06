@@ -47,6 +47,15 @@ void PushPrefixedField(lua_State* const state, const int table_index,
   lua_gettable(state, table);
 }
 
+std::string FrameScriptName(lua_State* const state, const int frame_index) {
+  const int frame = lua_absindex(state, frame_index);
+  lua_getfield(state, frame, "__ow_name");
+  const char* const name = lua_tostring(state, -1);
+  std::string result = name != nullptr && *name != '\0' ? name : "<unnamed>";
+  lua_pop(state, 1);
+  return result;
+}
+
 void FormatLegacyArgumentName(char (&buffer)[32], const int one_based_index) {
   buffer[0] = 'a';
   buffer[1] = 'r';
@@ -332,8 +341,11 @@ FrameScriptInvocationResult InvokeFrameScriptHandler(
         lua_isstring(state, -1) != 0 ? lua_tostring(state, -1) : nullptr;
     openwow::diagnostics::Log(
         openwow::diagnostics::LogLevel::kWarn,
-        std::string("FrameScript handler failed: ") +
-            (handler != nullptr ? handler : "<unnamed>") + ": " +
+        "Lua handler failed: frame=" + FrameScriptName(state, frame) +
+            " handler=" + (handler != nullptr ? handler : "<unnamed>") +
+            " kind=" +
+            (kind == FrameScriptInvocationKind::kEvent ? "event" : "callback") +
+            ": " +
             (message != nullptr ? message : "unknown Lua error"));
   }
   return {.invoked = true, .status = status};

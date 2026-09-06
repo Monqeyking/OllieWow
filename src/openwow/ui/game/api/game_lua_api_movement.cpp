@@ -12,6 +12,7 @@
 #include "openwow/game/vehicle_passenger.h"
 #include "openwow/game/vehicle_system.h"
 #include "openwow/game/world_session.h"
+#include "openwow/foundation/diagnostics/logging.h"
 #include "openwow/input/input_control.h"
 #include "openwow/input/input_manager.h"
 #include "openwow/render/scene/world_frame.h"
@@ -333,6 +334,8 @@ void CaptureLuaWorldClick() {
   auto *const world_frame =
       session != nullptr ? session->world_frame() : nullptr;
   if (world_frame == nullptr) {
+    openwow::diagnostics::Log(openwow::diagnostics::LogLevel::kWarn,
+                              "InputTrace: world-capture result=no-world-frame");
     return;
   }
 
@@ -340,6 +343,12 @@ void CaptureLuaWorldClick() {
   const auto [mouse_x, mouse_y] =
       openwow::input::InputManager::Get().GetMousePosition();
   const auto pick = world_frame->Pick(mouse_x, mouse_y);
+  openwow::diagnostics::Log(
+      openwow::diagnostics::LogLevel::kWarn,
+      "InputTrace: world-capture position=" + std::to_string(mouse_x) + "," +
+          std::to_string(mouse_y) + " hit=" + std::to_string(pick.hit ? 1 : 0) +
+          " type=" + std::to_string(static_cast<int>(pick.type)) +
+          " guid=" + std::to_string(pick.guid.GetRawValue()));
   if (pick.hit &&
       pick.type != openwow::render::PickResult::HitType::kTerrain &&
       pick.type != openwow::render::PickResult::HitType::kNone &&
@@ -375,23 +384,10 @@ void ProcessLuaInputControlMovement(::openwow::game::CInputControl &control,
     return;
   }
 
-  const int net_forward = control.ComputeNetForward();
   const auto mover_guid =
       g_process_movement_session->player_control_runtime().ActiveMoverGuid();
   auto *const mover = g_process_movement_session->objects().GetMutableUnit(
       mover_guid);
-  if (net_forward != 0) {
-    openwow::diagnostics::Log(
-        openwow::diagnostics::LogLevel::kWarn,
-        "MovementInput: process forward=" + std::to_string(net_forward) +
-            " can_move=" + (decision.can_move ? "1" : "0") +
-            " can_turn=" + (decision.can_turn ? "1" : "0") +
-            " movement_active=" + (decision.movement_active ? "1" : "0") +
-            " flags=" + std::to_string(decision.movement_flags) +
-            " active_mover=" + std::to_string(mover_guid.GetRawValue()) +
-            " mover_present=" + (mover != nullptr ? "1" : "0"));
-  }
-
   if (decision.stop_auto_attack) {
     if (auto *player = const_cast<openwow::game::CGPlayer_C*>(g_process_movement_session->objects().GetLocalPlayerTyped());
         player != nullptr) {
@@ -431,6 +427,15 @@ void DispatchLuaWorldClick(
     WorldSession &session,
     const ::openwow::game::targeting::WorldClickButton button) {
   namespace click = ::openwow::game::targeting;
+  openwow::diagnostics::Log(
+      openwow::diagnostics::LogLevel::kWarn,
+      "InputTrace: world-dispatch button=" +
+          std::to_string(static_cast<int>(button)) + " session-match=" +
+          std::to_string(g_lua_world_click_snapshot.session == &session ? 1 : 0) +
+          " kind=" +
+          std::to_string(static_cast<int>(g_lua_world_click_snapshot.kind)) +
+          " guid=" +
+          std::to_string(g_lua_world_click_snapshot.object.GetRawValue()));
   if (g_lua_world_click_snapshot.session != &session) {
     return;
   }

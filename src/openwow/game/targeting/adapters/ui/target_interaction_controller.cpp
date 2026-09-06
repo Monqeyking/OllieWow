@@ -1,4 +1,6 @@
 #include "openwow/game/targeting/adapters/ui/target_interaction_controller.h"
+
+#include "openwow/foundation/diagnostics/logging.h"
 #include "openwow/game/actions/held_cursor/held_cursor.h"
 
 #include "openwow/audio/playback/sound_runtime.h"
@@ -168,6 +170,12 @@ TargetInteractionResult TargetInteractionController::InteractWithTarget(
   }
 
   const auto *object = session.objects().Get(target);
+  openwow::diagnostics::Log(
+      openwow::diagnostics::LogLevel::kWarn,
+      "InputTrace: target-interaction guid=" +
+          std::to_string(target.GetRawValue()) + " found=" +
+          std::to_string(object != nullptr ? 1 : 0) + " unit=" +
+          std::to_string(object != nullptr && object->IsUnit() ? 1 : 0));
   if (object == nullptr) {
     return TargetInteractionResult::kObjectNotFound;
   }
@@ -178,9 +186,14 @@ TargetInteractionResult TargetInteractionController::InteractWithTarget(
     TryHandleHeldCursorPetInteraction(session, *active_player, target_unit);
   }
 
-  return targeting_.InteractWith(target.GetRawValue())
-             ? TargetInteractionResult::kInteracted
-             : TargetInteractionResult::kObjectNotFound;
+  const bool interacted = targeting_.InteractWith(target.GetRawValue());
+  openwow::diagnostics::Log(
+      openwow::diagnostics::LogLevel::kWarn,
+      "InputTrace: target-interaction guid=" +
+          std::to_string(target.GetRawValue()) + " interacted=" +
+          std::to_string(interacted ? 1 : 0));
+  return interacted ? TargetInteractionResult::kInteracted
+                    : TargetInteractionResult::kObjectNotFound;
 }
 
 }

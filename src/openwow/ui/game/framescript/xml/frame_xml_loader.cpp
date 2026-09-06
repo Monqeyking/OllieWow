@@ -918,10 +918,15 @@ FrameXmlLoadResult FrameXmlLoader::LoadToc(lua_State* L,
           preparation_finished - preparation_started)
           .count());
   openwow::diagnostics::Log(openwow::diagnostics::LogLevel::kInfo,
-                     "FrameXmlLoader: loaded " +
+                     "FrameXmlLoader: addon=" +
+                         (addon_name.empty() ? "<default>"
+                                             : std::string(addon_name)) +
+                         " loaded " +
                          std::to_string(result.xml_files_loaded) + " XML + " +
                          std::to_string(result.lua_files_loaded) +
-                         " Lua files; prepared_xml=" +
+                         " Lua files; file_failures=" +
+                         std::to_string(result.file_failures) +
+                         "; prepared_xml=" +
                          std::to_string(result.prepared_xml_documents) +
                          " prepared_cache_hits=" +
                          std::to_string(result.prepared_xml_cache_hits) +

@@ -45,6 +45,22 @@ Gebruik bij twijfel deze volgorde:
 Gebruik geen generieke AzerothCore-, cMaNGOS- of WotLK-definities als de lokale
 bron of client daarvan afwijkt.
 
+## Data als vaststaand uitgangspunt
+
+- Behandel de aanwezige lokale DBC’s, MPQ-bestanden, XML, Lua en overige
+  clientdata als correcte en gewenste Classic/Turtle-brondata, tenzij een
+  concrete bronvergelijking het tegendeel bewijst.
+- Wanneer content ontbreekt, verkeerd wordt getoond of niet werkt, onderzoek
+  eerst de OpenWow-code: VFS/MPQ-uitlezing, DBC-loader, Lua-ABI, native
+  bindings, widget-runtime, packetvertaling en gameplay-flow.
+- Pas geen DBC, MPQ, XML of Lua aan om een fout in de uitlees- of runtime-laag
+  te maskeren. Een wijziging aan brondata is alleen toegestaan wanneer de
+  lokale Client, Source of Benilla aantoonbaar bewijst dat die data zelf niet
+  het gewenste contract bevat.
+- Een succesvolle build of geladen bestand bewijst niet dat de runtime het
+  bestand correct uitleest of gebruikt; valideer de volledige data -> loader
+  -> native API -> Lua/XML- of gameplay-flow.
+
 ## Herkomst van bevindingen en aanbevelingen
 
 Elke diagnose en aanbeveling moet herleidbaar zijn tot een concrete bron. Maak

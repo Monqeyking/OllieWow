@@ -41,6 +41,7 @@
 #include "openwow/game/actions/macros/adapters/lua/macro_lua_api.h"
 #include "openwow/ui/game/script_event_dispatch.h"
 #include "openwow/ui/lua_numeric.h"
+#include "openwow/foundation/diagnostics/logging.h"
 
 #include <algorithm>
 #include <atomic>
@@ -916,8 +917,21 @@ std::uint64_t GetCurrentTargetGuid(WorldSession &session) {
   return session.objects().GetTargetGuid().GetRawValue();
 }
 
-std::optional<std::uint64_t> ResolveUseActionTargetGuid(lua_State *L, WorldSession &session) {
-  if (!lua_isstring(L, 2) || SafeLuaString(L, 2).empty()) {
+std::optional<std::uint64_t> ResolveUseActionTargetGuid(lua_State *L,
+                                                        WorldSession &session,
+                                                        const bool on_self) {
+  // Vanilla UseAction(action [, checkCursor [, onSelf]]) uses the second
+  // argument for checkCursor and the third for self-cast. FrameXML passes
+  // checkCursor as "0"/"1" strings: those are never a unit token. Keep the
+  // old string-target form as a narrow compatibility fallback for existing
+  // non-Vanilla callers, using a strict string-type check (lua_isstring is
+  // also true for numbers in Lua 5.1).
+  const auto unit_token =
+      lua_type(L, 2) == LUA_TSTRING ? SafeLuaString(L, 2) : std::string();
+  if (unit_token.empty() || unit_token == "0" || unit_token == "1") {
+    if (on_self) {
+      return session.objects().GetActivePlayerGuid().GetRawValue();
+    }
 
     if (const auto *profiles = session.binding_profiles(); profiles != nullptr) {
       const auto modifier_state = GetCurrentModifierStateOverride(L).value_or(
@@ -935,8 +949,6 @@ std::optional<std::uint64_t> ResolveUseActionTargetGuid(lua_State *L, WorldSessi
     }
     return GetCurrentTargetGuid(session);
   }
-
-  const auto unit_token = SafeLuaString(L, 2);
 
   const auto guid = ResolveUnitId(&session, unit_token);
   if (guid.IsEmpty()) {
@@ -2520,8 +2532,14 @@ int LuaGetActionText(lua_State *L) {
 }
 
 int LuaUseAction(lua_State *L) {
+  openwow::diagnostics::Log(
+      openwow::diagnostics::LogLevel::kWarn,
+      "InputTrace: UseAction-entry argc=" + std::to_string(lua_gettop(L)) +
+          " arg1-type=" + std::to_string(lua_type(L, 1)) +
+          " arg1=" + (lua_isnumber(L, 1) ? std::to_string(static_cast<int>(lua_tonumber(L, 1)))
+                                         : "<non-number>"));
   if (!lua_isnumber(L, 1)) {
-    return luaL_error(L, "Usage: UseAction(slot, [, target] [, button])");
+    return luaL_error(L, "Usage: UseAction(slot [, checkCursor [, onSelf]])");
   }
 
   auto *session = GetWorldSession(L);
@@ -2531,8 +2549,10 @@ int LuaUseAction(lua_State *L) {
     return 0;
   }
 
+  const bool check_cursor = ReadClientBoolArgOrDefault(L, 2, false);
+  const bool on_self = ReadClientBoolArgOrDefault(L, 3, false);
   const auto slot_index = static_cast<std::size_t>(slot - 1);
-  if (session->held_cursor() != nullptr &&
+  if (check_cursor && session->held_cursor() != nullptr &&
       CursorHasActionPayload(*session->held_cursor()) &&
       !IsPickupPlaceBlockedActionSlot(slot_index)) {
 
@@ -2542,15 +2562,31 @@ int LuaUseAction(lua_State *L) {
     return 0;
   }
 
-  const auto target_guid = ResolveUseActionTargetGuid(L, *session);
+  const auto target_guid = ResolveUseActionTargetGuid(L, *session, on_self);
   if (!target_guid.has_value()) {
+    openwow::diagnostics::Log(
+        openwow::diagnostics::LogLevel::kWarn,
+        "InputTrace: UseAction-return reason=no-target slot=" + std::to_string(slot));
     return 0;
   }
 
   const auto button_arg = GetUseActionButtonArg(L);
   const auto btn = GetResolvedActionButton(*session, slot_index);
-  if (btn.IsEmpty())
+  if (btn.IsEmpty()) {
+    openwow::diagnostics::Log(
+        openwow::diagnostics::LogLevel::kWarn,
+        "InputTrace: UseAction-return reason=empty-slot slot=" + std::to_string(slot));
     return 0;
+  }
+
+  openwow::diagnostics::Log(
+      openwow::diagnostics::LogLevel::kWarn,
+      "UseAction: slot=" + std::to_string(slot) +
+          " type=" + std::to_string(static_cast<int>(btn.type)) +
+          " action=" + std::to_string(btn.action) +
+          " target=" + std::to_string(*target_guid) +
+          " checkCursor=" + std::to_string(check_cursor ? 1 : 0) +
+          " onSelf=" + std::to_string(on_self ? 1 : 0));
 
   if (SlotHasItemAction(btn)) {
     const auto item_id = btn.action;

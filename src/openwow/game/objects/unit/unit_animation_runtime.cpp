@@ -2832,7 +2832,11 @@ void UnitAnimationRuntime::ApplySpellVisualKitAnimation(
     SetChannelingActionLock(true);
   }
 
-  if (dispatch_type == 4u && start_animation >= 0) {
+  // Classic kits carry 0 in the start-animation column when there is no
+  // dedicated start animation (e.g. precast kits 124/100 use body 51/52).
+  // Only prefer the start animation when it names a real one; otherwise the
+  // body animation must play (vanilla precast/channel pose).
+  if (dispatch_type == 4u && start_animation > 0) {
     PlayEmoteAnimation(start_animation, animation_flags);
     emote_internal_flags_ |= kEmoteInternalFlagUseSpellVisualStartAnimation;
     return;

@@ -1,4 +1,5 @@
 #include "openwow/audio/playback/sound_runtime_internal.h"
+#include "openwow/foundation/diagnostics/logging.h"
 
 namespace openwow::audio {
 
@@ -97,6 +98,13 @@ int SoundRuntime::PlaySoundKit(const std::uint32_t sound_kit_id, const float *po
   sh.has_active_sound = true;
   sh.is_playing = true;
   sh.loops = ResolveLoopingPlayback(*kit, options);
+  if (sh.loops) {
+    openwow::diagnostics::Log(
+        openwow::diagnostics::LogLevel::kWarn,
+        "SoundDiag: loop-start kit=" + std::to_string(sound_kit_id) +
+            " handle=" + std::to_string(handle) + " file=" +
+            std::string(selected_file->path));
+  }
   sh.bypass_virtual_play_window = options.force_ambient_loop;
   sh.min_distance = kit->min_distance;
   sh.max_distance = options.max_distance_override > -1.0f

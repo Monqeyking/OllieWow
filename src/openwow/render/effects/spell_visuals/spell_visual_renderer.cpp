@@ -799,6 +799,12 @@ std::uint32_t SpellVisualRenderer::CreateMissileEffect(
     }
 
     if (kit_model.sound_kit_id != 0) {
+      diagnostics::Log(diagnostics::LogLevel::kWarn,
+                       "SpellVisualDiag: missile-flight spell=" +
+                           std::to_string(flight.spell_id) + " model=" +
+                           kit_model.model_path + " speed=" +
+                           std::to_string(flight.speed) + " sound_kit=" +
+                           std::to_string(kit_model.sound_kit_id));
       if (missile_sound_start_sink_) {
         flight.sound_handle =
             missile_sound_start_sink_(kit_model.sound_kit_id, start_pos);
@@ -1768,6 +1774,11 @@ m2::M2ModelInstanceLoadResult SpellVisualRenderer::CreateModelInstance(
   }
 
   auto instance_result = m2_system_->LoadModelInstanceWithFallback(kit_model.model_path);
+  if (instance_result.used_fallback) {
+    diagnostics::Log(diagnostics::LogLevel::kWarn,
+                     "SpellVisualDiag: fallback path=" + kit_model.model_path +
+                         " detail=" + instance_result.detail);
+  }
   if (instance_result.status != m2::M2ResultStatus::kReady ||
       instance_result.instance_id == 0) {
     LogSpellVisualM2Failure("load/create", kit_model.model_path, instance_result);
@@ -1781,6 +1792,11 @@ m2::M2ModelInstanceLoadResult SpellVisualRenderer::CreateModelInstance(
   presentation = m2::MergeM2ResultStatus(
       presentation, m2_system_->SetAlpha(instance_id, 1.0f));
   if (presentation != m2::M2ResultStatus::kReady) {
+    if (kit_model.model_path.find("Restoration_Impact") != std::string::npos) {
+      diagnostics::Log(diagnostics::LogLevel::kWarn,
+                       "SpellVisualDiag: impact-presentation-failed path=" +
+                           kit_model.model_path);
+    }
     DestroyM2Instance(instance_id);
     return {.status = presentation,
             .reason = m2::M2ResultReason::kInvalidHandle,
@@ -1808,11 +1824,22 @@ m2::M2ModelInstanceLoadResult SpellVisualRenderer::CreateModelInstance(
   const auto animation_status =
       BindDefaultModelSequence(instance_result.model_id, instance_id);
   if (m2::IsTerminalM2ResultStatus(animation_status)) {
+    if (kit_model.model_path.find("Restoration_Impact") != std::string::npos) {
+      diagnostics::Log(diagnostics::LogLevel::kWarn,
+                       "SpellVisualDiag: impact-animation-failed path=" +
+                           kit_model.model_path);
+    }
     DestroyM2Instance(instance_id);
     return {.status = animation_status,
             .reason = m2::M2ResultReason::kInvalidQuery,
             .detail = kit_model.model_path,
             .model_id = instance_result.model_id};
+  }
+  if (kit_model.model_path.find("Restoration_Impact") != std::string::npos) {
+    diagnostics::Log(diagnostics::LogLevel::kWarn,
+                     "SpellVisualDiag: impact-created path=" +
+                         kit_model.model_path + " instance=" +
+                         std::to_string(instance_id));
   }
 
   return instance_result;
@@ -1923,11 +1950,20 @@ bool SpellVisualRenderer::ApplyOwnerAttachmentTransform(
   }
   const auto owner_instance = owner_m2_instance_resolver_(inst.parent_handle);
   if (owner_instance == 0u) {
+    if (inst.model_path.find("Restoration_Impact") != std::string::npos) {
+      diagnostics::Log(diagnostics::LogLevel::kWarn,
+                       "SpellVisualDiag: impact-no-owner-instance");
+    }
     return false;
   }
   const auto attachment = m2_system_->QueryAttachmentTransformMatrix(
       owner_instance, static_cast<std::uint32_t>(inst.attachment_id));
   if (attachment.status != m2::M2ResultStatus::kReady) {
+    if (inst.model_path.find("Restoration_Impact") != std::string::npos) {
+      diagnostics::Log(diagnostics::LogLevel::kWarn,
+                       "SpellVisualDiag: impact-attach-failed attach=" +
+                           std::to_string(inst.attachment_id));
+    }
     return false;
   }
 
@@ -1990,8 +2026,16 @@ void SpellVisualRenderer::StartEffectSound(
     return;
   }
 
+  // Kit sounds are one-shots; only lifecycles with an explicit stop visual
+  // (aura-state hums reaped at aura drop, channel hums stopped at channel
+  // stop) may loop. A looping cast-start/transient sound is never reaped and
+  // hangs forever (e.g. Lightning Bolt precast kit sound).
+  const bool loopable_lifecycle =
+      event.action == game::SpellVisualLifecycleAction::kAuraStart ||
+      event.action == game::SpellVisualLifecycleAction::kChannelStart;
   const auto playback_mode =
-      (event.raw_flags & kEffectSoundModeLoop) != 0u
+      (loopable_lifecycle &&
+       (event.raw_flags & kEffectSoundModeLoop) != 0u)
           ? SpellSoundPlaybackMode::kForceLoop
           : SpellSoundPlaybackMode::kForceOneShot;
   const bool bind_to_owner =
@@ -2028,6 +2072,10 @@ void SpellVisualRenderer::StopMissileSound(MissileFlight& flight) {
   if (flight.sound_handle == 0u) {
     return;
   }
+  diagnostics::Log(diagnostics::LogLevel::kWarn,
+                   "SpellVisualDiag: missile-sound-stop spell=" +
+                       std::to_string(flight.spell_id) + " handle=" +
+                       std::to_string(flight.sound_handle));
   if (sound_stop_sink_) {
     sound_stop_sink_(flight.sound_handle, 0.15F);
   }

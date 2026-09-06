@@ -324,41 +324,32 @@ OPENWOW_DBC_SCHEMA(SpellIconEntry,
 )
 
 OPENWOW_DBC_SCHEMA(SpellVisualEntry,
+  // Classic/Turtle layout: 16 u32 columns, no state_done_kit and none of the
+  // later WotLK missile/area columns. Verified against DBFilesClient telle quelle
+  // (row 173 = 173,124,72,283,0,0,1,157,0,1,3087,0,0,0,0,0) and Benilla's
+  // VisualStages mapping (gate=6, model=7, dest_attach=9, flight_sound=10,
+  // strike_sound=14). Unmapped members stay 0 via value-initialization.
   DBC_U32(id, 0)
   DBC_U32(precast_kit, 1)
   DBC_U32(cast_kit, 2)
   DBC_U32(impact_kit, 3)
   DBC_U32(state_kit, 4)
-  DBC_U32(state_done_kit, 5)
-  DBC_U32(channel_kit, 6)
-  DBC_U32(has_missile, 7)
-  DBC_I32(missile_model, 8)
-  DBC_U32(missile_path_type, 9)
-  DBC_I32(missile_destination_attachment, 10)
-  DBC_U32(missile_sound_id, 11)
-  DBC_U32(anim_event_sound_id, 12)
-  DBC_U32(flags, 13)
-  DBC_U32(caster_impact_kit, 14)
-  DBC_U32(target_impact_kit, 15)
-  DBC_I32(missile_attachment_id, 16)
-  DBC_I32(missile_follow_ground_height, 17)
-  DBC_I32(missile_follow_ground_drop_speed, 18)
-  DBC_I32(missile_follow_ground_approach, 19)
-  DBC_U32(missile_follow_ground_flags, 20)
-  DBC_U32(missile_motion_id, 21)
-  DBC_U32(missile_targeting_kit, 22)
-  DBC_U32(instant_area_kit, 23)
-  DBC_U32(impact_area_kit, 24)
-  DBC_U32(persistent_area_kit, 25)
-  DBC_F32(missile_cast_offset_x, 26)
-  DBC_F32(missile_cast_offset_y, 27)
-  DBC_F32(missile_cast_offset_z, 28)
-  DBC_F32(missile_impact_offset_x, 29)
-  DBC_F32(missile_impact_offset_y, 30)
-  DBC_F32(missile_impact_offset_z, 31)
+  DBC_U32(channel_kit, 5)
+  DBC_U32(has_missile, 6)
+  DBC_I32(missile_model, 7)
+  DBC_U32(missile_path_type, 8)
+  DBC_I32(missile_destination_attachment, 9)
+  DBC_U32(missile_sound_id, 10)
+  DBC_U32(anim_event_sound_id, 14)
 )
 
 OPENWOW_DBC_SCHEMA(SpellVisualKitEntry,
+  // Classic/Turtle layout: 35 columns; nine emitter slots (3-11), world
+  // effect (12), sound (13), then four CharProc slots transposed over five
+  // parallel arrays (types 15-18, params 19-22/23-26/27-30/31-34). Verified
+  // against raw rows (kit 72: anim=53 @2, hands=293 @6/7, sound=2561 @13)
+  // and Benilla's VisualKit mapping. No special2/3, shake, or flags columns
+  // exist in this table version; those members stay 0.
   DBC_U32(id, 0)
   DBC_I32(start_anim_id, 1)
   DBC_I32(anim_id, 2)
@@ -371,17 +362,13 @@ OPENWOW_DBC_SCHEMA(SpellVisualKitEntry,
   DBC_U32(left_weapon_effect, 9)
   DBC_U32(right_weapon_effect, 10)
   DBC_U32(special1_effect, 11)
-  DBC_U32(special2_effect, 12)
-  DBC_U32(special3_effect, 13)
-  DBC_U32(world_effect, 14)
-  DBC_U32(sound_id, 15)
-  DBC_U32(shake_id, 16)
-  DBC_U32_ARRAY(proc_type, 17)
-  DBC_F32_ARRAY(proc_param_zero, 21)
-  DBC_F32_ARRAY(proc_param_one, 25)
-  DBC_F32_ARRAY(proc_param_two, 29)
-  DBC_F32_ARRAY(proc_param_three, 33)
-  DBC_U32(flags, 37)
+  DBC_U32(world_effect, 12)
+  DBC_U32(sound_id, 13)
+  DBC_U32_ARRAY(proc_type, 15)
+  DBC_F32_ARRAY(proc_param_zero, 19)
+  DBC_F32_ARRAY(proc_param_one, 23)
+  DBC_F32_ARRAY(proc_param_two, 27)
+  DBC_F32_ARRAY(proc_param_three, 31)
 )
 
 OPENWOW_DBC_SCHEMA(SpellVisualEffectNameEntry,

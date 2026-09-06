@@ -89,6 +89,29 @@ constexpr std::uint32_t kPersistenceScopeMask = 0x30u;
 constexpr char kCombatLogRetentionTimeCVarName[] = "combatLogRetentionTime";
 constexpr int kDefaultCVarConsoleCategory = CVarSystem::kFallbackConsoleCategory;
 
+// Classic OptionsFrame.xml still uses the short 1.12 audio CVar names.
+// Resolve them centrally so reads, writes and defaults all hit the same
+// Sound_* entries used by the audio runtime.
+constexpr std::array<std::pair<std::string_view, std::string_view>, 7>
+    kLegacyAudioCVarAliases = {{
+        {"MasterVolume", "Sound_MasterVolume"},
+        {"SoundVolume", "Sound_SFXVolume"},
+        {"MusicVolume", "Sound_MusicVolume"},
+        {"AmbienceVolume", "Sound_AmbienceVolume"},
+        {"EnableAllSound", "Sound_EnableAllSound"},
+        {"EnableMusic", "Sound_EnableMusic"},
+        {"EnableAmbience", "Sound_EnableAmbience"},
+    }};
+
+std::string_view CanonicalCVarName(const std::string_view name) {
+  for (const auto& [legacy, canonical] : kLegacyAudioCVarAliases) {
+    if (openwow::text::EqualsIgnoreCaseAscii(legacy, name)) {
+      return canonical;
+    }
+  }
+  return name;
+}
+
 constexpr std::array<std::pair<std::string_view, int>, 464>
     kStockConsoleCategories = {{
     {"accountList", 4},
@@ -929,11 +952,11 @@ CVarSystem &CVarSystem::Instance() {
 }
 
 CVarSystem::EntryIterator CVarSystem::FindEntryLocked(std::string_view name) {
-  return cvars_.find(FoldLookupKey(name));
+  return cvars_.find(FoldLookupKey(CanonicalCVarName(name)));
 }
 
 CVarSystem::ConstEntryIterator CVarSystem::FindEntryLocked(std::string_view name) const {
-  return cvars_.find(FoldLookupKey(name));
+  return cvars_.find(FoldLookupKey(CanonicalCVarName(name)));
 }
 
 std::string CVarSystem::FoldLookupKey(const std::string_view name) {
@@ -998,7 +1021,7 @@ void CVarSystem::RegisterNativeCVar(
   {
     std::lock_guard lock(mutex_);
     flags = flags | CVarFlags::Registered;
-    const std::string key = FoldLookupKey(name);
+    const std::string key = FoldLookupKey(CanonicalCVarName(name));
     auto it = cvars_.find(key);
     if (it == cvars_.end()) {
       CVarEntry entry;
@@ -1070,7 +1093,7 @@ void CVarSystem::RegisterScriptCVar(const std::string &name, const std::string &
   bool register_console_command = false;
   {
     std::lock_guard lock(mutex_);
-    const std::string key = FoldLookupKey(name);
+    const std::string key = FoldLookupKey(CanonicalCVarName(name));
     auto it = FindEntryLocked(name);
     if (it == cvars_.end()) {
       CVarEntry entry;

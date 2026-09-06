@@ -131,7 +131,7 @@ std::uint32_t WriteTrajectoryParityBit(const std::uint32_t value, const std::uin
 }
 
 void WriteSpellTargetsPayload(WorldPacket &pkt, const SpellTargets &targets) {
-  pkt.AppendU32(targets.target_mask);
+  pkt.AppendU16(static_cast<std::uint16_t>(targets.target_mask));
 
   constexpr std::uint32_t kObjectTargetMask =
       kTargetFlagUnit | kTargetFlagPvpCorpse | kTargetFlagGameObject |
@@ -147,26 +147,23 @@ void WriteSpellTargetsPayload(WorldPacket &pkt, const SpellTargets &targets) {
   }
 
   if (targets.target_mask & kTargetFlagSourceLocation) {
-    AppendPackedGuid(pkt, targets.src_transport);
     pkt.AppendFloat(targets.src_x);
     pkt.AppendFloat(targets.src_y);
     pkt.AppendFloat(targets.src_z);
   }
 
   if (targets.target_mask & kTargetFlagDestLocation) {
-    AppendPackedGuid(pkt, targets.dst_transport);
     pkt.AppendFloat(targets.dst_x);
     pkt.AppendFloat(targets.dst_y);
     pkt.AppendFloat(targets.dst_z);
   }
 
   if (targets.target_mask & kTargetFlagString) {
-    std::array<std::uint8_t, kSpellTargetStringCapacity> string_target{};
     const auto terminator = targets.str_target.find('\0');
-    const auto length = std::min({targets.str_target.size(), terminator,
-                                  kSpellTargetStringCapacity - 1});
-    std::copy_n(targets.str_target.begin(), length, string_target.begin());
-    pkt.AppendBytes(string_target.data(), string_target.size());
+    const auto length = std::min(targets.str_target.size(), terminator);
+    pkt.AppendBytes(reinterpret_cast<const std::uint8_t*>(targets.str_target.data()),
+                    length);
+    pkt.AppendU8(0);
   }
 }
 
@@ -531,10 +528,13 @@ WorldPacket PacketSender::BuildCastSpell(std::uint8_t cast_count, std::uint32_t 
                                          std::uint8_t cast_flags,
                                          const SpellTargets &targets) {
   WorldPacket pkt(Opcode::CMSG_CAST_SPELL);
-  pkt.AppendU8(cast_count);
+  // Vanilla/Turtle CMSG_CAST_SPELL is spellId followed directly by the
+  // SpellCastTargets block. The cast-count/flags/trajectory prefix was the
+  // incompatible WotLK shape.
+  (void)cast_count;
+  (void)cast_flags;
   pkt.AppendU32(spell_id);
-  pkt.AppendU8(cast_flags);
-  AppendSpellTrajectoryPayload(pkt, cast_flags, targets);
+  WriteSpellTargetsPayload(pkt, targets);
   return pkt;
 }
 

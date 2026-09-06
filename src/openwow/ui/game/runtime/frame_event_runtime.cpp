@@ -1,6 +1,5 @@
 #include "openwow/ui/game/runtime/frame_event_runtime.h"
 
-#include "openwow/foundation/diagnostics/logging.h"
 #include "openwow/ui/game/framescript/core/frame_script_invocation.h"
 #include "openwow/ui/game/game_events.h"
 #include "openwow/ui/game/runtime/frame_store.h"
@@ -77,11 +76,6 @@ void FrameEventRuntime::Update(const float elapsed_seconds) {
     const auto invocation =
         InvokeFrameScriptHandler(lua_, frame_index, "OnUpdate", 1);
     if (invocation.status != LUA_OK) {
-      const char* error = lua_tostring(lua_, -1);
-      openwow::diagnostics::Log(
-          openwow::diagnostics::LogLevel::kWarn,
-          std::string("FrameEventRuntime: OnUpdate error: ") +
-              (error != nullptr ? error : "(null)"));
       lua_pop(lua_, 1);
     }
     lua_settop(lua_, top);

@@ -35,6 +35,10 @@ protected:
   bool sound_engine_initialized_{false};
   int update_time_ms_{0};
   int last_update_time_ms_{0};
+  // Real-clock counterpart for handle timing (fades, retriggers, virtual
+  // window). The day-time delta above freezes while game time is still
+  // syncing, which wedged every sound fade-out at full volume.
+  std::uint32_t last_real_update_ms_{0};
   std::uint32_t voice_chat_toggle_lookup_flags_{0};
   std::uint32_t voice_chat_on_kit_{0};
   std::uint32_t voice_chat_off_kit_{0};

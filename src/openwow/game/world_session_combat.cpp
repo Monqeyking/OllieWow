@@ -111,11 +111,72 @@ constexpr float kTalentWipeInteractionPadding = 4.0f;
 bool IsLocalPlayerSpellEvent(const WorldSession& session,
                              const ObjectGuid& caster_guid);
 
+// Classic FrameXML (CastingBarFrame) listens to the player-only SPELLCAST_*
+// events, not UNIT_SPELLCAST_*. Mirror the packet event for the local player
+// with the vanilla payload shape: START (name, cast ms), STOP/FAILED/
+// INTERRUPTED (none), DELAYED (delay ms), CHANNEL_START (duration ms, name),
+// CHANNEL_UPDATE (remaining ms), CHANNEL_STOP (none). Vanilla has no quiet
+// FAILED variant, so quiet failures stay silent.
+void FireLegacyPlayerSpellcastEvent(WorldSession& session,
+                                    const ObjectGuid caster,
+                                    const std::uint32_t event_id,
+                                    const std::uint32_t spell_id,
+                                    const std::int32_t time_ms) {
+  if (!IsLocalPlayerSpellEvent(session, caster)) {
+    return;
+  }
+  const auto* const dbc = session.GetDbcLoader();
+  const auto* const spell =
+      dbc != nullptr ? dbc->spell().LookupEntry(spell_id) : nullptr;
+  const std::string name =
+      spell != nullptr ? std::string(spell->spell_name) : std::string{};
+  auto& dispatch = ui::game::ScriptEventDispatch::Get();
+  switch (event_id) {
+    case kUnitSpellcastStartEvent:
+      if (time_ms > 0) {
+        dispatch.FireGlobalEventArgs("SPELLCAST_START", {name, time_ms});
+      }
+      return;
+    case kUnitSpellcastStopEvent:
+    case kUnitSpellcastSucceededEvent:
+      dispatch.FireGlobalEvent("SPELLCAST_STOP");
+      return;
+    case kUnitSpellcastFailedEvent:
+      dispatch.FireGlobalEvent("SPELLCAST_FAILED");
+      return;
+    case kUnitSpellcastInterruptedEvent:
+      dispatch.FireGlobalEvent("SPELLCAST_INTERRUPTED");
+      return;
+    case kUnitSpellcastDelayedEvent:
+      if (time_ms >= 0) {
+        dispatch.FireGlobalEventArgs("SPELLCAST_DELAYED", {time_ms});
+      }
+      return;
+    case kUnitSpellcastChannelStartEvent:
+      if (time_ms > 0) {
+        dispatch.FireGlobalEventArgs("SPELLCAST_CHANNEL_START",
+                                     {time_ms, name});
+      }
+      return;
+    case kUnitSpellcastChannelUpdateEvent:
+      if (time_ms >= 0) {
+        dispatch.FireGlobalEventArgs("SPELLCAST_CHANNEL_UPDATE", {time_ms});
+      }
+      return;
+    case kUnitSpellcastChannelStopEvent:
+      dispatch.FireGlobalEvent("SPELLCAST_CHANNEL_STOP");
+      return;
+    default:
+      return;
+  }
+}
+
 void FireUnitSpellcastPacketEvent(WorldSession& session,
                                   const ObjectGuid caster,
                                   const std::uint32_t event_id,
                                   const std::uint32_t spell_id,
-                                  const std::uint8_t cast_id) {
+                                  const std::uint8_t cast_id,
+                                  const std::int32_t legacy_time_ms = -1) {
   const auto* const dbc = session.GetDbcLoader();
   const auto* const spell =
       dbc != nullptr ? dbc->spell().LookupEntry(spell_id) : nullptr;
@@ -132,6 +193,8 @@ void FireUnitSpellcastPacketEvent(WorldSession& session,
   };
   ScriptEvents_FireUnitSpellcastEvent(
       caster.GetRawValue(), event_id, &payload);
+  FireLegacyPlayerSpellcastEvent(session, caster, event_id, spell_id,
+                                 legacy_time_ms);
 }
 
 std::uint64_t FrameScriptClockMilliseconds() {
@@ -1009,7 +1072,8 @@ void WorldSession::HandleSpellStart(const net::wotlk::WorldPacket& pkt) {
                     static_cast<std::int32_t>(info->cast_time), false);
       FireUnitSpellcastPacketEvent(
           *this, info->caster_unit_guid, kUnitSpellcastStartEvent,
-          info->spell_id, info->cast_count);
+          info->spell_id, info->cast_count,
+          static_cast<std::int32_t>(info->cast_time));
     }
 
     QueueSpellStartVisual(*this, info->caster_unit_guid, info->spell_id);
@@ -1059,6 +1123,12 @@ void WorldSession::HandleSpellStart(const net::wotlk::WorldPacket& pkt) {
 
 void WorldSession::HandleSpellGo(const net::wotlk::WorldPacket& pkt) {
   if (auto info = net::wotlk::ParseSpellGo(pkt.payload.data(), pkt.payload.size())) {
+    openwow::diagnostics::Log(
+        openwow::diagnostics::LogLevel::kWarn,
+        "SpellGoDiag: parsed spell=" + std::to_string(info->spell_id) +
+            " size=" + std::to_string(pkt.payload.size()) + " hits=" +
+            std::to_string(info->hit_targets.size()) + " miss=" +
+            std::to_string(info->miss_targets.size()));
     SpellGoVisualData visual_data;
     visual_data.missile_caster_guid = info->caster_guid.GetRawValue();
     visual_data.cast_count = info->cast_count;
@@ -1278,10 +1348,17 @@ void WorldSession::HandleSpellGo(const net::wotlk::WorldPacket& pkt) {
     }
 
   } else {
+    std::string hex;
+    hex.reserve(pkt.payload.size() * 2u);
+    for (const auto b : pkt.payload) {
+      constexpr char kHex[] = "0123456789ABCDEF";
+      hex.push_back(kHex[(b >> 4) & 0xFu]);
+      hex.push_back(kHex[b & 0xFu]);
+    }
     openwow::diagnostics::Log(
         openwow::diagnostics::LogLevel::kWarn,
         "Rejected malformed SMSG_SPELL_GO payload (" +
-            std::to_string(pkt.payload.size()) + " bytes)");
+            std::to_string(pkt.payload.size()) + " bytes) hex=" + hex);
   }
 }
 
@@ -1926,7 +2003,8 @@ void WorldSession::HandleSpellDelayed(const net::wotlk::WorldPacket& pkt) {
   unit->Casts().SetCurrentCast(cast);
   FireUnitSpellcastPacketEvent(
       *this, delayed->caster_guid, kUnitSpellcastDelayedEvent, cast.spell_id,
-      static_cast<std::uint8_t>(cast.cast_id));
+      static_cast<std::uint8_t>(cast.cast_id),
+      static_cast<std::int32_t>(delayed->delay_time));
 }
 
 void WorldSession::HandleChannelStart(const net::wotlk::WorldPacket& pkt) {
@@ -1951,7 +2029,7 @@ void WorldSession::HandleChannelStart(const net::wotlk::WorldPacket& pkt) {
   QueueChannelStartVisual(*this, channel->caster_guid, channel->spell_id);
   FireUnitSpellcastPacketEvent(
       *this, channel->caster_guid, kUnitSpellcastChannelStartEvent,
-      channel->spell_id, 0);
+      channel->spell_id, 0, static_cast<std::int32_t>(channel->duration));
 
   if (IsLocalPlayerSpellEvent(*this, channel->caster_guid)) {
     spell_cast_runtime_.OnChannelStart(
@@ -2005,7 +2083,7 @@ void WorldSession::HandleChannelUpdate(const net::wotlk::WorldPacket& pkt) {
         static_cast<std::int32_t>(channel->remaining));
     FireUnitSpellcastPacketEvent(
         *this, channel->caster_guid, kUnitSpellcastChannelUpdateEvent,
-        spell_id, 0);
+        spell_id, 0, static_cast<std::int32_t>(channel->remaining));
   }
   CompleteChannelUpdate(*this, *unit, spell_id, transition);
 
@@ -2420,10 +2498,12 @@ void WorldSession::HandleResumeCastBar(const net::wotlk::WorldPacket& pkt) {
 
   if (is_channel) {
     FireUnitSpellcastPacketEvent(
-        *this, rcb->caster, kUnitSpellcastChannelStartEvent, rcb->spell_id, 0);
+        *this, rcb->caster, kUnitSpellcastChannelStartEvent, rcb->spell_id, 0,
+        static_cast<std::int32_t>(rcb->time_remaining));
   } else {
     FireUnitSpellcastPacketEvent(
-        *this, rcb->caster, kUnitSpellcastStartEvent, rcb->spell_id, 0);
+        *this, rcb->caster, kUnitSpellcastStartEvent, rcb->spell_id, 0,
+        static_cast<std::int32_t>(rcb->time_remaining));
   }
 
   if (is_channel) {

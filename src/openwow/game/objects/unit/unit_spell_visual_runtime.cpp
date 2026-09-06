@@ -15,6 +15,7 @@
 #include "openwow/game/spell_c_internals.h"
 #include "openwow/game/spell_visual_system.h"
 #include "openwow/data/formats/dbc/dbc_loader.h"
+#include "openwow/foundation/diagnostics/logging.h"
 #include "openwow/render/m2/m2_system.h"
 
 #include <algorithm>
@@ -471,6 +472,15 @@ bool UnitSpellVisualRuntime::CreateFromKit(
   }
 
   const auto* const kit = dbc->spell_visual_kit().LookupEntry(kit_id);
+  openwow::diagnostics::Log(
+      openwow::diagnostics::LogLevel::kWarn,
+      "SpellVisualDiag: dispatch kit=" + std::to_string(kit_id) +
+          " spell=" + std::to_string(spell_id) + " visual=" +
+          std::to_string(spell_visual_id) + " type=" +
+          std::to_string(dispatch_type) + " kit_found=" +
+          std::string(kit != nullptr ? "1" : "0") + " anim=" +
+          std::string(kit != nullptr ? std::to_string(kit->anim_id)
+                                     : std::string("none")));
   if (kit == nullptr) {
     return false;
   }

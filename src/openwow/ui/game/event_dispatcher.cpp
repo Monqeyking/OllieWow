@@ -539,10 +539,6 @@ bool EventDispatcher::DispatchToFrame(
     return false;
   }
   if (invocation.status != LUA_OK) {
-    const char* error = lua_tostring(lua_, -1);
-    openwow::diagnostics::Log(openwow::diagnostics::LogLevel::kWarn,
-                       "EventDispatcher: error in OnEvent[" + event + "]: " +
-                           (error != nullptr ? error : "(null)"));
     lua_pop(lua_, 1);
   }
 

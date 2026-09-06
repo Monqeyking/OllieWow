@@ -323,7 +323,11 @@ bool ReadTrackData(const BinaryReader &r, const M2TrackHeader &h,
     const auto times = r.ReadVector<std::uint32_t>(static_cast<std::size_t>(h.times.offset),
                                                    static_cast<std::size_t>(h.times.count));
     if (!times.has_value()) {
-      if (error) *error = "M2: Classic track timestamps out of bounds";
+      if (error) {
+        *error = "M2: Classic track timestamps out of bounds off=" +
+                 std::to_string(h.times.offset) +
+                 " count=" + std::to_string(h.times.count);
+      }
       return false;
     }
 
@@ -1535,18 +1539,31 @@ M2LoadResult LoadM2FromBytes(const std::vector<std::uint8_t> &bytes,
   }
 
   {
+    // Vanilla (v256) ribbon records use stride 0xDC with the track block at
+    // color@0x24 alpha@0x40 heightAbove@0x5C heightBelow@0x78 texSlot@0xA4
+    // visibility@0xC0 and a u16 bone index (Benilla ribbons.rs, verified
+    // against the 5875 client). Later layouts pack stride 176 with shifted
+    // track offsets and a u32 bone index.
     constexpr std::size_t kRibbonStride = 176;
+    constexpr std::size_t kClassicRibbonStride = 0xDCu;
+    const std::size_t ribbon_stride = classic ? kClassicRibbonStride : kRibbonStride;
     const std::size_t count = static_cast<std::size_t>(h.ribbon_emitters.count);
     const std::size_t base_off = static_cast<std::size_t>(h.ribbon_emitters.offset);
-    if ((count == 0 && base_off <= bytes.size()) || r.CanRead(base_off, count * kRibbonStride)) {
+    if ((count == 0 && base_off <= bytes.size()) || r.CanRead(base_off, count * ribbon_stride)) {
       if (count > 0) {
         out.model.ribbon_emitters.reserve(count);
         for (std::size_t i = 0; i < count; ++i) {
-          const std::size_t e = base_off + i * kRibbonStride;
+          const std::size_t e = base_off + i * ribbon_stride;
           M2RibbonEmitter emitter;
 
           const auto ribbon_id = r.ReadU32(e + 0);
-          const auto bone_index = r.ReadU32(e + 4);
+          std::optional<std::uint32_t> bone_index;
+          if (classic) {
+            const auto classic_bone = r.ReadU16(e + 4);
+            if (classic_bone) bone_index = *classic_bone;
+          } else {
+            bone_index = r.ReadU32(e + 4);
+          }
           const auto pos = r.ReadSpan<float>(e + 8, 3);
           if (!ribbon_id || !bone_index || !pos) {
             out.error = "M2: truncated ribbon emitter header";
@@ -1604,22 +1621,22 @@ M2LoadResult LoadM2FromBytes(const std::vector<std::uint8_t> &bytes,
             return ReadTrackData(r, *th, &external_sequence_sources, dst, &track_err);
           };
           if (!read_track(e + 36, &emitter.color)
-              || !read_track(e + 56, &emitter.alpha)
-              || !read_track(e + 76, &emitter.height_above)
-              || !read_track(e + 96, &emitter.height_below)
-              || !read_track(e + 132, &emitter.tex_slot)
-              || !read_track(e + 152, &emitter.visibility))
+              || !read_track(e + (classic ? 0x40u : 56u), &emitter.alpha)
+              || !read_track(e + (classic ? 0x5Cu : 76u), &emitter.height_above)
+              || !read_track(e + (classic ? 0x78u : 96u), &emitter.height_below)
+              || !read_track(e + (classic ? 0xA4u : 132u), &emitter.tex_slot)
+              || !read_track(e + (classic ? 0xC0u : 152u), &emitter.visibility))
           {
             out.error = track_err.empty() ? "M2: ribbon track parse failed" : track_err;
             return out;
           }
 
-          const auto eps = r.ReadF32(e + 116);
-          const auto elt = r.ReadF32(e + 120);
-          const auto grav = r.ReadF32(e + 124);
-          const auto trows = r.ReadU16(e + 128);
-          const auto tcols = r.ReadU16(e + 130);
-          const auto pplane = r.ReadI16(e + 172);
+          const auto eps = r.ReadF32(e + (classic ? 0x94u : 116u));
+          const auto elt = r.ReadF32(e + (classic ? 0x98u : 120u));
+          const auto grav = r.ReadF32(e + (classic ? 0x9Cu : 124u));
+          const auto trows = r.ReadU16(e + (classic ? 0xA0u : 128u));
+          const auto tcols = r.ReadU16(e + (classic ? 0xA2u : 130u));
+          const auto pplane = classic ? std::optional<std::int16_t>(0) : r.ReadI16(e + 172);
           if (!eps || !elt || !grav || !trows || !tcols || !pplane) {
             out.error = "M2: ribbon static fields truncated";
             return out;

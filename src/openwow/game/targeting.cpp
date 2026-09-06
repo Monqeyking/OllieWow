@@ -1254,7 +1254,7 @@ AttackStartOutcome TargetingSystem::StartAttack(std::uint64_t guid, bool keep_fo
   if (guid == 0) guid = target_guid_;
   const auto trace_outcome = [guid](const AttackStartOutcome outcome) {
     openwow::diagnostics::Log(
-        openwow::diagnostics::LogLevel::kInfo,
+        openwow::diagnostics::LogLevel::kWarn,
         "CombatTrace: attack_start target=" + std::to_string(guid) +
             " result=" + AttackStartResultName(outcome.result) +
             " mechanic=" + std::to_string(outcome.blocking_mechanic));
@@ -1749,7 +1749,7 @@ void TargetingSystem::SendAttackSwing(std::uint64_t guid) {
   net::wotlk::WorldPacket pkt(net::wotlk::Opcode::CMSG_ATTACKSWING);
   pkt.AppendU64(guid);
   openwow::diagnostics::Log(
-      openwow::diagnostics::LogLevel::kInfo,
+      openwow::diagnostics::LogLevel::kWarn,
       "CombatTrace: CMSG_ATTACKSWING target=" + std::to_string(guid));
   if (session_ != nullptr) {
     session_->Send(pkt);

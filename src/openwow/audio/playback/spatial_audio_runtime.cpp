@@ -46,6 +46,25 @@ int SoundRuntime::UpdateLoop() {
   UpdateAdvancedKitProperties(delta);
   PollNaturalPlaybackCompletions();
 
+  // Handle timing (fade-outs, fade-ins, retriggers, virtual window) runs on
+  // the real clock: the game day-time delta above stays 0 while game time is
+  // still syncing after login, which froze every fade at full volume and left
+  // stopped loops audible forever.
+  const std::uint32_t now_ms = openwow::core::GameClock::GetTickCount32();
+  if (last_real_update_ms_ == 0u) {
+    last_real_update_ms_ = now_ms;
+  }
+  int real_delta =
+      static_cast<int>(now_ms - last_real_update_ms_);
+  if (real_delta < 0) {
+    real_delta = 0;
+  }
+  if (real_delta > 1000) {
+    real_delta = 1000;
+  }
+  last_real_update_ms_ = now_ms;
+  delta = real_delta;
+
   float listener_position[3]{};
   const bool have_listener_position = GetActivePlayerPosition(listener_position);
 

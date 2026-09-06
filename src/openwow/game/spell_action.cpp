@@ -7,6 +7,7 @@
 #include "openwow/game/combat_log.h"
 #include "openwow/game/localization.h"
 #include "openwow/game/object_manager.h"
+#include "openwow/game/inventory/player_inventory_replica.h"
 #include "openwow/game/objects/cgcorpse.h"
 #include "openwow/game/spell_cast_execution.h"
 #include "openwow/game/spell_cast_runtime.h"
@@ -26,6 +27,7 @@
 #include <cstdio>
 #include <list>
 #include <optional>
+#include <string>
 #include <unordered_map>
 
 namespace openwow::game {
@@ -152,6 +154,21 @@ enum class SpellActionTargetState : std::uint8_t {
   kAwaitingPosition,
 };
 
+const char* SpellActionTargetStateToString(
+    const SpellActionTargetState state) {
+  switch (state) {
+    case SpellActionTargetState::kReady:
+      return "ready";
+    case SpellActionTargetState::kAwaitingUnitOrObject:
+      return "awaiting-unit-or-object";
+    case SpellActionTargetState::kAwaitingPosition:
+      return "awaiting-position";
+    case SpellActionTargetState::kInvalid:
+      return "invalid";
+  }
+  return "unknown";
+}
+
 struct SpellActionTargetResolution {
   SpellActionTargetState state = SpellActionTargetState::kInvalid;
   ObjectGuid target;
@@ -253,6 +270,35 @@ SpellActionTargetResolution ResolveSpellActionTarget(
       requires_unit &&
       (self_only ||
        ui::game::CVarSystem::Instance().GetCVarBool("autoSelfCast"));
+
+  // Vanilla client rule (ArmCast): a player casting a spell with Attributes
+  // & 0x200 auto-targets the equipped main-hand item instead of any unit or
+  // cursor target. This is the whole weapon-imbue family (Rockbiter,
+  // Flametongue, Frostbrand, Windfury Weapon: Targets == 0x10 with an
+  // enchant effect). With an empty main hand the cast is refused outright:
+  // no cursor, no packet.
+  constexpr std::uint32_t kSpellAttrTargetMainHandItem = 0x00000200u;
+  if ((spell.attributes & kSpellAttrTargetMainHandItem) != 0u &&
+      caster.GetGuid() == active_player.GetGuid()) {
+    const ObjectGuid main_hand = active_player.GetEquippedItem(
+        openwow::game::InventorySlots::kMainHand);
+    if (main_hand.IsEmpty()) {
+      resolution.state = SpellActionTargetState::kInvalid;
+      resolution.failure = SpellCastResult::kEquippedItemClassMainhand;
+      return resolution;
+    }
+    resolution.target = main_hand;
+    resolution.packet_target_mask =
+        static_cast<std::uint32_t>(SpellTargetFlag::kItem);
+    resolution.cursor_mask &=
+        ~static_cast<std::uint32_t>(kItemCursorTargetMask);
+    cursor_flags = static_cast<SpellTargetFlag>(resolution.cursor_mask);
+    resolution.state = HasFlag(cursor_flags, kPositionCursorTargetMask)
+                           ? SpellActionTargetState::kAwaitingPosition
+                           : SpellActionTargetState::kReady;
+    resolution.failure = SpellCastResult::kSuccess;
+    return resolution;
+  }
 
   ObjectGuid target = requires_explicit ? explicit_target : ObjectGuid{};
   if (!target && requires_explicit) {
@@ -896,19 +942,34 @@ bool SpellAction_ValidateAndInitiateCast(const WorldSession& session,
                                          int item_slot, int cast_flags) {
   (void)item_slot;
 
+  const auto trace = [&](const std::string& message) {
+    openwow::diagnostics::Log(
+        openwow::diagnostics::LogLevel::kWarn,
+        "SpellAction: " + message);
+  };
+  trace("attempt spell=" + std::to_string(spell_id) +
+        " target=" + std::to_string(target_guid) +
+        " spellbook=" + std::to_string(session.spell_book().spells().size()));
+
   const auto* const dbc = session.GetDbcLoader();
   auto* const player = session.objects().GetActivePlayer();
   if (dbc == nullptr || player == nullptr) {
+    trace("reject spell=" + std::to_string(spell_id) +
+          " reason=missing-dbc-or-player");
     return false;
   }
   const auto* const spell = dbc->spell().LookupEntry(spell_id);
   if (spell == nullptr) {
+    trace("reject spell=" + std::to_string(spell_id) +
+          " reason=missing-dbc-spell");
     return false;
   }
 
   const auto preflight = session.spells().ValidatePlayerCastRequest(session,
                                                                     spell_id);
   if (preflight != SpellCastResult::kSuccess) {
+    trace("reject spell=" + std::to_string(spell_id) +
+          " reason=preflight result=" + SpellCastResultToString(preflight));
     DisplaySpellActionFailure(session, spell_id, preflight,
                               player->GetGuid());
     return false;
@@ -917,22 +978,36 @@ bool SpellAction_ValidateAndInitiateCast(const WorldSession& session,
   const auto resolution = ResolveSpellActionTarget(
       session, *dbc, *spell, *player, *player, ObjectGuid(target_guid));
   if (resolution.state == SpellActionTargetState::kInvalid) {
+    trace("reject spell=" + std::to_string(spell_id) +
+          " reason=target state=" +
+          SpellActionTargetStateToString(resolution.state) +
+          " failure=" + SpellCastResultToString(resolution.failure));
     DisplaySpellActionFailure(session, spell_id, resolution.failure,
                               player->GetGuid());
     return false;
   }
 
   const std::uint64_t resolved_target = resolution.target.GetRawValue();
+  trace("resolved spell=" + std::to_string(spell_id) +
+        " state=" + SpellActionTargetStateToString(resolution.state) +
+        " target=" + std::to_string(resolved_target) +
+        " cursor-mask=" + std::to_string(resolution.cursor_mask) +
+        " packet-mask=" + std::to_string(resolution.packet_target_mask));
   const auto requirements = ValidateSpellRequirementsDetailed(
       session, reinterpret_cast<std::uintptr_t>(player),
       reinterpret_cast<std::uintptr_t>(spell),
       reinterpret_cast<std::uintptr_t>(&resolved_target), 0, false);
   if (!requirements.IsSuccess()) {
+    trace("reject spell=" + std::to_string(spell_id) +
+          " reason=requirements result=" +
+          SpellCastResultToString(requirements.result));
     DisplaySpellActionFailure(session, spell_id, requirements,
                               player->GetGuid());
     return false;
   }
   if (!HasEnoughSpellPower(*spell, *player, session)) {
+    trace("reject spell=" + std::to_string(spell_id) +
+          " reason=no-power");
     DisplaySpellActionFailure(session, spell_id, SpellCastResult::kNoPower,
                               player->GetGuid());
     return false;
@@ -948,6 +1023,8 @@ bool SpellAction_ValidateAndInitiateCast(const WorldSession& session,
       resolution.target && resolution.packet_target_mask != 0u;
   if (has_prepared_object_target) {
     if (!spell_client.PrepareTargetedCast(spell_id)) {
+      trace("reject spell=" + std::to_string(spell_id) +
+            " reason=prepare-targeted-cast");
       return false;
     }
     if (HasFlag(static_cast<SpellTargetFlag>(resolution.packet_target_mask),
@@ -966,10 +1043,14 @@ bool SpellAction_ValidateAndInitiateCast(const WorldSession& session,
     spell_client.DiscardPreparedTargetedCast(spell_id);
   }
   if (result != SpellCastResult::kSuccess) {
+    trace("reject spell=" + std::to_string(spell_id) +
+          " reason=cast result=" + SpellCastResultToString(result));
     DisplaySpellActionFailure(session, spell_id, result,
                               player->GetGuid());
     return false;
   }
+  trace("sent spell=" + std::to_string(spell_id) +
+        " target=" + std::to_string(resolved_target));
   return true;
 }
 

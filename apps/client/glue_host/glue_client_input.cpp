@@ -37,25 +37,6 @@ namespace {
 constexpr int kRealmListRowHeightPx = 52;
 constexpr int kCharacterSelectRowHeightPx = 58;
 
-bool IsMovementDiagnosticKey(const SDL_Scancode scancode) {
-  switch (scancode) {
-    case SDL_SCANCODE_W:
-    case SDL_SCANCODE_S:
-    case SDL_SCANCODE_A:
-    case SDL_SCANCODE_D:
-    case SDL_SCANCODE_Q:
-    case SDL_SCANCODE_E:
-    case SDL_SCANCODE_UP:
-    case SDL_SCANCODE_DOWN:
-    case SDL_SCANCODE_LEFT:
-    case SDL_SCANCODE_RIGHT:
-    case SDL_SCANCODE_SPACE:
-      return true;
-    default:
-      return false;
-  }
-}
-
 void RequestApplicationQuit() {
   auto& client_services = openwow::net::ClientServices::Instance();
   if (client_services.HasPendingLogoutRequest()) {
@@ -368,10 +349,29 @@ void GlueClient::HandleEvent(const SDL_Event &event) {
 
     if (event.type == SDL_MOUSEBUTTONDOWN && event.button.button == SDL_BUTTON_RIGHT) {
       auto [ui_x, ui_y] = ResolveInWorldMouseButtonDispatchPosition(event.button);
+      const int resolved_x = ui_x;
+      const int resolved_y = ui_y;
       ScaleMouseToDrawable(window_, ui_x, ui_y);
       const bool ui_handled =
           game_ui && game_ui->input_router().HandleMouseDown(
                          static_cast<float>(ui_x), static_cast<float>(ui_y), 1);
+      openwow::diagnostics::Log(
+          openwow::diagnostics::LogLevel::kWarn,
+          "InputTrace: right-down raw=" + std::to_string(event.button.x) + "," +
+              std::to_string(event.button.y) + " resolved=" +
+              std::to_string(resolved_x) + "," + std::to_string(resolved_y) +
+              " drawable=" + std::to_string(ui_x) + "," + std::to_string(ui_y) +
+              " relative=" +
+              std::to_string(openwow::platform::WindowManager::Get()
+                                     .IsRelativeCursorModeActive()
+                                 ? 1
+                                 : 0) +
+              " anchor=" +
+              std::to_string(openwow::platform::WindowManager::Get().HasCursorAnchor() ? 1 : 0) +
+              " platform-capture=" +
+              std::to_string(openwow::platform::WindowManager::Get()
+                                 .GetMouseButtonCaptureMask()) +
+              " ui-handled=" + std::to_string(ui_handled ? 1 : 0));
       UpdateTextInputState();
       if (ui_handled) {
         return;
@@ -393,10 +393,30 @@ void GlueClient::HandleEvent(const SDL_Event &event) {
     }
     if (event.type == SDL_MOUSEBUTTONUP && event.button.button == SDL_BUTTON_RIGHT) {
       auto [ui_x, ui_y] = ResolveInWorldMouseButtonDispatchPosition(event.button);
+      const int resolved_x = ui_x;
+      const int resolved_y = ui_y;
       ScaleMouseToDrawable(window_, ui_x, ui_y);
       const bool ui_handled =
           game_ui && game_ui->input_router().HandleMouseUp(
                          static_cast<float>(ui_x), static_cast<float>(ui_y), 1);
+      openwow::diagnostics::Log(
+          openwow::diagnostics::LogLevel::kWarn,
+          "InputTrace: right-up raw=" + std::to_string(event.button.x) + "," +
+              std::to_string(event.button.y) + " resolved=" +
+              std::to_string(resolved_x) + "," + std::to_string(resolved_y) +
+              " drawable=" + std::to_string(ui_x) + "," + std::to_string(ui_y) +
+              " relative=" +
+              std::to_string(openwow::platform::WindowManager::Get()
+                                     .IsRelativeCursorModeActive()
+                                 ? 1
+                                 : 0) +
+              " anchor=" +
+              std::to_string(openwow::platform::WindowManager::Get().HasCursorAnchor() ? 1 : 0) +
+              " platform-capture=" +
+              std::to_string(openwow::platform::WindowManager::Get()
+                                 .GetMouseButtonCaptureMask()) +
+              " ui-handled=" + std::to_string(ui_handled ? 1 : 0) +
+              " held=" + std::to_string(right_mouse_held_ ? 1 : 0));
       UpdateTextInputState();
       if (!right_mouse_held_ && ui_handled) {
         return;
@@ -458,11 +478,20 @@ void GlueClient::HandleEvent(const SDL_Event &event) {
 
     if (event.type == SDL_MOUSEBUTTONDOWN && event.button.button == SDL_BUTTON_LEFT) {
       auto [wx, wy] = ResolveInWorldMouseButtonDispatchPosition(event.button);
+      const int resolved_x = wx;
+      const int resolved_y = wy;
       ScaleMouseToDrawable(window_, wx, wy);
       const bool ui_handled = game_ui &&
                                game_ui->input_router().HandleMouseDown(
                                    static_cast<float>(wx),
                                    static_cast<float>(wy), 0);
+      openwow::diagnostics::Log(
+          openwow::diagnostics::LogLevel::kWarn,
+          "InputTrace: left-down raw=" + std::to_string(event.button.x) + "," +
+              std::to_string(event.button.y) + " resolved=" +
+              std::to_string(resolved_x) + "," + std::to_string(resolved_y) +
+              " drawable=" + std::to_string(wx) + "," + std::to_string(wy) +
+              " ui-handled=" + std::to_string(ui_handled ? 1 : 0));
       UpdateTextInputState();
       if (ui_handled) {
         return;
@@ -482,10 +511,20 @@ void GlueClient::HandleEvent(const SDL_Event &event) {
     }
     if (event.type == SDL_MOUSEBUTTONUP && event.button.button == SDL_BUTTON_LEFT) {
       auto [ui_x, ui_y] = ResolveInWorldMouseButtonDispatchPosition(event.button);
+      const int resolved_x = ui_x;
+      const int resolved_y = ui_y;
       ScaleMouseToDrawable(window_, ui_x, ui_y);
       const bool ui_handled =
           game_ui && game_ui->input_router().HandleMouseUp(
                          static_cast<float>(ui_x), static_cast<float>(ui_y), 0);
+      openwow::diagnostics::Log(
+          openwow::diagnostics::LogLevel::kWarn,
+          "InputTrace: left-up raw=" + std::to_string(event.button.x) + "," +
+              std::to_string(event.button.y) + " resolved=" +
+              std::to_string(resolved_x) + "," + std::to_string(resolved_y) +
+              " drawable=" + std::to_string(ui_x) + "," + std::to_string(ui_y) +
+              " ui-handled=" + std::to_string(ui_handled ? 1 : 0) +
+              " held=" + std::to_string(left_mouse_held_ ? 1 : 0));
       UpdateTextInputState();
       if (!left_mouse_held_ && ui_handled) {
         return;
@@ -643,19 +682,9 @@ void GlueClient::HandleEvent(const SDL_Event &event) {
 
   if (event.type == SDL_KEYUP && mode_ == UiMode::kInWorld) {
     const SDL_Scancode scancode = event.key.keysym.scancode;
-    const bool movement_key = IsMovementDiagnosticKey(scancode);
     if (game_loop_.game_ui().is_initialized() &&
         game_loop_.game_ui().input_router().HandleKeyUp(
             static_cast<std::uint32_t>(scancode))) {
-      if (movement_key) {
-        openwow::diagnostics::Log(
-            openwow::diagnostics::LogLevel::kWarn,
-            "MovementInput: keyup key=" +
-                openwow::game::actions::bindings::adapters::platform::
-                    SdlScancodeToBaseKey(scancode) +
-                " ui_handled=1 focus=" +
-                game_loop_.game_ui().input_router().focused_frame_name());
-      }
       UpdateTextInputState();
       return;
     }
@@ -666,12 +695,6 @@ void GlueClient::HandleEvent(const SDL_Event &event) {
             static_cast<std::uint16_t>(event.key.keysym.mod));
     const bool binding_handled = !key_name.empty() &&
                                   game_loop_.binding_input().KeyUp(key_name);
-    if (movement_key) {
-      openwow::diagnostics::Log(
-          openwow::diagnostics::LogLevel::kWarn,
-          "MovementInput: binding-up key=" + key_name +
-              " handled=" + (binding_handled ? "1" : "0"));
-    }
     if (binding_handled) {
       return;
     }
@@ -991,20 +1014,10 @@ void GlueClient::HandleKeyDown(const SDL_Event &event) {
     return;
   }
 
-  const bool movement_key = IsMovementDiagnosticKey(scancode);
   if (mode_ == UiMode::kInWorld && game_loop_.game_ui().is_initialized()) {
     const bool ui_handled = game_loop_.game_ui().input_router().HandleKeyDown(
         static_cast<std::uint32_t>(event.key.keysym.scancode), shift_down,
         ctrl_down);
-    if (movement_key) {
-      openwow::diagnostics::Log(
-          openwow::diagnostics::LogLevel::kWarn,
-          "MovementInput: keydown key=" +
-              openwow::game::actions::bindings::adapters::platform::
-                  SdlScancodeToBaseKey(scancode) +
-              " ui_handled=" + (ui_handled ? "1" : "0") +
-              " focus=" + game_loop_.game_ui().input_router().focused_frame_name());
-    }
     if (ui_handled) {
       UpdateTextInputState();
       return;
@@ -1196,12 +1209,6 @@ void GlueClient::HandleKeyDown(const SDL_Event &event) {
             event.key.repeat != 0);
     const bool binding_handled = !key_name.empty() &&
                                   game_loop_.binding_input().KeyDown(key_name);
-    if (movement_key) {
-      openwow::diagnostics::Log(
-          openwow::diagnostics::LogLevel::kWarn,
-          "MovementInput: binding-down key=" + key_name +
-              " handled=" + (binding_handled ? "1" : "0"));
-    }
     if (binding_handled) {
       return;
     }

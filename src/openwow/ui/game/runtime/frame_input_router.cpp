@@ -7,6 +7,7 @@
 #include <lua.hpp>
 #include <utility>
 
+#include "openwow/foundation/diagnostics/logging.h"
 #include "openwow/foundation/text/ascii.h"
 #include "openwow/game/actions/bindings/adapters/lua/binding_script_executor.h"
 #include "openwow/input/input_manager.h"
@@ -303,8 +304,17 @@ bool InvokeButtonClick(lua_State *state, int frame_ref, const char *button_name,
     lua_settop(state, top);
     return false;
   }
+  const char* const frame_key = frame_api::GetFrameRuntimeKeyOrName(state, -1);
+  const std::string frame_name = frame_key != nullptr ? frame_key : "<unnamed>";
+  const bool has_on_click = FrameRefHasHandler(state, frame_ref, "OnClick");
   lua_getfield(state, -1, "Click");
   if (lua_isfunction(state, -1) == 0) {
+    openwow::diagnostics::Log(
+        openwow::diagnostics::LogLevel::kWarn,
+        "InputTrace: invoke-button-click frame=" + frame_name +
+            " button=" + button_name + " phase=" + (is_down ? "down" : "up") +
+            " on-click=" + std::to_string(has_on_click ? 1 : 0) +
+            " result=no-click-method");
     lua_settop(state, top);
     return false;
   }
@@ -313,6 +323,12 @@ bool InvokeButtonClick(lua_State *state, int frame_ref, const char *button_name,
   lua_pushboolean(state, is_down ? 1 : 0);
 
   const int status = ProfiledPCall(state, 3, 0, 0);
+  openwow::diagnostics::Log(
+      openwow::diagnostics::LogLevel::kWarn,
+      "InputTrace: invoke-button-click frame=" + frame_name +
+          " button=" + button_name + " phase=" + (is_down ? "down" : "up") +
+          " on-click=" + std::to_string(has_on_click ? 1 : 0) +
+          " result=" + (status == LUA_OK ? "ok" : "lua-error"));
   if (status != LUA_OK) {
     lua_pop(state, 1);
   }
@@ -596,6 +612,11 @@ bool FrameInputRouter::HandleMouseButtonDownByFlag(float x, float y, std::uint32
   layout_.SolveIfDirty();
   RebuildTraversalIfDirty();
   std::string hit = traversal_.HitTarget(x, y, viewport_height());
+  openwow::diagnostics::Log(
+      openwow::diagnostics::LogLevel::kWarn,
+      "InputTrace: router-down button=" + std::to_string(button_flag) +
+          " position=" + std::to_string(x) + "," + std::to_string(y) +
+          " hit=" + (hit.empty() ? "<none>" : hit));
   const auto *pressed_hyperlink = ResolveHyperlinkAt(hit, x, y);
   if (pressed_hyperlink != nullptr) {
     hit = pressed_hyperlink->frame_name;
@@ -681,6 +702,11 @@ bool FrameInputRouter::HandleMouseButtonDownByFlag(float x, float y, std::uint32
   if (const auto *hit_frame = frames_.FindFrame(hit);
       hit_frame != nullptr && FrameIsWorldFrame(*hit_frame)) {
 
+    openwow::diagnostics::Log(
+        openwow::diagnostics::LogLevel::kWarn,
+        "InputTrace: router-down world-pass-through frame=" + hit +
+            " button=" + std::to_string(button_flag));
+
     const char *wf_button_name = openwow::ui::widgets::MouseButtonName(button_flag);
     const lua_adapter::ScopedMouseButtonOverride button_override(lua_, wf_button_name);
     const detail::ScopedCurrentMouseButtonMaskOverride mask_override(
@@ -696,6 +722,10 @@ bool FrameInputRouter::HandleMouseButtonDownByFlag(float x, float y, std::uint32
               .start_y = y,
               .active = true,
               .drag_started = false};
+  openwow::diagnostics::Log(
+      openwow::diagnostics::LogLevel::kWarn,
+      "InputTrace: router-capture-set frame=" + hit +
+          " button=" + std::to_string(button_flag));
   if (pressed_hyperlink != nullptr) {
     capture->hyperlink_link = pressed_hyperlink->link;
     capture->hyperlink_text = pressed_hyperlink->text;
@@ -753,6 +783,12 @@ bool FrameInputRouter::HandleMouseButtonUpByFlag(float x, float y, std::uint32_t
   }
 
   auto *capture = FindCapture(button_flag);
+  openwow::diagnostics::Log(
+      openwow::diagnostics::LogLevel::kWarn,
+      "InputTrace: router-up button=" + std::to_string(button_flag) +
+          " position=" + std::to_string(x) + "," + std::to_string(y) +
+          " capture=" +
+          (capture != nullptr && capture->active ? capture->frame_name : "<none>"));
   if (capture != nullptr && capture->active) {
     const std::string capture_name = capture->frame_name;
     const auto ref = frames_.FindLuaRef(capture_name);

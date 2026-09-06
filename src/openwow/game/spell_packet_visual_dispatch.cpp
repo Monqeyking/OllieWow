@@ -70,6 +70,7 @@ std::vector<SpellVisualPresentationEvent> BuildDestLocAreaEvents(
       .spell_id = spell_id,
       .spell_visual_id = spell_visual_id,
       .kit_id = kit_id,
+      .sound_kit_id = kit->sound_id,
       .world_position = position,
       .deferred_impact_owner_guid = effect_owner_guid,
       .m2_events_require_owner_resolution = true,
@@ -454,6 +455,15 @@ void QueueSpellGoVisual(
                                            *resolved.visual, visual_data)
           : std::nullopt;
   if (missile_definition.has_value()) {
+    openwow::diagnostics::Log(
+        openwow::diagnostics::LogLevel::kWarn,
+        "SpellVisualDiag: missile spell=" + std::to_string(spell_id) +
+            " visual=" + std::to_string(resolved.visual_id) + " has_missile=" +
+            std::to_string(resolved.visual->has_missile) + " missile_model=" +
+            std::to_string(resolved.visual->missile_model) + " speed=" +
+            std::to_string(spell != nullptr ? spell->speed : -1.0f) +
+            " model=" + missile_definition->model_path);
+
 
     const float speed = spell != nullptr ? spell->speed : 0.0f;
 

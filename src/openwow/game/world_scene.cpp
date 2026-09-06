@@ -561,12 +561,25 @@ WorldScene::WorldScene(render::TextureManager& texture_manager,
       };
   const auto sound_kit_sink = [this](const std::uint32_t sound_kit_id,
                                      const float* position) {
-    (void)sound_runtime_.PlaySoundKit(sound_kit_id, position);
+    const int result = sound_runtime_.PlaySoundKit(sound_kit_id, position);
+    if (result != 0) {
+      openwow::diagnostics::Log(
+          openwow::diagnostics::LogLevel::kWarn,
+          "SpellSoundDiag: direct kit=" + std::to_string(sound_kit_id) +
+              " result=" + std::to_string(result));
+    }
   };
   const auto missile_sound_start_sink =
       [this](const std::uint32_t sound_kit_id, const float* position) {
     std::uint32_t handle = 0u;
-    (void)sound_runtime_.PlaySoundKit(sound_kit_id, position, &handle);
+    const int result =
+        sound_runtime_.PlaySoundKit(sound_kit_id, position, &handle);
+    if (result != 0) {
+      openwow::diagnostics::Log(
+          openwow::diagnostics::LogLevel::kWarn,
+          "SpellSoundDiag: missile kit=" + std::to_string(sound_kit_id) +
+              " result=" + std::to_string(result));
+    }
     return handle;
   };
   const auto effect_sound_start_sink =
@@ -585,8 +598,15 @@ WorldScene::WorldScene(render::TextureManager& texture_manager,
             break;
         }
         std::uint32_t handle = 0u;
-        if (sound_runtime_.PlaySoundKit(sound_kit_id, position, &handle,
-                                        options) != 0) {
+        const int result =
+            sound_runtime_.PlaySoundKit(sound_kit_id, position, &handle,
+                                        options);
+        if (result != 0) {
+          openwow::diagnostics::Log(
+              openwow::diagnostics::LogLevel::kWarn,
+              "SpellSoundDiag: effect kit=" +
+                  std::to_string(sound_kit_id) +
+                  " result=" + std::to_string(result));
           return std::uint32_t{0};
         }
         if (bind_owner_guid != 0u) {

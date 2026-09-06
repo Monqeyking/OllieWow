@@ -64,7 +64,11 @@ void ApplyBaseFrameMethods(lua_State *L) {
   lua_pushcfunction(L, LuaFrame_UnregisterAllEvents);
   lua_setfield(L, -2, "UnregisterAllEvents");
 
-  ApplyFrameScriptHandlerMethods(L, -1, true);
+  // The Classic/Turtle UI expects Vanilla buttons to have SetScript but not
+  // the later HookScript method.  pfUI uses that absence to install its
+  // Vanilla action-button click shim; exposing the WotLK method makes it skip
+  // ButtonClick registration, leaving action-bar icons visible but inert.
+  ApplyFrameScriptHandlerMethods(L, -1, false);
 
   lua_pushcclosure(L, [](lua_State *Ls) -> int {
     const int self = ValidateFrameScriptSelf(Ls);

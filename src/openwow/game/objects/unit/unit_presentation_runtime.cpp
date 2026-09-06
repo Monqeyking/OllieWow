@@ -106,8 +106,12 @@ void InterpolateRetailGroundContactNormal(
 }
 
 [[nodiscard]] render::RenderMatrix4x4 BuildGroundAlignedUnitMatrix(
-    const CGUnit_C& unit, const std::array<float, 3>& surface_normal) {
-  const Position position = unit.GetPosition();
+    const CGUnit_C& unit, const std::array<float, 3>& surface_normal,
+    const std::optional<float> ground_z = std::nullopt) {
+  Position position = unit.GetPosition();
+  if (ground_z.has_value() && std::isfinite(*ground_z)) {
+    position.z = *ground_z;
+  }
   const std::array<float, 3> world_position{
       position.x, position.y, position.z};
 
@@ -913,6 +917,32 @@ void UnitMovementRuntime::InterpolateShadowBlobPosition(float dt) {
   const Position position = owner_.GetPosition();
   const std::array<float, 3> world_position{position.x, position.y,
                                             position.z};
+  std::optional<float> ground_z;
+  const auto movement_flags = owner_.GetMovementInfo().flags;
+  const bool ground_clamp_allowed =
+      !owner_.IsPlayer() &&
+      (movement_flags & (kMoveFlagSwimming | kMoveFlagFlying |
+                         kMoveFlagFalling | kMoveFlagFallingFar |
+                         kMoveFlagHover | kMoveFlagOnTransport |
+                         kMoveFlagDisableGravity)) == 0u &&
+      !HasNonExemptFlyingSpline();
+  if (ground_clamp_allowed) {
+    constexpr float kGroundClampUp = 2.5f;
+    constexpr float kGroundClampDown = 4.0f;
+    const float collision_height =
+        std::max(owner_.Presentation().CollisionHeight(),
+                 kDefaultCollisionHeight);
+    const std::array<float, 3> probe_origin{
+        position.x, position.y, position.z + kGroundClampUp};
+    const auto surface = owner_.Presentation().QueryGroundSurface(
+        probe_origin, kGroundClampUp + kGroundClampDown);
+    if (surface.hit && std::isfinite(surface.ground_z) &&
+        position.z + kGroundClampUp - surface.ground_z >= 0.0f &&
+        surface.ground_z - position.z <=
+            kGroundClampDown + collision_height) {
+      ground_z = surface.ground_z;
+    }
+  }
   const float body_facing = SmoothBodyFacing();
   const float scale = owner_.GetScale();
   const std::uint8_t orientation_mode =
@@ -922,6 +952,9 @@ void UnitMovementRuntime::InterpolateShadowBlobPosition(float dt) {
       memo.valid &&
       std::memcmp(memo.position.data(), world_position.data(),
                   sizeof(world_position)) == 0 &&
+      memo.has_ground_z == ground_z.has_value() &&
+      (!ground_z.has_value() ||
+       std::memcmp(&memo.ground_z, &*ground_z, sizeof(memo.ground_z)) == 0) &&
       std::memcmp(&memo.body_facing, &body_facing, sizeof(body_facing)) == 0 &&
       std::memcmp(&memo.scale, &scale, sizeof(scale)) == 0 &&
       std::memcmp(memo.normal.data(), ground_contact_normal_.data(),
@@ -930,11 +963,14 @@ void UnitMovementRuntime::InterpolateShadowBlobPosition(float dt) {
   if (!memo_matches) {
     memo.valid = true;
     memo.position = world_position;
+    memo.has_ground_z = ground_z.has_value();
+    memo.ground_z = ground_z.value_or(0.0f);
     memo.body_facing = body_facing;
     memo.scale = scale;
     memo.normal = ground_contact_normal_;
     memo.orientation_mode = orientation_mode;
-    memo.matrix = BuildGroundAlignedUnitMatrix(owner_, ground_contact_normal_);
+    memo.matrix = BuildGroundAlignedUnitMatrix(owner_, ground_contact_normal_,
+                                               ground_z);
   }
   owner_.SetVisualModelWorldTransform(memo.matrix.data());
 }
