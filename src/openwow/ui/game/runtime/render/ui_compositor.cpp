@@ -996,12 +996,22 @@ void runtime::render::UiCompositor::Render(const UiCompositorFrame& compositor_f
 
       const bool allow_display_fallback =
           unit == nullptr || !unit->IsPlayer();
+      bool use_display_fallback = false;
 
       std::array<std::string, 3> display_texture_paths{};
       std::optional<openwow::render::m2::M2ParticleColorRecord>
           display_particle_colors;
-      if (instance_id == 0u && model_path.empty() && bound_display_id != 0u &&
-          allow_display_fallback && session_ != nullptr) {
+      bool live_visual_tree_ready = false;
+      if (instance_id != 0u) {
+        const auto visual_tree =
+            m2_system_.QueryVisualTreeRevision(instance_id);
+        live_visual_tree_ready =
+            visual_tree.status == openwow::render::m2::M2ResultStatus::kReady &&
+            visual_tree.revision != 0u;
+      }
+      if (model_path.empty() && bound_display_id != 0u &&
+          allow_display_fallback && session_ != nullptr &&
+          (instance_id == 0u || !live_visual_tree_ready)) {
         if (const auto* dbc = session_->GetDbcLoader(); dbc != nullptr) {
           if (const auto* display =
                   dbc->creature_display_info().LookupEntry(bound_display_id);
@@ -1057,7 +1067,7 @@ void runtime::render::UiCompositor::Render(const UiCompositorFrame& compositor_f
         continue;
       }
       surface->Resize(target_width, target_height);
-      if (instance_id != 0u) {
+      if (instance_id != 0u && !use_display_fallback) {
         const auto visual_tree =
             m2_system_.QueryVisualTreeRevision(instance_id);
         if (visual_tree.status != openwow::render::m2::M2ResultStatus::kReady ||
