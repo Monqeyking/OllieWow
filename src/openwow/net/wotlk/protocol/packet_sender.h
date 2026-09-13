@@ -245,8 +245,7 @@ public:
                                        std::uint8_t cast_flags,
                                        const SpellTargets& targets);
 
-  static WorldPacket BuildCancelCast(std::uint8_t cast_count,
-                                     std::uint32_t spell_id);
+  static WorldPacket BuildCancelCast(std::uint32_t spell_id);
 
   static WorldPacket BuildCancelAura(std::uint32_t spell_id);
 

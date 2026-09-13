@@ -150,16 +150,11 @@ void ApplySolvedTrajectory(SpellCastTargets& targets,
   targets.trajectory_speed = trajectory.speed;
 }
 
-SpellCastResult ValidatePetCastSendState(
-    const WorldSession& session, const CGUnit_C& pet,
+SpellCastResult ValidateMovementInterruptState(
+    const WorldSession& session, const CGUnit_C& caster,
     const data::dbc::SpellEntry& spell) {
-
-  if ((spell.attributes & kSpellAttrCastableWhileSitting) == 0u &&
-      pet.Animation().GetStandState() != 0u) {
-    return SpellCastResult::kNotStanding;
-  }
-
-  if (!pet.Interaction().IsPlayerControlled() || !pet.Movement().IsMoving()) {
+  if (!caster.Interaction().IsPlayerControlled() ||
+      !caster.Movement().IsMoving()) {
     return SpellCastResult::kSuccess;
   }
 
@@ -174,6 +169,17 @@ SpellCastResult ValidatePetCastSendState(
   return moving_interrupts_channel || moving_interrupts_cast
              ? SpellCastResult::kMoving
              : SpellCastResult::kSuccess;
+}
+
+SpellCastResult ValidatePetCastSendState(
+    const WorldSession& session, const CGUnit_C& pet,
+    const data::dbc::SpellEntry& spell) {
+  if ((spell.attributes & kSpellAttrCastableWhileSitting) == 0u &&
+      pet.Animation().GetStandState() != 0u) {
+    return SpellCastResult::kNotStanding;
+  }
+
+  return ValidateMovementInterruptState(session, pet, spell);
 }
 
 const data::dbc::OverrideSpellDataEntry* LookupActiveOverrideSpellDataEntry(
@@ -232,7 +238,9 @@ void CancelSpellSlotOnMovementStart(SpellCastRuntime& spells,
                                     const SpellSlotType slot,
                                     const std::uint32_t spell_id) {
   const auto* spell = LookupSpellEntryForMovementInterrupts(session, spell_id);
-  if (spell == nullptr ||
+  // Benilla fails open when a spell is not present in the client catalog: an
+  // ordinary movement start must still cancel the visible cast locally.
+  if (spell != nullptr &&
       (spell->interrupt_flags & kSpellInterruptFlagMovementStart) == 0) {
     return;
   }
@@ -361,7 +369,20 @@ SpellCastResult SpellCastRuntime::ValidatePlayerCastRequest(
   if (player != nullptr &&
       !OverrideSpellDataAllowsSpellLikeAction(
           LookupActiveOverrideSpellDataEntry(*player, session), spell_id)) {
-    return SpellCastResult::kCantDoThatRightNow;
+    return SpellCastResult::kError;
+  }
+
+  if (player != nullptr) {
+    const auto* const dbc = session.GetDbcLoader();
+    const auto* const spell =
+        dbc != nullptr ? dbc->spell().LookupEntry(spell_id) : nullptr;
+    if (spell != nullptr) {
+      if (const auto moving =
+              ValidateMovementInterruptState(session, *player, *spell);
+          moving != SpellCastResult::kSuccess) {
+        return moving;
+      }
+    }
   }
 
   if (const auto cooldown = ResolveSpellbookCooldown(spellbook, spell_id);
@@ -768,7 +789,18 @@ void SpellCastRuntime::CancelSpell(WorldSession& session,
     return;
   }
 
-  const auto spell = slots_[SlotIndex(slot)];
+  auto spell = slots_[SlotIndex(slot)];
+  if ((!IsActive(spell) || spell.spell_id == 0) &&
+      slot == SpellSlotType::kCurrent) {
+    // The visible unit cast is the Vanilla source of truth. It can arrive a
+    // tick before the separate local spell slot is populated.
+    if (auto* const player = session.objects().GetActivePlayer();
+        player != nullptr && player->Casts().IsCasting()) {
+      const auto& cast = player->Casts().GetCurrentCast();
+      spell = {cast.spell_id, static_cast<std::uint8_t>(cast.cast_id),
+               player->GetGuid(), {}, SpellClientState::kActive};
+    }
+  }
   if (!IsActive(spell) || spell.spell_id == 0) {
     return;
   }
@@ -776,8 +808,24 @@ void SpellCastRuntime::CancelSpell(WorldSession& session,
     (void)session.Send(
         net::wotlk::PacketSender::BuildCancelChannelling(spell.spell_id));
   } else {
-    (void)session.Send(net::wotlk::PacketSender::BuildCancelCast(
-        spell.cast_count, spell.spell_id));
+    (void)session.Send(
+        net::wotlk::PacketSender::BuildCancelCast(spell.spell_id));
+  }
+
+  // Vanilla closes the local cast immediately on a movement cancel.  The
+  // packet remains the server-side authority, but waiting for its failure
+  // echo leaves UnitCastingInfo and the cast visual alive for a round trip.
+  if (slot == SpellSlotType::kCurrent) {
+    auto *const player = session.objects().GetActivePlayer();
+    if (player != nullptr &&
+        player->Casts().GetCurrentCast().spell_id == spell.spell_id) {
+      player->SpellVisuals().QueueCastVisualStop(spell.spell_id);
+      player->Casts().ClearCurrentCast();
+      player->Animation().SetChannelingActionLock(false);
+      player->Animation().EndSpellVisualStandAnimation(session);
+      openwow::ui::game::ScriptEventDispatch::Get().FireGlobalEvent(
+          "SPELLCAST_STOP");
+    }
   }
   if (slots_[SlotIndex(slot)].spell_id == spell.spell_id &&
       slots_[SlotIndex(slot)].cast_count == spell.cast_count) {
@@ -842,8 +890,9 @@ void HandleMovementActivatedSpellInterrupts(WorldSession& session) {
   }
 
   auto& spells = session.spells();
-  CancelSpellSlotOnMovementStart(spells, session, SpellSlotType::kCurrent,
-                                 spells.GetCurrentSpellId());
+  CancelSpellSlotOnMovementStart(
+      spells, session, SpellSlotType::kCurrent,
+      spells.GetSlot(SpellSlotType::kCurrent).spell_id);
   CancelSpellSlotOnMovementStart(spells, session, SpellSlotType::kAutoRepeat,
                                  spells.GetAutoRepeatSpellId());
   CancelSpellSlotOnMovementStart(spells, session, SpellSlotType::kChannel,

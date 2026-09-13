@@ -73,6 +73,7 @@ void FrameEventRuntime::Update(const float elapsed_seconds) {
 
     const int frame_index = lua_absindex(lua_, -1);
     lua_pushnumber(lua_, static_cast<double>(elapsed_seconds));
+
     const auto invocation =
         InvokeFrameScriptHandler(lua_, frame_index, "OnUpdate", 1);
     if (invocation.status != LUA_OK) {

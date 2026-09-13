@@ -187,6 +187,14 @@ bool WorldLuaRuntime::Create(openwow::game::WorldSession* session,
   InstallLuaAddonMemoryTracker(lua_);
   RegisterSavedVariableName(SavedVariableRegistrationScope::kAccount,
                             "AuctionHouseFrameAuctionTabs");
+  // Accountbrede variabelen van de Blizzard-UI zelf. Zonder registratie schrijft
+  // onze SavedVariables-writer (die alleen geregistreerde namen wegschrijft en
+  // het bestand vooraf leegmaakt) ze niet terug, waardoor de instellingen van de
+  // originele client verdwijnen - precies wat er met de action bars gebeurde.
+  RegisterSavedVariableName(SavedVariableRegistrationScope::kAccount,
+                            "ALWAYS_SHOW_MULTIBARS");
+  RegisterSavedVariableName(SavedVariableRegistrationScope::kAccount,
+                            "LOCK_ACTIONBAR");
   RegisterSavedVariableName(SavedVariableRegistrationScope::kAccount,
                             "AuctionHouseFrameBrowseTabs");
   RegisterSavedVariableName(SavedVariableRegistrationScope::kAccount,

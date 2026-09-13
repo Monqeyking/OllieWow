@@ -67,4 +67,14 @@ bool ShouldDumpMpqIndex();
 void DumpVfsIndex(const openwow::vfs::VirtualFileSystem& vfs,
                   const std::filesystem::path& out_path);
 
+// Read-only diagnostic: dumps one VFS-resolved file (e.g.
+// "/Interface/FrameXML/OptionsFrame.xml") so the effective archive-chain
+// content can be compared with the reference contract.  Path comes from the
+// OPENWOW_DUMP_VFS_FILE environment variable (set by --dump-vfs-file).
+std::optional<std::string> VfsFileToDump();
+
+void DumpVfsFile(const openwow::vfs::VirtualFileSystem& vfs,
+                 const std::string& virtual_path,
+                 const std::filesystem::path& out_path);
+
 }

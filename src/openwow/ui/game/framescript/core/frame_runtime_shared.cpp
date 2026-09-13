@@ -357,12 +357,14 @@ int EnsureLuaAnchorArray(lua_State *L, int frame_index) {
 }
 
 void PushAnchorRelativeToValue(lua_State *L, int anchor_index) {
+  // GetPoint must preserve the target object, including UIParent, so addons
+  // can save its five return values and restore the anchor after ClearAllPoints.
   anchor_index = lua_absindex(L, anchor_index);
   runtime::GetInternedLuaField(L, anchor_index, "relativeTo");
   if (lua_isstring(L, -1) != 0) {
     const char *name = lua_tostring(L, -1);
     lua_pop(L, 1);
-    if (name != nullptr && std::strcmp(name, "UIParent") != 0) {
+    if (name != nullptr) {
       lua_getglobal(L, name);
       if (lua_istable(L, -1) != 0) {
         return;
@@ -374,13 +376,6 @@ void PushAnchorRelativeToValue(lua_State *L, int anchor_index) {
   }
 
   if (lua_istable(L, -1) != 0) {
-    lua_getglobal(L, "UIParent");
-    if (lua_istable(L, -1) != 0 && lua_rawequal(L, -1, -2) != 0) {
-      lua_pop(L, 2);
-      lua_pushnil(L);
-      return;
-    }
-    lua_pop(L, 1);
     return;
   }
 

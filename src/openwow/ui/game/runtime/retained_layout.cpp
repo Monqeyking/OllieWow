@@ -1180,7 +1180,15 @@ const openwow::ui::framexml::FrameRect* RetainedLayout::FindRect(std::string_vie
   if (impl_->dirty && (impl_->construction_depth != 0 || impl_->bootstrap_active))
     impl_->SolveOnDemand(name);
   else SolveIfDirty();
-  const auto it = impl_->rects.find(name);
+  auto it = impl_->rects.find(name);
+  if (it == impl_->rects.end() && !name.empty()) {
+    // Vanilla geometry getters resolve the requested frame immediately when
+    // its current layout is not in the retained cache.  Keep this targeted:
+    // resolving only the frame and its dependencies avoids a global layout
+    // rebuild on every GetLeft/GetRight call.
+    impl_->SolveOnDemand(name);
+    it = impl_->rects.find(name);
+  }
   return it == impl_->rects.end() ? nullptr : &it->second;
 }
 

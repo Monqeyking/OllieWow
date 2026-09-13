@@ -380,6 +380,27 @@ bool FrameXmlRuntimeLoader::LoadDefaultUI(
     clear_progress();
     return false;
   }
+  owner_.frame_materializer_->ReconcileDefaultLuaGlobals();
+  // Classic/Turtle compat: the active Turtle TOC omits Blizzard's
+  // SoundOptionsFrame, but the vanilla file ships in local VFS data and
+  // vanilla addons address the named frame directly. Load it when the TOC
+  // did not provide it, before addons start.
+  {
+    lua_getglobal(lua, "SoundOptionsFrame");
+    const bool missing = lua_isnil(lua, -1) != 0;
+    lua_pop(lua, 1);
+    if (missing && owner_.vfs_ != nullptr &&
+        owner_.vfs_->Exists("/Interface/FrameXML/SoundOptionsFrame.xml")) {
+      if (!loader_.LoadXml(lua, "/Interface/FrameXML/SoundOptionsFrame.xml",
+                           status_sink)) {
+        openwow::diagnostics::Log(
+            openwow::diagnostics::LogLevel::kWarn,
+            "GameUIManager: compat SoundOptionsFrame.xml load failed");
+      } else {
+        owner_.frame_materializer_->ReconcileDefaultLuaGlobals();
+      }
+    }
+  }
   owner_.frame_materializer_->EndDefaultFrameXmlLoad();
   luaL_unref(lua, LUA_REGISTRYINDEX, global_checkpoint);
   if (named_font_checkpoint != LUA_NOREF) {
@@ -471,6 +492,18 @@ bool FrameXmlRuntimeLoader::LoadToc(
     last_progress_pulse_ = previous_pulse;
   }
   AppendFrameXmlLoadResult(status_sink, toc_path, result);
+  if (status_sink != nullptr && !addon_name.empty()) {
+    std::string trace =
+        "[AddonTrace] toc_result addon=" + std::string(addon_name) +
+        " ok=" + (result.ok ? std::string("true") : std::string("false")) +
+        " xml=" + std::to_string(result.xml_files_loaded) +
+        " lua=" + std::to_string(result.lua_files_loaded) +
+        " failures=" + std::to_string(result.file_failures);
+    if (!result.error.empty()) {
+      trace += " error=" + result.error;
+    }
+    status_sink->AppendStatus(result.ok ? 0 : 2, trace);
+  }
   if (!result.ok) {
     owner_.frame_store_.RollbackRegistrationsAfter(frame_checkpoint);
     owner_.frame_materializer_->RestoreLoadCheckpoint(

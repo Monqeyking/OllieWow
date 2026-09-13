@@ -5,6 +5,7 @@ class SoundPlaybackRuntimeState {
 protected:
   SoundPlaybackRuntimeState() : liquid_query_result_buffer_(1) {}
   std::uint32_t non_positional_playback_block_depth_{0};
+  bool world_entry_audio_inhibited_{false};
   std::uint32_t next_handle_{1};
   SoundHandleTable active_handles_;
   std::unordered_map<std::uint32_t, SoundHandleBinding *> active_handle_bindings_;

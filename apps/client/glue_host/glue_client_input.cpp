@@ -436,17 +436,17 @@ void GlueClient::HandleEvent(const SDL_Event &event) {
       return;
     }
     if (event.type == SDL_MOUSEMOTION) {
-      if (left_mouse_held_ || right_mouse_held_) {
-
-        return;
-      }
-
       int mouse_x = event.motion.x;
       int mouse_y = event.motion.y;
       ScaleMouseToDrawable(window_, mouse_x, mouse_y);
-      (void)openwow::input::DispatchInWorldMouseMotion(
-          mouse_x, mouse_y, event.motion.xrel, event.motion.yrel, false);
-      if (game_ui) {
+      const bool capture_camera = left_mouse_held_ || right_mouse_held_;
+      const auto motion = openwow::input::DispatchInWorldMouseMotion(
+          mouse_x, mouse_y, event.motion.xrel, event.motion.yrel,
+          capture_camera);
+      if (motion.has_camera_delta) {
+        game_loop_.HandleMouseDelta(motion.camera_dx, motion.camera_dy);
+      }
+      if (game_ui && !capture_camera) {
         int ui_x = event.motion.x;
         int ui_y = event.motion.y;
         ScaleMouseToDrawable(window_, ui_x, ui_y);

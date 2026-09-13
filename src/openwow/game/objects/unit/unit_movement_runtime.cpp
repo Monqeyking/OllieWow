@@ -1891,19 +1891,84 @@ void UnitMovementRuntime::AdvanceMovementStep(
   const MovementCollisionResult collision =
       solver->Solve(body, collision_step);
 
+  std::optional<float> stationary_landing_z;
+  const bool unresolved_collision =
+      collision.status == MovementCollisionStatus::kBlocked ||
+      collision.status == MovementCollisionStatus::kQueryFailed;
+  if (mode == MovementCollisionMode::kFalling && !collision.landed &&
+      (unresolved_collision ||
+       (std::fabs(displacement.x) < MovementCollisionConstants::kTraceEpsilon &&
+        std::fabs(displacement.y) < MovementCollisionConstants::kTraceEpsilon)) &&
+      collision.status != MovementCollisionStatus::kCancelled &&
+      collision.status != MovementCollisionStatus::kInvalidInput &&
+      displacement.z < -MovementCollisionConstants::kTraceEpsilon) {
+    constexpr float kStationaryLandingProbeSlack = 0.05f;
+    // Like Benilla player/mover.rs, classify support with the movement body,
+    // not a ray from the feet. Limit snapping to this step plus contact slack.
+    auto probe_body = body;
+    probe_body.position = {start[0], start[1], start[2]};
+    const float probe_distance = -displacement.z + kStationaryLandingProbeSlack;
+    bool query_ok = false;
+    const auto ground = solver->SweepHull(
+        probe_body, {0.0f, 0.0f, -probe_distance}, &query_ok);
+    const float walkable_normal = body.permissive_walkable_slope
+        ? MovementCollisionConstants::kPermissiveNormalZ
+        : MovementCollisionConstants::kWalkableNormalZ;
+    if (query_ok && ground.hit && !ground.contacts.empty() &&
+        ground.contacts.front().surface_normal.z > walkable_normal &&
+        ground.distance >= 0.0f && ground.distance <= probe_distance) {
+      stationary_landing_z = start[2] - ground.distance;
+    }
+  }
+  const bool recovered_unresolved_fall =
+      unresolved_collision && stationary_landing_z.has_value();
+
+  bool collision_trace_due = false;
+  if (mode == MovementCollisionMode::kFalling) {
+    const std::uint32_t now_ms = session.CurrentClientTimeMs();
+    if (now_ms - last_movement_trace_log_ms_ >= 1000u) {
+      collision_trace_due = true;
+      last_movement_trace_log_ms_ = now_ms;
+      diagnostics::Log(
+          diagnostics::LogLevel::kWarn,
+          "MovementTrace: collision guid=" +
+              std::to_string(owner_.GetGuid().GetRawValue()) +
+              " flags=" + std::to_string(runtime_flags) +
+              " z=" + std::to_string(start[2]) +
+              " integrated_z=" + std::to_string(integrated_transform[2]) +
+              " dz=" + std::to_string(displacement.z) +
+              " status=" +
+              std::to_string(static_cast<unsigned>(collision.status)) +
+              " landed=" + std::to_string(collision.landed) +
+              " reset=" + std::to_string(collision.reset_requested) +
+              " facets=" + std::to_string(solver->CachedFacetCount()) +
+              " bound=" + std::to_string(solver->IsBound()) +
+              " pos=" + std::to_string(start[0]) + "," +
+              std::to_string(start[1]) + "," + std::to_string(start[2]));
+    }
+  }
+
   collision_stepping_ = body.stepping;
   data_.SetCumulativeCollisionZ(body.step_reference_z);
 
   C3Vector solved_transform{integrated_transform[0], integrated_transform[1],
                             integrated_transform[2]};
   if (collision.status == MovementCollisionStatus::kCancelled ||
-      collision.status == MovementCollisionStatus::kInvalidInput) {
+      collision.status == MovementCollisionStatus::kInvalidInput ||
+      collision.status == MovementCollisionStatus::kQueryFailed ||
+      (mode == MovementCollisionMode::kFalling &&
+       collision.status == MovementCollisionStatus::kBlocked)) {
+    // A missing/temporary collision query must not turn into uncollided
+    // movement. Hold the last valid pose until world geometry is available.
     solved_transform = {start[0], start[1], start[2]};
-  } else if (collision.status != MovementCollisionStatus::kQueryFailed) {
+  } else {
     solved_transform = body.position;
   }
+  if (stationary_landing_z.has_value()) {
+    solved_transform.z = *stationary_landing_z;
+  }
   PublishSolvedTransformPosition(session.objects(), solved_transform,
-                                 parent_transform.has_value(), integrated);
+                                  parent_transform.has_value(), integrated);
 
   if (collision.last_contact.has_value()) {
     data_.SetGroundSlopeZ(collision.last_contact->surface_normal.z);
@@ -1974,13 +2039,27 @@ void UnitMovementRuntime::AdvanceMovementStep(
       integrated.flags |= kMoveFlagFallingFar;
     }
   }
-  if (collision.landed) {
+  const bool landed = collision.landed || recovered_unresolved_fall ||
+                      stationary_landing_z.has_value();
+  if (landed) {
 
     integrated.flags &= ~(kMoveFlagFalling | kMoveFlagFallingFar);
   }
 
   data_.SyncPresentedMovementInfo(integrated);
-  if (collision.landed) {
+  if (mode == MovementCollisionMode::kFalling &&
+      (landed || (collision_trace_due && unresolved_collision))) {
+    diagnostics::Log(
+        diagnostics::LogLevel::kWarn,
+        "MovementTrace: commit z=" + std::to_string(solved_transform.z) +
+            " landed=" + std::to_string(landed) +
+            " recovered=" + std::to_string(recovered_unresolved_fall) +
+            " stationary=" +
+            std::to_string(stationary_landing_z.has_value()) +
+            " flags_after=" + std::to_string(data_.GetRuntimeFlags()) +
+            " fall_time=" + std::to_string(data_.GetRuntimeFallTime()));
+  }
+  if (landed) {
 
     data_.UpdateDirectionConditional();
     (void)data_.RecalculateStateFlags();
@@ -2734,6 +2813,19 @@ void UnitMovementRuntime::ApplySplineMovementPose(const Vec3 &position,
   spline_locomotion_flags_ = spline_active ? spline_flags : 0u;
   spline_locomotion_arc_length_ = spline_active ? spline_arc_length : 0.0f;
   spline_locomotion_duration_ms_ = spline_active ? spline_duration_ms : 0u;
+  if (spline_active) {
+    const std::uint32_t now_ms = openwow::core::GameClock::GetTickCount32();
+    if (now_ms - last_movement_trace_log_ms_ >= 1000u) {
+      last_movement_trace_log_ms_ = now_ms;
+      diagnostics::Log(
+          diagnostics::LogLevel::kInfo,
+          "MovementTrace: spline guid=" +
+              std::to_string(owner_.GetGuid().GetRawValue()) +
+              " flags=" + std::to_string(spline_flags) +
+              " pos=" + std::to_string(position.x) + "," +
+              std::to_string(position.y) + "," + std::to_string(position.z));
+    }
+  }
   const auto current_flags =
       animation_base_flags |
       (spline_locomotion_active_
@@ -4385,8 +4477,14 @@ void UnitMovementRuntime::InputControlStopForward(const std::uint32_t timestamp)
     return;
   }
 
-  const auto flags = owner_.GetMovementInfo().flags;
-  if ((flags & (kMoveFlagForward | kMoveFlagBackward)) == 0u) {
+  const auto runtime_flags = data_.GetRuntimeFlags();
+  constexpr std::uint32_t kForwardStopRelevantFlags =
+      kMoveFlagForward | kMoveFlagBackward |
+      kMoveFlagPendingForward | kMoveFlagPendingBackward;
+  auto *const ctrl = GetInputControlSingleton();
+  const bool forward_was_sent = ctrl != nullptr && ctrl->IsForwardSent();
+  if (!forward_was_sent &&
+      (runtime_flags & kForwardStopRelevantFlags) == 0u) {
     return;
   }
 
@@ -4397,7 +4495,7 @@ void UnitMovementRuntime::InputControlStopForward(const std::uint32_t timestamp)
     }
     const ScopedMovementInteractionFlag guard(objects->player_control(), 0x1u);
     data_.QueueStopForward(timestamp);
-    if (auto *ctrl = GetInputControlSingleton(); ctrl != nullptr) {
+    if (ctrl != nullptr) {
       ctrl->ClearForwardSentAndAutoRun();
     }
   }
@@ -4433,6 +4531,77 @@ void UnitMovementRuntime::SendJump(WorldSession &session, const std::uint32_t ti
     return;
   }
 
+  {
+    const auto position = data_.GetTransformPosition();
+    diagnostics::Log(
+        diagnostics::LogLevel::kWarn,
+        "JumpTrace: input active=" +
+            std::to_string(owner_.IsActiveMover()) +
+            " flags=" + std::to_string(data_.GetRuntimeFlags()) +
+            " pos=" + std::to_string(position[0]) + "," +
+            std::to_string(position[1]) + "," + std::to_string(position[2]) +
+            " fall_time=" + std::to_string(data_.GetRuntimeFallTime()));
+  }
+
+  if (owner_.IsActiveMover() &&
+      (data_.GetRuntimeFlags() & kMoveFlagFalling) != 0u) {
+    // Reconcile a stale FALLING state through the same body sweep used by the
+    // movement solver. A presentation ray is a different collision path and
+    // can miss the capsule's actual contact, so it must not decide whether
+    // TryStartJump is allowed to run.
+    bool grounded = false;
+    float grounded_z = 0.0f;
+    const auto source_solver = session.GetMovementCollisionSolver();
+    if (source_solver != nullptr && source_solver->IsBound()) {
+      auto solver = source_solver->CreateIndependentSolver();
+      const auto position = data_.GetTransformPosition();
+      const auto collision_mask = data_.BuildTerrainIntersectFlags(
+          {.is_navigable_as_player = IsNavigableAsPlayer(),
+           .can_control_character = CanControlCharacter(),
+           .is_ghost_player = IsGhostPlayerDescriptorPair()});
+      MovementCollisionBody body{
+          .position = {position[0], position[1], position[2]},
+          .radius = data_.GetCollisionHalfWidth(),
+          .height = data_.GetCollisionHeightProduct(),
+          .step_height = 0.0f,
+          .hover_height = owner_.State().GetHoverHeight(),
+          .mode = MovementCollisionMode::kFalling,
+          .collision_mask = collision_mask,
+          .permissive_walkable_slope = !IsNavigableAsPlayer(),
+      };
+      constexpr float kGroundedJumpReconcileDistance = 0.2f;
+      bool query_ok = false;
+      const auto trace = solver->SweepHull(
+          body, {0.0f, 0.0f, -kGroundedJumpReconcileDistance}, &query_ok);
+      if (query_ok && trace.hit && !trace.contacts.empty()) {
+        const auto &contact = trace.contacts.front();
+        const float walkable_normal =
+            IsNavigableAsPlayer() ? MovementCollisionConstants::kWalkableNormalZ
+                                   : MovementCollisionConstants::kPermissiveNormalZ;
+        if (contact.surface_normal.z > walkable_normal) {
+          grounded = true;
+          grounded_z = position[2] - trace.distance;
+        }
+      }
+    }
+
+    diagnostics::Log(
+        diagnostics::LogLevel::kWarn,
+        "JumpTrace: stale_falling=1 grounded=" +
+            std::to_string(grounded) + " pos_z=" +
+            std::to_string(data_.GetTransformPosition()[2]) +
+            " grounded_z=" + std::to_string(grounded_z));
+    if (grounded) {
+      const auto position = data_.GetTransformPosition();
+      data_.SetTransformPosition(position[0], position[1], grounded_z);
+      data_.SetRuntimeFallTime(0u);
+      data_.SetRuntimeFallStartZ(grounded_z);
+      data_.SetRuntimeFlags(data_.GetRuntimeFlags() &
+                            ~(kMoveFlagFalling | kMoveFlagFallingFar));
+      data_.UpdateDirectionConditional();
+    }
+  }
+
   const MovementInfo& movement_info = owner_.GetMovementInfo();
   const bool queue_jump =
       !owner_.Mount().IsMountedStateActive(owner_) ||
@@ -4442,8 +4611,15 @@ void UnitMovementRuntime::SendJump(WorldSession &session, const std::uint32_t ti
        !AllowsMountedJumpWhileMoving(owner_, movement_info));
   if (queue_jump) {
     data_.QueueJump(timestamp);
+    diagnostics::Log(
+        diagnostics::LogLevel::kWarn,
+        "JumpTrace: queued=1 timestamp=" + std::to_string(timestamp) +
+            " flags=" + std::to_string(data_.GetRuntimeFlags()));
     return;
   }
+
+  diagnostics::Log(diagnostics::LogLevel::kWarn,
+                   "JumpTrace: queued=0 mounted_special=1");
 
   if (HasJumpTurnFlags(movement_info)) {
     return;

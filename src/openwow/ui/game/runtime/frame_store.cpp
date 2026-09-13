@@ -73,6 +73,7 @@ std::uint64_t FrameHandleGeneration(const FrameStore::FrameHandle handle) noexce
 struct FrameStore::Impl {
   struct Record {
     openwow::ui::framexml::UiFrame frame;
+    std::size_t paint_order{0};
     std::unique_ptr<openwow::ui::widgets::CScriptObject> native_object;
     int lua_ref{LUA_NOREF};
     const void* lua_identity{nullptr};
@@ -186,6 +187,10 @@ struct FrameStore::Impl {
 
   void TrackRegistration(const std::string& key, const FrameHandle handle) {
     if (key.empty()) return;
+    // Teruggedraaid naar oplopend: het omdraaien van de aanmaak-volgorde zette
+    // de portrettexture van het playerframe boven de level-tekst. Dat was een
+    // regressie in de normale UI; het pfUI-portret is een apart traject.
+    RecordAt(handle)->paint_order = ++next_paint_order;
     registration_order.push_back(key);
     registration_handles.push_back(handle);
   }
@@ -352,6 +357,8 @@ struct FrameStore::Impl {
       enumerable_indices_by_native_identity;
   std::unordered_map<const void*, std::string> binding_keys_by_identity;
   std::uint64_t next_unique_id{1};
+  std::size_t next_paint_order{0};
+  std::size_t next_creation_order{0};
 };
 
 FrameStore::FrameStore(Ports ports)
@@ -703,6 +710,19 @@ void FrameStore::NotifyHierarchyMutation(const std::string_view key,
 }
 void FrameStore::InvalidatePaintOrder() {
   if (impl_->ports.paint_order_invalidated) impl_->ports.paint_order_invalidated();
+}
+std::size_t FrameStore::PaintOrder(const FrameHandle handle) const {
+  const auto* record = impl_->RecordAt(handle);
+  return record != nullptr ? record->paint_order : 0u;
+}
+void FrameStore::MoveToPaintTail(const std::string_view key) {
+  auto* record = impl_->FindRecord(key);
+  if (record == nullptr) return;
+  using Kind = openwow::ui::framexml::UiFrame::RuntimeKind;
+  if (record->frame.runtime_kind == Kind::Texture ||
+      record->frame.runtime_kind == Kind::FontString) return;
+  record->paint_order = ++impl_->next_paint_order;
+  if (impl_->ports.order_key_invalidated) impl_->ports.order_key_invalidated(key);
 }
 void FrameStore::InvalidateHitTest() {
   if (impl_->ports.hit_test_invalidated) impl_->ports.hit_test_invalidated();

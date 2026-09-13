@@ -401,10 +401,10 @@ SpellRequirementValidation ValidateSpellRequirementsDetailed(
             (static_cast<std::int32_t>(spell->recovery_time) <= kArenaMaxCooldownMs &&
              static_cast<std::int32_t>(spell->category_recovery_time) <= kArenaMaxCooldownMs &&
              (attr4 & kAttrEx4UsableInArena) == 0))) {
-        return failure(SpellCastResult::kNotInArena);
+        return failure(SpellCastResult::kUnknown);
       }
     } else if ((spell->attributes_ex6 & kAttrEx6InstanceOnly) != 0) {
-      return failure(SpellCastResult::kOnlyInArena);
+      return failure(SpellCastResult::kUnknown);
     }
   }
 
@@ -441,7 +441,7 @@ SpellRequirementValidation ValidateSpellRequirementsDetailed(
         for (std::uint32_t i = 0; i < data::dbc::kMaxSpellTotems; ++i) {
           if (spell->totem_category[i] != 0u &&
               !HasRequiredTotemCategory(session, dbc, spell->totem_category[i])) {
-            return failure(SpellCastResult::kTotemCategory,
+            return failure(SpellCastResult::kTotems,
                            static_cast<std::int32_t>(spell->totem_category[i]));
           }
         }
@@ -637,7 +637,7 @@ SpellRequirementValidation ValidateSpellRequirementsDetailed(
        !IsCurrentAreaInGroup(*dbc, spell->area_group_id,
                              session.world_states().zone_id(),
                              session.world_states().area_id()))) {
-    return failure(SpellCastResult::kIncorrectArea);
+    return failure(SpellCastResult::kRequiresArea);
   }
 
   const float game_hour =
@@ -720,7 +720,7 @@ SpellRequirementValidation ValidateSpellRequirementsDetailed(
   }
   if ((spell->attributes_ex6 & kAttrEx6NotInRaid) != 0 &&
       map_entry != nullptr && map_type == kMapTypeRaid) {
-    return failure(SpellCastResult::kNotInRaidInstance);
+      return failure(SpellCastResult::kUnknown);
   }
 
   return {};

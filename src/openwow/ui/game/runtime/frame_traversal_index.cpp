@@ -354,7 +354,6 @@ struct FrameTraversalIndex::Impl {
   void BuildEntriesFull() {
     entries.clear();
     entries.reserve(frames.size());
-    std::size_t insertion_order = 0u;
 
     for (const FrameHandle handle : frames.registration_handles()) {
       const auto* frame = frames.FindFrame(handle);
@@ -366,7 +365,7 @@ struct FrameTraversalIndex::Impl {
           .strata_order = StrataRank(frame->frame_strata),
           .frame_level = frame->frame_level,
           .effective_depth = hierarchy.effective_depth,
-          .insertion_order = insertion_order++,
+          .insertion_order = frames.PaintOrder(handle),
       });
     }
     index_by_key.clear();
@@ -398,6 +397,7 @@ struct FrameTraversalIndex::Impl {
       if (row.traversal.frame == nullptr) continue;
       row.strata_order = StrataRank(row.traversal.frame->frame_strata);
       row.frame_level = row.traversal.frame->frame_level;
+      row.insertion_order = frames.PaintOrder(row.traversal.handle);
       row.traversal.strata_rank = row.strata_order;
 
       RefreshPaintFields(row);

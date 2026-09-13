@@ -7,6 +7,7 @@
 #include "openwow/ui/game/api/game_lua_api_internal.h"
 #include "openwow/ui/game/runtime/lua/held_cursor_lua_binding.h"
 #include "openwow/ui/game/framescript/core/frame_region_geometry.h"
+#include "openwow/ui/game/framescript/core/lua_script_object_access.h"
 #include "openwow/ui/game/game_ui_core.h"
 #include "openwow/ui/surfaces/game/runtime/system_message_dispatch.h"
 #include "openwow/ui/game/lua_addon_memory_tracker.h"
@@ -209,10 +210,14 @@ ResolveWeaponEnchantLuaTriplet(lua_State *L, const std::uint8_t slot) {
 
 static void PushWeaponEnchantLuaTriplet(lua_State *L,
                                         const std::optional<WeaponEnchantLuaTriplet> &triplet) {
+  // De twee tijdvelden zijn altijd een getal. Addons rekenen ermee zonder het
+  // eerste (vlag-)veld te controleren - pfUI doet bijvoorbeeld `mhtime/1000` in
+  // buff.lua:135 - en een nil daar laat hun hele handler omvallen. Bij een
+  // enchant zonder duurveld is de resterende tijd 0, niet "onbekend".
   if (!triplet.has_value()) {
     lua_pushnil(L);
-    lua_pushnil(L);
-    lua_pushnil(L);
+    lua_pushnumber(L, 0);
+    lua_pushnumber(L, 0);
     return;
   }
 
@@ -220,7 +225,7 @@ static void PushWeaponEnchantLuaTriplet(lua_State *L,
   if (triplet->has_expiration) {
     lua_pushnumber(L, static_cast<lua_Number>(triplet->expiration_ms));
   } else {
-    lua_pushnil(L);
+    lua_pushnumber(L, 0);
   }
   lua_pushnumber(L, static_cast<lua_Number>(triplet->charges));
 }
@@ -1422,10 +1427,10 @@ int LuaGetWeaponEnchantInfo(lua_State *L) {
 }
 
 int LuaGetBuildInfo(lua_State *L) {
-  lua_pushstring(L, openwow::ui::kRetailClientVersion);
-  lua_pushstring(L, openwow::ui::kRetailClientBuildNumber);
-  lua_pushstring(L, openwow::ui::kRetailClientBuildDate);
-  lua_pushnumber(L, openwow::ui::kRetailInterfaceVersion);
+  lua_pushstring(L, openwow::ui::kClassicClientVersion);
+  lua_pushstring(L, openwow::ui::kClassicClientBuildNumber);
+  lua_pushstring(L, openwow::ui::kClassicClientBuildDate);
+  lua_pushnumber(L, openwow::ui::kClassicInterfaceVersion);
   return 4;
 }
 
@@ -1938,8 +1943,22 @@ int LuaSetPortraitTexture(lua_State *L) {
   }
 
   const std::string unit_id = SafeLuaString(L, 2);
+  const char *texture_name = lua_adapter::ScriptObjectDisplayName(L, texture_index);
+  const bool trace_pfui_portrait =
+      texture_name != nullptr &&
+      std::strncmp(texture_name, "pfPortraitTexture", 17) == 0;
+  const auto trace_portrait = [&](diagnostics::LogLevel level,
+                                  const std::string &detail) {
+    if (!trace_pfui_portrait) {
+      return;
+    }
+    diagnostics::Log(
+        level, "Texture portrait SetPortraitTexture: texture=" +
+                   std::string(texture_name) + " token=" + unit_id + " " + detail);
+  };
   auto *session = GetWorldSession(L);
   if (session == nullptr) {
+    trace_portrait(diagnostics::LogLevel::kWarn, "world_session=null");
     ClearPortraitState(L, texture_index);
     return call.boolean(false);
   }
@@ -1948,9 +1967,20 @@ int LuaSetPortraitTexture(lua_State *L) {
   const WorldObject *object = ResolveUnit(session, unit_id);
 
   if (object != nullptr && object->IsUnit()) {
+    trace_portrait(
+        diagnostics::LogLevel::kInfo,
+        "resolved_guid=" + std::to_string(guid.GetRawValue()) +
+            " display=" + std::to_string(object->GetDisplayId()) +
+            " m2_instance=" +
+            std::to_string(object->GetPrimaryM2InstanceId()) + " bind=unit");
     BindPortraitUnitToken(L, texture_index, unit_id);
     return call.boolean(true);
   }
+
+  trace_portrait(
+      diagnostics::LogLevel::kWarn,
+      "resolved_guid=" + std::to_string(guid.GetRawValue()) +
+          " object=" + (object != nullptr ? "non_unit" : "missing"));
 
   if (const auto icon_path = TryResolvePortraitIconTexturePath(object);
       icon_path.has_value()) {

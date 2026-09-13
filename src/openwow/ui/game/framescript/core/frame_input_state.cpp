@@ -51,6 +51,20 @@ void NotifyFrameInputMutation(lua_State *L, int self_idx, bool reindex_only) {
   manager->NotifyFrameInputCategoryMutation(GetFrameManagerKey(L, self_idx), reindex_only);
 }
 
+void NotifyFramePaintOrderMutation(lua_State* L, int self_idx) {
+  auto* manager = runtime::WorldUiRuntimeContext::FromLua(L);
+  if (manager != nullptr && IsLuaTableEffectivelyVisible(L, self_idx)) {
+    manager->frame_store().MoveToPaintTail(GetFrameManagerKey(L, self_idx));
+  }
+}
+
+void ForceFramePaintTailMutation(lua_State* L, int self_idx) {
+  auto* manager = runtime::WorldUiRuntimeContext::FromLua(L);
+  if (manager != nullptr) {
+    manager->frame_store().MoveToPaintTail(GetFrameManagerKey(L, self_idx));
+  }
+}
+
 bool GetLuaBooleanField(lua_State *L, int table_index, const char *field) {
   lua_getfield(L, table_index, field);
   const bool result = lua_toboolean(L, -1) != 0;

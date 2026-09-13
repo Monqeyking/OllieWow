@@ -294,7 +294,7 @@ ResolveMovementBindingLuaCall(const std::string_view command) {
     return MovementBindingLuaCall{"PitchDownStart", "PitchDownStop"};
   }
   if (command == BA::kJump) {
-    return MovementBindingLuaCall{"JumpOrAscendStart", "AscendStop"};
+    return MovementBindingLuaCall{"Jump", "AscendStop"};
   }
   if (command == BA::kSitStand) {
     return MovementBindingLuaCall{"SitStandOrDescendStart", "DescendStop"};
@@ -2141,18 +2141,20 @@ bool GameLoop::StartWorldUiRuntime(const openwow::ui::game::WorldUiGeneration ge
     openwow::ui::game::WoWClientLogFile framexml_log(
         "Logs\\FrameXML.log", openwow::ui::game::WoWClientLogOpenMode::kTruncate);
 
-    if (!game_ui_.LoadDefaultUI(std::move(progress_callback), &framexml_log)) {
-      return false;
-    }
-
-    (void)PumpWorldEntryProtocolControlPackets();
-
+    // SavedVariables horen VÓÓR de UI geladen te worden: de stock-Lua leest ze
+    // tijdens LoadDefaultUI.
     if (lua_State *L = game_ui_.lua_state(); L != nullptr && !identity.account_name.empty() &&
                                              !identity.realm_name.empty() &&
                                              !identity.character_name.empty()) {
       (void)openwow::ui::game::LoadAllSavedVariables(L, identity.account_name, identity.realm_name,
                                                      identity.character_name, &framexml_log);
     }
+
+    if (!game_ui_.LoadDefaultUI(std::move(progress_callback), &framexml_log)) {
+      return false;
+    }
+
+    (void)PumpWorldEntryProtocolControlPackets();
   }
 
   if (lua_State *L = game_ui_.lua_state()) {
@@ -2205,7 +2207,10 @@ bool GameLoop::StartWorldUiRuntime(const openwow::ui::game::WorldUiGeneration ge
       [this]() { targeting_.StopAttack(false); });
 
   targeting_.SetTargetChangedCallback([this]() {
-    game_ui_.frame_events().OnPlayerTargetChanged();
+    // PLAYER_TARGET_CHANGED is emitted by SessionEventBridge::PollTargetState
+    // after the stable object-manager target and UnitTokenRegistry are synced.
+    // Do not emit it here: Lua range/focus scans temporarily retarget while
+    // pfUI has pfScanActive set and intentionally ignores that event.
     game_ui_.frame_events().dispatcher().FireEvent(openwow::ui::game::events::SPELL_UPDATE_USABLE);
     if (openwow::ui::game::detail::RefreshAllActionSlotValidation(*world_session())) {
       game_ui_.frame_events().dispatcher().FireEvent(
@@ -4561,6 +4566,7 @@ void GameLoop::ShowLoadingScreen(std::uint32_t map_id) {
   auto &loading_state = openwow::screens::LoadingScreenManager::Get();
   loading_state.Show();
   loading_state.SetTransportWorldEntryHold(false);
+  sound_runtime_.SetWorldEntryAudioInhibited(true);
   loading_screen_.PrepareMap(map_id);
 }
 
@@ -4569,6 +4575,7 @@ void GameLoop::HideLoadingScreen() {
   loading_screen_.ReleaseMap();
 
   sound_runtime_.SetZoneMusicPlaybackInhibited(false);
+  sound_runtime_.SetWorldEntryAudioInhibited(false);
 }
 
 void GameLoop::RefreshLoadingWorldEntryState(float dt) {

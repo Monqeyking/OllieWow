@@ -1,16 +1,20 @@
 #include "openwow/render/resources/fonts/font_face.h"
 
+#include "openwow/foundation/diagnostics/logging.h"
 #include "openwow/ui/font_asset_path.h"
 
 #include <ft2build.h>
 #include FT_FREETYPE_H
 
 #include <algorithm>
+#include <atomic>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <mutex>
+#include <sstream>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 
 namespace openwow::render::text {
@@ -36,10 +40,129 @@ std::vector<std::uint8_t> ReadFile(std::string path) {
   return stream ? std::move(bytes) : std::vector<std::uint8_t>{};
 }
 
+std::string PointerText(const void* pointer) {
+  std::ostringstream oss;
+  oss << "0x" << std::hex << reinterpret_cast<std::uintptr_t>(pointer);
+  return oss.str();
+}
+
+// Lifetime bookkeeping for the FreeType objects.  Each FontFace owns its own
+// FT_Library, and the text cache creates and tears faces down on demand while
+// rendering.  A crash inside FT_Done_FreeType therefore has two possible
+// shapes: the object is destroyed twice, or it is destroyed while another
+// thread is still inside it.  Both are counted here so one session can prove or
+// refute either without changing any behaviour.
+struct FaceLifetimeRegistry {
+  std::mutex mutex;
+  std::unordered_set<const void*> live_libraries;
+  std::unordered_set<const void*> live_faces;
+  std::uint64_t libraries_created{0};
+  std::uint64_t libraries_destroyed{0};
+  std::uint64_t faces_created{0};
+  std::uint64_t faces_destroyed{0};
+  std::uint64_t duplicate_face{0};
+  std::uint64_t duplicate_library{0};
+  std::uint64_t double_face{0};
+  std::uint64_t double_library{0};
+  std::uint64_t destroyed_in_use{0};
+};
+
+FaceLifetimeRegistry& FaceRegistry() {
+  static FaceLifetimeRegistry registry;
+  return registry;
+}
+
+void RegisterFace(const void* library, const void* face,
+                  const std::string& path, const int pixel_height) {
+  std::vector<std::string> warnings;
+  {
+    FaceLifetimeRegistry& registry = FaceRegistry();
+    std::lock_guard lock(registry.mutex);
+    ++registry.libraries_created;
+    ++registry.faces_created;
+    const bool fresh_library = registry.live_libraries.insert(library).second;
+    const bool fresh_face = registry.live_faces.insert(face).second;
+    if (!fresh_face) {
+      ++registry.duplicate_face;
+      warnings.push_back("FontFace: face registered twice face=" +
+                         PointerText(face) + " path=" + path +
+                         " height=" + std::to_string(pixel_height));
+    }
+    if (!fresh_library) {
+      ++registry.duplicate_library;
+      warnings.push_back("FontFace: library registered twice library=" +
+                         PointerText(library) + " path=" + path +
+                         " height=" + std::to_string(pixel_height));
+    }
+  }
+  for (const std::string& warning : warnings) {
+    openwow::diagnostics::Log(openwow::diagnostics::LogLevel::kWarn, warning);
+  }
+}
+
+void UnregisterFace(const void* library, const void* face,
+                    const int active_users, const std::string& path,
+                    const int pixel_height) {
+  std::vector<std::string> warnings;
+  {
+    FaceLifetimeRegistry& registry = FaceRegistry();
+    std::lock_guard lock(registry.mutex);
+    const bool face_was_live =
+        face != nullptr && registry.live_faces.erase(face) != 0;
+    const bool library_was_live =
+        library != nullptr && registry.live_libraries.erase(library) != 0;
+    if (face_was_live) {
+      ++registry.faces_destroyed;
+    } else if (face != nullptr) {
+      ++registry.double_face;
+      warnings.push_back(
+          "FontFace: destroying face that was not live (double free) face=" +
+          PointerText(face) + " library=" + PointerText(library) + " path=" +
+          path + " height=" + std::to_string(pixel_height));
+    }
+    if (library_was_live) {
+      ++registry.libraries_destroyed;
+    } else if (library != nullptr) {
+      ++registry.double_library;
+      warnings.push_back(
+          "FontFace: destroying library that was not live (double free or "
+          "stale pointer) library=" +
+          PointerText(library) + " path=" + path +
+          " height=" + std::to_string(pixel_height));
+    }
+    if (active_users != 0) {
+      ++registry.destroyed_in_use;
+      warnings.push_back(
+          "FontFace: destroyed while glyph access is in flight "
+          "active_users=" +
+          std::to_string(active_users) + " path=" + path +
+          " height=" + std::to_string(pixel_height));
+    }
+  }
+  for (const std::string& warning : warnings) {
+    openwow::diagnostics::Log(openwow::diagnostics::LogLevel::kWarn, warning);
+  }
+}
+
+// Makes glyph access visible to the destructor: a non-zero count while a face is
+// being destroyed means someone reached it through a pointer we do not own.
+struct ActiveUseGuard {
+  explicit ActiveUseGuard(std::atomic<int>& counter) : counter_(counter) {
+    counter_.fetch_add(1, std::memory_order_relaxed);
+  }
+  ~ActiveUseGuard() { counter_.fetch_sub(1, std::memory_order_relaxed); }
+  ActiveUseGuard(const ActiveUseGuard&) = delete;
+  ActiveUseGuard& operator=(const ActiveUseGuard&) = delete;
+
+  std::atomic<int>& counter_;
+};
+
 }
 
 struct FontFace::Impl {
   ~Impl() {
+    UnregisterFace(library, face, active_users.load(std::memory_order_relaxed),
+                   path, pixel_height);
     if (face != nullptr) FT_Done_Face(face);
     if (library != nullptr) FT_Done_FreeType(library);
   }
@@ -52,6 +175,7 @@ struct FontFace::Impl {
   int pixel_height{};
   float line_height{};
   float ascent{};
+  mutable std::atomic<int> active_users{0};
   mutable std::mutex mutex;
   mutable std::unordered_map<std::uint32_t, GlyphMetrics> glyphs;
   mutable std::unordered_map<std::uint64_t, float> advances;
@@ -86,6 +210,8 @@ std::shared_ptr<FontFace> FontFace::LoadMemory(
     return {};
   }
 
+  RegisterFace(impl->library, impl->face, impl->path, pixel_height);
+
   const float outline = OutlineCellGrowthPixels(style.outline);
   impl->line_height =
       impl->face->size != nullptr
@@ -108,6 +234,7 @@ float FontFace::ascent() const noexcept { return impl_->ascent; }
 FontStyle FontFace::style() const noexcept { return impl_->style; }
 
 GlyphMetrics FontFace::Glyph(std::uint32_t codepoint) const {
+  const ActiveUseGuard active(impl_->active_users);
   std::lock_guard lock(impl_->mutex);
   if (const auto found = impl_->glyphs.find(codepoint);
       found != impl_->glyphs.end()) {
@@ -136,6 +263,7 @@ GlyphMetrics FontFace::Glyph(std::uint32_t codepoint) const {
 float FontFace::Advance(const std::uint32_t previous_glyph,
                         const std::uint32_t glyph) const {
   if (glyph == 0) return 0.0f;
+  const ActiveUseGuard active(impl_->active_users);
   const std::uint64_t key =
       (static_cast<std::uint64_t>(previous_glyph) << 32u) | glyph;
   {
@@ -165,6 +293,7 @@ float FontFace::Advance(const std::uint32_t previous_glyph,
 }
 
 RasterizedGlyph FontFace::Rasterize(const std::uint32_t codepoint) const {
+  const ActiveUseGuard active(impl_->active_users);
   const GlyphMetrics metrics = Glyph(codepoint);
   RasterizedGlyph result{.metrics = metrics};
   if (!metrics) return result;
@@ -198,6 +327,33 @@ RasterizedGlyph FontFace::Rasterize(const std::uint32_t codepoint) const {
     }
   }
   return result;
+}
+
+void LogFontLifetimeSummary(const char* where, const std::size_t cached_faces,
+                            const std::size_t cached_atlases,
+                            const std::size_t cached_layouts,
+                            const std::uint64_t shutdown_calls) {
+  std::ostringstream oss;
+  {
+    FaceLifetimeRegistry& registry = FaceRegistry();
+    std::lock_guard lock(registry.mutex);
+    oss << "FontFace lifetime: where=" << (where != nullptr ? where : "?")
+        << " cache_faces=" << cached_faces << " cache_atlases=" << cached_atlases
+        << " cache_layouts=" << cached_layouts
+        << " shutdown_calls=" << shutdown_calls
+        << " | faces created=" << registry.faces_created
+        << " destroyed=" << registry.faces_destroyed
+        << " live=" << registry.live_faces.size()
+        << " | libraries created=" << registry.libraries_created
+        << " destroyed=" << registry.libraries_destroyed
+        << " live=" << registry.live_libraries.size()
+        << " | anomalies duplicate_face=" << registry.duplicate_face
+        << " duplicate_library=" << registry.duplicate_library
+        << " double_face=" << registry.double_face
+        << " double_library=" << registry.double_library
+        << " destroyed_in_use=" << registry.destroyed_in_use;
+  }
+  openwow::diagnostics::Log(openwow::diagnostics::LogLevel::kInfo, oss.str());
 }
 
 }

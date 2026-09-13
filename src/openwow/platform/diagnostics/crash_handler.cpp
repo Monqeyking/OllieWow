@@ -20,6 +20,46 @@
 #  include <windows.h>
 #  include <dbghelp.h>
 #  pragma comment(lib, "dbghelp.lib")
+
+namespace {
+
+// Format a code address as "module.dll+0xRVA".  This build has no PDB, only a
+// linker /MAP file, so dbghelp cannot name our own frames; the module+offset
+// pair is what makes a report resolvable against apps\client\OllieWoW.map.
+std::string DescribeAddressLocation(const DWORD64 address) {
+  HMODULE module = nullptr;
+  if (GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                             GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                         reinterpret_cast<LPCWSTR>(address), &module) == 0 ||
+      module == nullptr) {
+    return {};
+  }
+
+  wchar_t path[MAX_PATH] = {};
+  const DWORD length = GetModuleFileNameW(module, path, MAX_PATH);
+  if (length == 0) return {};
+
+  std::string full_path;
+  const int needed = WideCharToMultiByte(CP_UTF8, 0, path,
+                                         static_cast<int>(length), nullptr, 0,
+                                         nullptr, nullptr);
+  if (needed > 0) {
+    full_path.resize(static_cast<std::size_t>(needed));
+    WideCharToMultiByte(CP_UTF8, 0, path, static_cast<int>(length),
+                        full_path.data(), needed, nullptr, nullptr);
+  }
+  const auto separator = full_path.find_last_of("\\/");
+  const std::string name = separator == std::string::npos
+                               ? full_path
+                               : full_path.substr(separator + 1);
+
+  std::ostringstream oss;
+  oss << name << "+0x" << std::hex
+      << (address - reinterpret_cast<DWORD64>(module));
+  return oss.str();
+}
+
+}  // namespace
 #elif defined(__APPLE__) || defined(__linux__)
 #  include <csignal>
 #  include <cstdlib>
@@ -115,9 +155,31 @@ static LONG WINAPI CrashExceptionFilter(EXCEPTION_POINTERS* exception_info) {
         mei.ThreadId = GetCurrentThreadId();
         mei.ExceptionPointers = exception_info;
         mei.ClientPointers = FALSE;
-        MiniDumpWriteDump(GetCurrentProcess(), GetCurrentProcessId(), file,
-                          MiniDumpNormal, &mei, nullptr, nullptr);
-        CloseHandle(file);
+        BOOL dumped = MiniDumpWriteDump(GetCurrentProcess(), GetCurrentProcessId(),
+                                        file, MiniDumpNormal, &mei, nullptr, nullptr);
+        const DWORD first_error = dumped != FALSE ? 0u : GetLastError();
+        if (dumped == FALSE) {
+          // A dump that fails mid-write leaves a zero-byte file that reads like
+          // a valid crash record, so the next investigation starts from nothing.
+          // Retry once without the exception record - the one input a poisoned
+          // filter state can invalidate - and otherwise remove the file and say
+          // why in the report.
+          (void)SetFilePointer(file, 0, nullptr, FILE_BEGIN);
+          (void)SetEndOfFile(file);
+          dumped = MiniDumpWriteDump(GetCurrentProcess(), GetCurrentProcessId(),
+                                     file, MiniDumpNormal, nullptr, nullptr, nullptr);
+        }
+        if (dumped == FALSE) {
+          const DWORD retry_error = GetLastError();
+          CloseHandle(file);
+          (void)DeleteFileA(fname.str().c_str());
+          std::ostringstream note;
+          note << " (minidump unavailable: MiniDumpWriteDump error "
+               << first_error << ", retry " << retry_error << ")";
+          (void)handler.WriteCrashReport(sig_info + note.str(), stack);
+        } else {
+          CloseHandle(file);
+        }
       }
     }
   }
@@ -408,15 +470,17 @@ std::vector<std::string> CrashHandler::CaptureStackTrace(int max_frames) {
   result.reserve(count);
   for (USHORT i = 0; i < count; ++i) {
     auto address = reinterpret_cast<DWORD64>(frames[i]);
+    const std::string location = DescribeAddressLocation(address);
+    std::ostringstream oss;
     if (symbols_initialized && SymFromAddr(process, address, nullptr, symbol)) {
-      std::ostringstream oss;
       oss << symbol->Name << " [0x" << std::hex << address << "]";
-      result.push_back(oss.str());
     } else {
-      std::ostringstream oss;
       oss << "[0x" << std::hex << address << "]";
-      result.push_back(oss.str());
     }
+    if (!location.empty()) {
+      oss << " " << location;
+    }
+    result.push_back(oss.str());
   }
   free(symbol);
   if (symbols_initialized) {

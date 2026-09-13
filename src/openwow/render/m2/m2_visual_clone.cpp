@@ -197,7 +197,10 @@ M2VisualCloneCreateResult M2System::CreateVisualClone(
             "SetEffectEmittersEnabled")) return std::move(*error);
     if (auto error = require(SetTintColor(clone, source.tint_color),
                              "SetTintColor")) return std::move(*error);
-    if (auto error = require(SetAlpha(clone, source.alpha), "SetAlpha"))
+    // Portraits are an independent UI render surface.  Do not inherit the
+    // world model's camera/near-clip fade, otherwise the player portrait
+    // disappears when the camera moves close to or through the character.
+    if (auto error = require(SetAlpha(clone, 1.0f), "SetAlpha"))
       return std::move(*error);
     if (auto error = require(
             SetSelectionGlowColor(clone, source.selection_glow_color),
@@ -384,6 +387,15 @@ M2CameraSampleQuery M2System::QueryVisualCloneCamera(
                               .detail = "visual clone lease is invalid"};
   return QueryInstanceCameraSample(lease.state_->nodes.front().clone_instance_id,
                                    camera);
+}
+
+M2CameraSampleQuery M2System::QueryVisualCloneCameraByLookup(
+    const M2VisualCloneLease& lease, const int lookup) const {
+  if (!lease.valid()) return {.status = M2ResultStatus::kFailed,
+                              .reason = M2ResultReason::kInvalidHandle,
+                              .detail = "visual clone lease is invalid"};
+  return QueryInstanceCameraSampleByLookup(
+      lease.state_->nodes.front().clone_instance_id, lookup);
 }
 
 M2CameraSampleQuery M2System::QueryVisualCloneCameraByType(

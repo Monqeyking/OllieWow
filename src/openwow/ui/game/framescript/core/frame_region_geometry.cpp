@@ -14,6 +14,7 @@
 #include "openwow/ui/game/runtime/lua_interned_field_key.h"
 #include "openwow/ui/game/runtime/retained_layout.h"
 #include "openwow/ui/game/runtime/texture_render_state_source.h"
+#include "openwow/foundation/diagnostics/logging.h"
 #include "openwow/ui/lua_c_api_convenience.h"
 #include "openwow/ui/texture_natural_size.h"
 #include "openwow/ui/script_boolean.h"
@@ -55,6 +56,53 @@ bool TryGetScriptFrameDeviceRect(lua_State* L, int frame_index,
                          : nullptr;
   std::optional<openwow::ui::framexml::FrameRect> region_fallback;
   if (rect == nullptr) {
+    // A native frame can already have a resolved pixel rect even when its
+    // retained-layout key is not available.  Vanilla frame-script geometry
+    // must still be able to expose that rect to GetLeft/GetRight/etc.; use
+    // the frame's own rect only, never GetBoundsRect(), which includes child
+    // regions and would change the API semantics.
+    auto* native_frame = dynamic_cast<openwow::ui::widgets::CSimpleFrame*>(
+        lua_adapter::BorrowNativeScriptObject(L, frame_index));
+    openwow::ui::widgets::ScreenRect native_rect{};
+    const bool native_rect_available =
+        native_frame != nullptr &&
+        native_frame->TryGetCachedLayoutRect(&native_rect);
+    const bool native_rect_valid =
+        native_rect_available &&
+        std::isfinite(native_rect.left) &&
+        std::isfinite(native_rect.top) &&
+        std::isfinite(native_rect.right) &&
+        std::isfinite(native_rect.bottom) &&
+        native_rect.right >= native_rect.left &&
+        native_rect.bottom >= native_rect.top;
+    const bool trace_frame =
+        frame_key != nullptr &&
+        (std::strncmp(frame_key, "ChatFrame", 9) == 0 ||
+         std::strcmp(frame_key, "UIParent") == 0);
+    if (trace_frame) {
+      static unsigned trace_count = 0;
+      if (trace_count++ < 24) {
+        openwow::diagnostics::Log(
+            openwow::diagnostics::LogLevel::kWarn,
+            std::string("[UiGeometryTrace] missing-retained key=") + frame_key +
+                " native_frame=" + (native_frame != nullptr ? "true" : "false") +
+                " native_cached=" +
+                (native_rect_available ? "true" : "false") +
+                " native_valid=" + (native_rect_valid ? "true" : "false") +
+                " rect=" + std::to_string(native_rect.left) + "," +
+                std::to_string(native_rect.top) + "," +
+                std::to_string(native_rect.right) + "," +
+                std::to_string(native_rect.bottom));
+      }
+    }
+    if (native_rect_valid) {
+      output->left = static_cast<double>(native_rect.left);
+      output->bottom = static_cast<double>(manager->screen_height()) -
+                       static_cast<double>(native_rect.bottom);
+      output->width = static_cast<double>(native_rect.right - native_rect.left);
+      output->height = static_cast<double>(native_rect.bottom - native_rect.top);
+      return true;
+    }
 
     frame_index = lua_absindex(L, frame_index);
     std::string parent_key;

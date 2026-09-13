@@ -55,7 +55,11 @@ int LuaUnitBuff(lua_State* L);
 int LuaUnitDebuff(lua_State* L);
 int LuaUnitAura(lua_State* L);
 int LuaGetPlayerBuff(lua_State* L);
+int LuaGetPlayerBuffTexture(lua_State* L);
+int LuaGetPlayerBuffDispelType(lua_State* L);
+int LuaGetPlayerBuffApplications(lua_State* L);
 int LuaGetPlayerBuffTimeLeft(lua_State* L);
+int LuaCancelPlayerBuff(lua_State* L);
 
 int LuaGetPlayerMapPosition(lua_State* L);
 

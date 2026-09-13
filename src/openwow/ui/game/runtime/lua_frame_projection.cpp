@@ -10,6 +10,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -1011,16 +1012,41 @@ static void BindTexturePortraitFromTokens(
       portrait_view_id == nullptr) {
     return;
   }
+  static std::unordered_set<std::string> portrait_trace_states;
   const auto bind_dynamic_portrait =
-      [&](const openwow::game::WorldObject* object) {
+      [&](const openwow::game::WorldObject* object, const std::string& label) {
         if (object == nullptr || !object->IsUnit()) {
+          const std::string trace_key = label + ":missing";
+          if (portrait_trace_states.insert(trace_key).second) {
+            openwow::diagnostics::Log(
+                openwow::diagnostics::LogLevel::kWarn,
+                "Texture portrait projection: token=" + label +
+                    " object=" +
+                    (object != nullptr ? "non_unit" : "missing"));
+          }
           return;
         }
 
+        const auto guid = object->GetGuid();
+        const auto display_id = object->GetDisplayId();
+        const auto m2_instance = object->GetPrimaryM2InstanceId();
         const auto binding =
-            portraits->Acquire(object->GetGuid(), object->GetDisplayId(),
-                               object->GetPrimaryM2InstanceId(),
+            portraits->Acquire(guid, display_id, m2_instance,
                                *portrait_view_id, portrait_view_limit);
+        const std::string trace_key =
+            label + ":" + std::to_string(guid.GetRawValue()) + ":" +
+            std::to_string(display_id) + ":" + std::to_string(m2_instance) +
+            ":" + (binding.texture.has_value() ? "1" : "0");
+        if (portrait_trace_states.insert(trace_key).second) {
+          openwow::diagnostics::Log(
+              openwow::diagnostics::LogLevel::kInfo,
+              "Texture portrait projection: token=" + label +
+                  " guid=" + std::to_string(guid.GetRawValue()) +
+                  " display=" + std::to_string(display_id) +
+                  " m2_instance=" + std::to_string(m2_instance) +
+                  " texture=" +
+                  (binding.texture.has_value() ? "ready" : "missing"));
+        }
         if (!binding.texture.has_value()) {
           return;
         }
@@ -1030,16 +1056,18 @@ static void BindTexturePortraitFromTokens(
         state.dynamic_texture_height = binding.texture->height;
         state.dynamic_texture_is_render_target = true;
         state.texture_path.clear();
-      };
+  };
 
   if (portrait_unit.has_value()) {
-    bind_dynamic_portrait(detail::ResolveUnit(session, *portrait_unit));
+    bind_dynamic_portrait(detail::ResolveUnit(session, *portrait_unit),
+                          *portrait_unit);
   } else if (portrait_guid.has_value() && !portrait_guid->empty()) {
     const auto raw_guid = static_cast<std::uint64_t>(
         std::strtoull(portrait_guid->c_str(), nullptr, 10));
     if (raw_guid != 0) {
       bind_dynamic_portrait(
-          session->objects().Get(openwow::game::ObjectGuid(raw_guid)));
+          session->objects().Get(openwow::game::ObjectGuid(raw_guid)),
+          "guid:" + std::to_string(raw_guid));
     }
   }
 }
@@ -1648,6 +1676,54 @@ void GameUIManager::NotifyFrameInputCategoryMutation(
       retained_visibility_changed =
           old_visible != frame.visible ||
           old_draw_layer_enabled != frame.runtime_draw_layer_enabled;
+
+      const bool trace_layout_mutation =
+          frame_name == "ChatFrame1" || frame_name == "ChatFrame2" ||
+          frame_name == "ChatFrame3" || frame_name == "pfChatLeft" ||
+          frame_name == "pfChatRight";
+      if (trace_layout_mutation) {
+        static unsigned trace_count = 0;
+        if (trace_count++ < 32) {
+          std::string trace =
+              "[UiMutationTrace] name=" + frame_name +
+              " reindex_only=" + (reindex_only ? "true" : "false") +
+              " parent=" + (frame.parent.empty() ? "<none>" : frame.parent) +
+              " old_parent=" +
+              (old_parent.empty() ? "<none>" : old_parent) +
+              " parent_changed=" + (parent_changed ? "true" : "false") +
+              " width=" + std::to_string(frame.width.value_or(-1.0F)) +
+              " height=" + std::to_string(frame.height.value_or(-1.0F)) +
+              " anchors=";
+          lua_getfield(lua_, source.table, "__ow_anchors");
+          if (lua_istable(lua_, -1) != 0) {
+            const lua_Integer count = std::min<lua_Integer>(luaL_len(lua_, -1), 2);
+            for (lua_Integer i = 1; i <= count; ++i) {
+              lua_rawgeti(lua_, -1, i);
+              if (lua_istable(lua_, -1) != 0) {
+                lua_getfield(lua_, -1, "point");
+                lua_getfield(lua_, -2, "relativeTo");
+                lua_getfield(lua_, -3, "relativePoint");
+                const char* point = lua_tostring(lua_, -3);
+                const char* relative_to = lua_tostring(lua_, -2);
+                const char* relative_point = lua_tostring(lua_, -1);
+                trace += (i > 1 ? ";" : "") +
+                         std::string(point != nullptr ? point : "?") +
+                         "->" +
+                         (relative_to != nullptr ? relative_to : "?") +
+                         "." +
+                         (relative_point != nullptr ? relative_point : "?");
+                lua_pop(lua_, 3);
+              }
+              lua_pop(lua_, 1);
+            }
+          } else {
+            trace += "<none>";
+          }
+          lua_pop(lua_, 1);
+          openwow::diagnostics::Log(openwow::diagnostics::LogLevel::kWarn,
+                                    std::move(trace));
+        }
+      }
 
       if (parent_changed || kind_changed) {
         frame_traversal_index_.InvalidateHierarchy();

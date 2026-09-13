@@ -111,6 +111,7 @@ public:
   void FireUnitDisplayPower(std::uint64_t guid);
   void FireUnitInventoryChanged(std::uint64_t guid);
   void FireUnitComboPoints(std::uint64_t guid);
+  void FirePlayerComboPoints();
   void FireUnitAttackPower(std::uint64_t guid);
   void FireUnitAttackSpeed(std::uint64_t guid);
   void FireUnitRangedDamage(std::uint64_t guid);

@@ -115,4 +115,46 @@ void DumpVfsIndex(const openwow::vfs::VirtualFileSystem& vfs,
                      "Wrote VFS index: " + out_path.string() + " entries=" + std::to_string(count));
 }
 
+std::optional<std::string> VfsFileToDump() {
+  const char* value = std::getenv("OPENWOW_DUMP_VFS_FILE");
+  if (value == nullptr || value[0] == '\0') {
+    return std::nullopt;
+  }
+  return std::string(value);
+}
+
+void DumpVfsFile(const openwow::vfs::VirtualFileSystem& vfs,
+                 const std::string& virtual_path,
+                 const std::filesystem::path& out_path) {
+  const auto bytes = vfs.ReadFileBytes(virtual_path);
+  if (!bytes.has_value()) {
+    openwow::diagnostics::Log(openwow::diagnostics::LogLevel::kWarn,
+                       "VFS file dump missing: " + virtual_path);
+    return;
+  }
+
+  std::error_code ec;
+  std::filesystem::create_directories(out_path.parent_path(), ec);
+  if (ec) {
+    openwow::diagnostics::Log(openwow::diagnostics::LogLevel::kWarn,
+                       "VFS file dump failed to create dir: " +
+                           out_path.parent_path().string());
+    return;
+  }
+  std::ofstream out(out_path, std::ios::out | std::ios::binary | std::ios::trunc);
+  if (!out.is_open()) {
+    openwow::diagnostics::Log(openwow::diagnostics::LogLevel::kWarn,
+                       "VFS file dump failed to open: " + out_path.string());
+    return;
+  }
+  out.write(reinterpret_cast<const char*>(bytes->data()),
+            static_cast<std::streamsize>(bytes->size()));
+  out.close();
+
+  openwow::diagnostics::Log(
+      openwow::diagnostics::LogLevel::kInfo,
+      "Wrote VFS file dump: " + virtual_path + " -> " + out_path.string() +
+          " bytes=" + std::to_string(bytes->size()));
+}
+
 }

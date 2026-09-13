@@ -532,7 +532,7 @@ bool ParseUpdateObject(const std::uint8_t *data, std::size_t len,
             len, block_count);
       }
       if (!ReadUpdateFields(reader,
-                            ResolveObjectFieldCount(upd.type_id, upd.guid, upd.movement.IsSelf()),
+                            ResolveObjectFieldCount(upd.type_id, upd.guid, upd.IsSelf()),
                             upd.fields)) {
         return LogUpdateObjectParseFailure(
             reader, i, update_type_raw,

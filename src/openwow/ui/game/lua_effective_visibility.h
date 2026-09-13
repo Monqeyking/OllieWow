@@ -2,6 +2,7 @@
 
 #include "openwow/ui/lua_c_api_convenience.h"
 #include "openwow/ui/game/framescript/core/frame_script_invocation.h"
+#include "openwow/ui/game/framescript/core/frame_input_state.h"
 #include "openwow/ui/game/runtime/lua_interned_field_key.h"
 
 extern "C" {
@@ -296,6 +297,12 @@ inline void DispatchLuaVisibilityTransitionSteps(
                 : ComputeLuaWidgetEffectiveVisibility(state, frame_index);
         if (current_visibility != target) {
           StoreLuaEffectiveVisibility(state, frame_index, target);
+          if (target) {
+            // Vanilla appends newly visible frames to their strata/level bucket.
+            // The frame just transitioned to visible, so use the ungated relink:
+            // the visibility snapshot read above is what decided `target`.
+            frame_api::ForceFramePaintTailMutation(state, frame_index);
+          }
           const lua_Integer generation = entry.generation + 1;
           lua_pushinteger(state, generation);
           lua_setfield(state, frame_index, "__ow_visibility_generation");

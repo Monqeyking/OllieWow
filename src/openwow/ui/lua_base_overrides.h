@@ -557,8 +557,34 @@ inline int LuaBaseStringUpper(lua_State* state) {
   return LuaBaseTransformLegacyStringCase(state, true);
 }
 
-inline int LuaBaseStringGfindDeprecated(lua_State* state) {
-  return luaL_error(state, "'string.gfind' was renamed to 'string.gmatch'");
+// Vanilla/1.12 runs Lua 5.0, where `string.gfind` is the iterator factory that
+// Lua 5.1 renamed to `string.gmatch` (same contract: it returns the iterator
+// function).  The active FrameXML/addon corpus still calls the 5.0 name (pfUI's
+// modules/autoshift.lua among others), so keep it working instead of exposing
+// Lua 5.1's deprecation stub, which only exists to catch 5.0 code.
+//
+// `string.gmatch` is looked up at call time, so an addon that replaces it is
+// honoured, as the reference does.
+inline int LuaBaseStringGfind(lua_State* state) {
+  const int argument_count = lua_gettop(state);
+
+  lua_getglobal(state, "string");
+  if (lua_istable(state, -1) == 0) {
+    lua_pop(state, 1);
+    return luaL_error(state,
+                      "'string.gfind' is unavailable: string library is missing");
+  }
+  lua_getfield(state, -1, "gmatch");
+  lua_remove(state, -2);
+  if (lua_isfunction(state, -1) == 0) {
+    lua_pop(state, 1);
+    return luaL_error(state,
+                      "'string.gfind' is unavailable: string.gmatch is missing");
+  }
+
+  lua_insert(state, 1);
+  lua_call(state, argument_count, LUA_MULTRET);
+  return lua_gettop(state);
 }
 
 inline int LuaBaseAssert(lua_State* state) {
@@ -671,7 +697,7 @@ inline void InstallLuaBaseOverrides(lua_State* state) {
     lua_pushcfunction(state, detail::LuaBaseStringUpper);
     lua_setfield(state, -2, "upper");
 
-    lua_pushcfunction(state, detail::LuaBaseStringGfindDeprecated);
+    lua_pushcfunction(state, detail::LuaBaseStringGfind);
     lua_setfield(state, -2, "gfind");
   }
   lua_pop(state, 1);

@@ -135,6 +135,9 @@ public:
   void UnregisterSoundEngineUpdateCallback();
   void RegisterEnterWorldAudioCallbacks();
   void UnregisterEnterWorldAudioCallbacks();
+  void SetWorldEntryAudioInhibited(bool inhibited) {
+    world_entry_audio_inhibited_ = inhibited;
+  }
   void StopAllActiveSounds();
   void StopAllSoundEffects(float fade_seconds);
   class NonPositionalPlaybackBlockScope {

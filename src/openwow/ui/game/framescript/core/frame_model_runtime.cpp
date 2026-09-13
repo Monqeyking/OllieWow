@@ -967,21 +967,22 @@ void RefreshBoundUnitModelState(lua_State *L, int frame_index,
                                 const openwow::game::ObjectGuid guid) {
   frame_index = lua_absindex(L, frame_index);
   if (guid.IsEmpty()) {
+    StoreBoundUnitDisplayId(L, frame_index, 0);
+    ClearBoundUnitSequence(L, frame_index);
     return;
   }
 
   auto *session = openwow::ui::game::detail::GetWorldSession(L);
   if (session == nullptr) {
+    StoreBoundUnitDisplayId(L, frame_index, 0);
+    ClearBoundUnitSequence(L, frame_index);
     return;
   }
 
   const auto *unit = session->objects().GetUnit(guid);
   if (unit == nullptr) {
-
-    lua_pushnil(L);
-    lua_setfield(L, frame_index, "__ow_model_unit_guid_lo");
-    lua_pushnil(L);
-    lua_setfield(L, frame_index, "__ow_model_unit_guid_hi");
+    StoreBoundUnitDisplayId(L, frame_index, 0);
+    ClearBoundUnitSequence(L, frame_index);
     return;
   }
 
@@ -1006,22 +1007,32 @@ int LuaPlayerModelSetUnit(lua_State *Ls) {
     return luaL_error(Ls, "Usage: SetUnit(\"unit\")");
   }
 
+  const std::string unit_id = openwow::ui::game::detail::SafeLuaString(Ls, 2);
+
+  // Keep the Vanilla unit token alive. The target can be selected before its
+  // object/display is available to the client; the compositor retries it.
+  lua_pushvalue(Ls, 2);
+  lua_setfield(Ls, 1, "__ow_model_unit");
+  // A live unit binding supersedes a placeholder installed by SetModel.
+  lua_pushnil(Ls);
+  lua_setfield(Ls, 1, "__ow_model_path");
+  StoreBoundUnitGuid(Ls, 1, {});
+  StoreBoundUnitDisplayId(Ls, 1, 0);
+  ClearBoundUnitSequence(Ls, 1);
+  ClearBoundCreatureBinding(Ls, 1);
+  ClearCharacterModelHiddenState(Ls, 1);
+
   auto *session = openwow::ui::game::detail::GetWorldSession(Ls);
   if (session == nullptr) {
     return 0;
   }
 
-  const std::string unit_id = openwow::ui::game::detail::SafeLuaString(Ls, 2);
   const auto guid = openwow::ui::game::detail::ResolveUnitId(session, unit_id);
   if (guid.IsEmpty()) {
     return 0;
   }
 
-  lua_pushvalue(Ls, 2);
-  lua_setfield(Ls, 1, "__ow_model_unit");
   StoreBoundUnitGuid(Ls, 1, guid);
-  ClearBoundCreatureBinding(Ls, 1);
-  ClearCharacterModelHiddenState(Ls, 1);
   RefreshBoundUnitModelState(Ls, 1, guid);
   return 0;
 }

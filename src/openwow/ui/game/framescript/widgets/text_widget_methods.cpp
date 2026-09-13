@@ -5,6 +5,7 @@
 #include "openwow/ui/game/framescript/core/frame_font_face.h"
 #include "openwow/ui/game/framescript/core/frame_script_dispatch.h"
 #include "openwow/ui/game/framescript/core/frame_script_object_runtime.h"
+#include "openwow/foundation/diagnostics/logging.h"
 
 #include "openwow/ui/game/framescript/core/frame_method_registry.h"
 #include "openwow/ui/lua_c_api_convenience.h"
@@ -44,9 +45,56 @@ void ApplyMessageFrameTextOverrides(lua_State *L) {
   lua_pushcclosure(L, [](lua_State *Ls) -> int {
     if (!lua_istable(Ls, 1))
       return 0;
+    lua_getfield(Ls, 1, "__ow_name");
+    const std::string name = lua_isstring(Ls, -1) != 0
+                                 ? lua_tostring(Ls, -1)
+                                 : "<unnamed>";
+    lua_pop(Ls, 1);
+
     lua_getfield(Ls, 1, "__ow_font_path");
+    const bool raw_path_valid =
+        lua_isstring(Ls, -1) != 0 && lua_tostring(Ls, -1)[0] != '\0';
+    const std::string raw_path = lua_isstring(Ls, -1) != 0
+                                     ? lua_tostring(Ls, -1)
+                                     : "<nil>";
+    if (!raw_path_valid) {
+      lua_pop(Ls, 1);
+      lua_pushliteral(Ls, "Fonts\\FRIZQT__.TTF");
+    }
     lua_getfield(Ls, 1, "__ow_font_size");
+    const bool raw_height_valid = lua_isnumber(Ls, -1) != 0;
+    const double raw_height = raw_height_valid ? lua_tonumber(Ls, -1) : 0.0;
+    if (!raw_height_valid) {
+      lua_pop(Ls, 1);
+      lua_pushnumber(Ls, 12.0);
+    }
     lua_getfield(Ls, 1, "__ow_font_flags");
+
+    static std::unordered_set<std::string> traced;
+    if (traced.size() < 32 && traced.insert(name).second) {
+      const char* const returned_path = lua_tostring(Ls, -3);
+      const double returned_height = lua_isnumber(Ls, -2) != 0
+                                         ? lua_tonumber(Ls, -2)
+                                         : 0.0;
+      const char* const returned_flags = lua_tostring(Ls, -1);
+      openwow::diagnostics::Log(
+          openwow::diagnostics::LogLevel::kWarn,
+          "[ChatFontTrace] route=MessageFrame:GetFont name=" + name +
+              " raw_path=" + raw_path +
+              " raw_height=" + std::to_string(raw_height) +
+              " raw_height_valid=" +
+              (raw_height_valid ? "true" : "false") +
+              " raw_flags=" +
+              (lua_isstring(Ls, -1) != 0 ? lua_tostring(Ls, -1) : "<nil>") +
+              " returned_path=" +
+              (returned_path != nullptr ? returned_path : "<nil>") +
+              " returned_height=" + std::to_string(returned_height) +
+              " returned_flags=" +
+              (returned_flags != nullptr ? returned_flags : "<nil>") +
+              " fallback_path=" + (!raw_path_valid ? "true" : "false") +
+              " fallback_height=" +
+              (!raw_height_valid ? "true" : "false"));
+    }
     return 3;
   }, 0);
   lua_setfield(L, f, "GetFont");

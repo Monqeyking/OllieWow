@@ -2062,12 +2062,16 @@ MovementCollisionResult MovementCollisionSolver::SolveAirborne(
   float remaining_ms = static_cast<float>(step.duration_ms);
   std::uint32_t stalled = 0;
   std::uint32_t deflection_iterations = 0;
+  constexpr std::uint32_t kAirborneIterationLimit = 32u;
+  std::uint32_t iterations = 0u;
   bool used_vertical_recovery = false;
   if (Length(remaining) < Constants::kTraceEpsilon) {
     remaining_ms = 0.0f;
   }
 
-  while (Length(remaining) >= Constants::kTraceEpsilon) {
+  while (Length(remaining) >= Constants::kTraceEpsilon &&
+         iterations < kAirborneIterationLimit) {
+    ++iterations;
     if (callbacks_.cancelled && callbacks_.cancelled()) {
       result.status = MovementCollisionStatus::kCancelled;
       return result;
@@ -2114,6 +2118,39 @@ MovementCollisionResult MovementCollisionSolver::SolveAirborne(
             contact_distance, contact_time_seconds,
             trace.contacts.front());
 
+    const C3Vector contact_surface =
+        NormalizeOr(trace.contacts.front().surface_normal,
+                    trace.contacts.front().normal);
+    const float landing_threshold =
+        body.permissive_walkable_slope ? Constants::kPermissiveNormalZ
+                                       : Constants::kWalkableNormalZ;
+    const float vertical_velocity_at_contact =
+        step.vertical_speed + Constants::kGravity * contact_time_seconds;
+    const bool descending_at_contact =
+        vertical_velocity_at_contact >= -Constants::kTraceEpsilon;
+    // Benilla's next-frame ground probe accepts a vertical walkable contact
+    // even when there is no horizontal displacement. The footprint check is
+    // useful for a moving arc, but can reject the stationary jump landing and
+    // leave FALLING set after the response has already reached the floor.
+    const bool stationary_ground_contact =
+        falling_path && initial_horizontal < Constants::kTraceEpsilon &&
+        contact_surface.z > landing_threshold && descending_at_contact;
+
+    // A stationary jump can begin exactly on a walkable facet. The sweep may
+    // report that touching facet again while the capsule is moving upward,
+    // even though Benilla's airborne slide lets the jump continue. Treat that
+    // contact as non-blocking; only the descending half of the arc may land.
+    const bool ascending_stationary_ground_contact =
+        falling_path && initial_horizontal < Constants::kTraceEpsilon &&
+        contact_surface.z > landing_threshold && !descending_at_contact &&
+        step.displacement.z > Constants::kTraceEpsilon;
+    if (ascending_stationary_ground_contact) {
+      body.position = Add(pre_contact_position, remaining);
+      remaining = {};
+      remaining_ms = 0.0f;
+      break;
+    }
+
     const float response_duration_seconds = AdjustAirborneContactTime(
         step, pre_contact_position, contact_time_seconds,
         remaining_duration_seconds, initial_horizontal,
@@ -2140,8 +2177,9 @@ MovementCollisionResult MovementCollisionSolver::SolveAirborne(
     }
 
     if (falling_path &&
-        AirborneLandingAdmission(body, pre_response_contact,
-                                 trace.contacts.front())) {
+        (AirborneLandingAdmission(body, pre_response_contact,
+                                  trace.contacts.front()) ||
+         stationary_ground_contact)) {
       body.mode = MovementCollisionMode::kGround;
       result.landed = true;
       result.state_snapshot_required = true;
@@ -2171,10 +2209,8 @@ MovementCollisionResult MovementCollisionSolver::SolveAirborne(
         continue;
       }
 
-      if (falling_path) {
-        body.mode = MovementCollisionMode::kGround;
-        result.landed = true;
-      }
+      // A stalled contact is not proof that the feet reached walkable
+      // ground. Leave landing admission to the caller's downward probe.
       result.state_snapshot_required = true;
       result.status = MovementCollisionStatus::kBlocked;
       result.reset_requested = true;
@@ -2198,10 +2234,8 @@ MovementCollisionResult MovementCollisionSolver::SolveAirborne(
           vertical_recovery_limit * vertical_recovery_limit <
               endpoint_horizontal_squared) {
 
-        if (falling_path) {
-          body.mode = MovementCollisionMode::kGround;
-          result.landed = true;
-        }
+        // A deflection guard is not proof that the feet reached ground.
+        // Leave landing admission to the caller's downward probe.
         result.state_snapshot_required = true;
         result.status = MovementCollisionStatus::kBlocked;
         result.reset_requested = true;
@@ -2240,8 +2274,12 @@ MovementCollisionResult MovementCollisionSolver::SolveAirborne(
   }
 
   if (Length(remaining) >= Constants::kTraceEpsilon) {
+    // A zero-distance contact can otherwise feed the same displacement back
+    // into this resolver forever. Never turn that guard into a landing: the
+    // caller must confirm ground with a downward probe first.
     result.status = MovementCollisionStatus::kBlocked;
     result.reset_requested = true;
+    remaining = {};
   }
   if (falling_path && step.vertical_speed != 0.0f &&
       step.directional_input) {

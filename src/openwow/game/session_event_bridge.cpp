@@ -19,6 +19,8 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <string>
+#include <utility>
 
 namespace openwow::ui::game {
 
@@ -167,7 +169,10 @@ void SessionEventBridge::PollPlayerState() {
   }
 
   if (cur_player.combo_points != prev_player_.combo_points) {
-    if (pguid) sed.FireUnitComboPoints(pguid);
+    if (pguid) {
+      sed.FireUnitComboPoints(pguid);
+      sed.FirePlayerComboPoints();
+    }
   }
 
   if (cur_player.flags != prev_player_.flags && prev_player_.flags != 0) {
@@ -184,9 +189,8 @@ void SessionEventBridge::PollTargetState() {
   const auto target_raw = target_guid.IsEmpty() ? 0ULL : target_guid.GetRawValue();
 
   if (target_raw != prev_target_guid_) {
-
     UnitTokenRegistry::Get().SetTarget(target_raw);
-    ScriptEventDispatch::Get().FirePlayerTargetChanged();
+    ui_->frame_events().OnPlayerTargetChanged();
     prev_target_guid_ = target_raw;
     prev_target_ = target_guid.IsEmpty() ? UnitSnapshot{} : SnapshotUnit("target");
   }

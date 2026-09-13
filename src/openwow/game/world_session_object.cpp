@@ -964,6 +964,8 @@ void WorldSession::OnLocalPlayerCreated(const ObjectGuid &guid) {
 
   ApplyStoredClientControl();
 
+  ui::game::ScriptEventDispatch::Get().FireUnitPortrait(guid.GetRawValue());
+
   openwow::net::ClientServices::Instance().CompleteCharacterLoginTransition(true);
   DispatchPendingTriggerCinematicIfReady();
 

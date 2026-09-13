@@ -82,6 +82,16 @@ const char* ResolveRegisteredCreateFrameTypeName(std::string_view name) noexcept
     return "ModelFFX";
   }
 
+  // Classic FrameXML creates its loot rows as "LootButton"
+  // (LOOT_BUTTON_FRAME_TYPE) and the native CLootButton is Button-derived; the
+  // XML path already normalizes the authored tag to Button
+  // (framexml_parser.cpp NormalizeWidgetKind).  Mirror that here so a
+  // script-created loot button gets the Button runtime - SetSlot included -
+  // instead of failing with "Unknown frame type".
+  if (openwow::text::EqualsIgnoreCaseAscii(name, "LootButton")) {
+    return "Button";
+  }
+
   for (const auto& entry : kTypeNames) {
     if (IsScriptTypeKindOf(entry.type, ScriptObjectType::Frame) &&
         openwow::text::EqualsIgnoreCaseAscii(name, entry.name)) {

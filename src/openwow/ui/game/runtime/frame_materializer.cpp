@@ -31,6 +31,7 @@ extern "C" {
 }
 
 #include <algorithm>
+#include <array>
 #include <iterator>
 #include <memory>
 #include <optional>
@@ -196,6 +197,29 @@ std::size_t FrameMaterializer::template_node_count() const noexcept {
 void FrameMaterializer::BeginDefaultFrameXmlLoad() {
   default_declarations_.clear();
   loading_default_frame_xml_ = true;
+}
+void FrameMaterializer::ReconcileDefaultLuaGlobals() {
+  if (lua_ == nullptr) return;
+
+  const auto publish_named_frame = [&](const std::string_view name,
+                                       const int ref) {
+    if (name.empty() || ref == LUA_NOREF) return;
+    const int top = lua_gettop(lua_);
+    lua_rawgeti(lua_, LUA_REGISTRYINDEX, ref);
+    if (lua_istable(lua_, -1) != 0) {
+      const std::string lua_name(name);
+      (void)openwow::ui::PublishLuaGlobalValueIfNil(lua_, lua_name.c_str(), -1);
+    }
+    lua_settop(lua_, top);
+  };
+
+  for (const auto handle : dependencies_.frames.registration_handles()) {
+    const auto* frame = dependencies_.frames.FindFrame(handle);
+    const auto ref = dependencies_.frames.FindLuaRef(handle);
+    if (frame != nullptr && ref.has_value()) {
+      publish_named_frame(frame->LuaName(), *ref);
+    }
+  }
 }
 void FrameMaterializer::EndDefaultFrameXmlLoad() noexcept {
   loading_default_frame_xml_ = false;
@@ -452,6 +476,8 @@ int FrameMaterializer::CreateTrackedFrameBinding(
       dependencies_.frames.AttachLuaBinding(text_key, text_ref);
       dependencies_.layout.PublishFrame(text_key);
 
+      CreateEditBoxFocusRegions(key, dependencies_.frames,
+                                dependencies_.layout);
       CreateEditBoxCaretRegions(key, dependencies_.frames,
                                 dependencies_.layout);
     }
@@ -622,9 +648,14 @@ int FrameMaterializer::InstantiateFrameTree(UiFrame root,
     const auto parent = plan.parents[i];
     int parent_index = 0;
     bool parent_pushed = false;
+    // Use the already resolved parser/template relationship. Template clones
+    // may have a runtime name that differs from the authored parent token;
+    // re-checking that token for non-root parents drops child regions before
+    // GetRegions(). Index zero is the valid XML root, so retain its authored
+    // parent check to distinguish it from an unresolved external parent.
     const bool has_structural_parent =
         parent < i && refs[parent] != LUA_NOREF &&
-        (plan.frames[i].parent.empty() ||
+        (parent != 0 || plan.frames[i].parent.empty() ||
          plan.frames[parent].name == plan.frames[i].parent);
     if (has_structural_parent) {
       lua_rawgeti(lua_, LUA_REGISTRYINDEX, refs[parent]);
@@ -635,6 +666,57 @@ int FrameMaterializer::InstantiateFrameTree(UiFrame root,
                                         parent_index != 0);
     if (parent_pushed) lua_pop(lua_, 1);
   }
+  // Vanilla EditBoxes expose focusLeft/focusMid/focusRight as Lua texture
+  // regions. The caret and selection textures remain renderer-owned, as in
+  // the Classic reference runtime.
+  for (std::size_t i = 1; i < plan.frames.size(); ++i) {
+    const auto type =
+        widgets::ScriptObjectTypeFromName(plan.frames[i].kind);
+    if (type != widgets::ScriptObjectType::EditBox ||
+        refs[i] == LUA_NOREF) {
+      continue;
+    }
+    const int top = lua_gettop(lua_);
+    lua_rawgeti(lua_, LUA_REGISTRYINDEX, refs[i]);
+    if (!lua_istable(lua_, -1)) {
+      lua_settop(lua_, top);
+      continue;
+    }
+    const int edit_box_index = lua_absindex(lua_, -1);
+    const auto edit_box_key = FrameKey(lua_, edit_box_index);
+    if (!edit_box_key.has_value()) {
+      lua_settop(lua_, top);
+      continue;
+    }
+    const std::array<std::pair<const char*, std::string>, 3> focus_regions{{
+        {"focusLeft", EditBoxFocusRegionKey(*edit_box_key, "Left")},
+        {"focusMid", EditBoxFocusRegionKey(*edit_box_key, "Mid")},
+        {"focusRight", EditBoxFocusRegionKey(*edit_box_key, "Right")},
+    }};
+    for (const auto& [parent_key, region_key] : focus_regions) {
+      const auto* stored = dependencies_.frames.FindFrame(region_key);
+      if (stored == nullptr ||
+          dependencies_.frames.FindLuaRef(region_key).has_value()) {
+        continue;
+      }
+      frame_api::CreateTextureTable(lua_, edit_box_index);
+      const int region_index = lua_absindex(lua_, -1);
+      lua_pushstring(lua_, region_key.c_str());
+      lua_setfield(lua_, region_index, frame_api::kLuaFrameRuntimeKeyField);
+      lua_pushboolean(lua_, stored->visible ? 1 : 0);
+      lua_setfield(lua_, region_index, "__ow_visible");
+      lua_pushvalue(lua_, region_index);
+      lua_setfield(lua_, edit_box_index, parent_key);
+      lua_pushvalue(lua_, region_index);
+      const int region_ref = luaL_ref(lua_, LUA_REGISTRYINDEX);
+      lua_pushinteger(lua_, region_ref);
+      lua_setfield(lua_, region_index, "__ow_ref");
+      dependencies_.frames.AttachLuaBinding(region_key, region_ref);
+      lua_pop(lua_, 1);
+    }
+    lua_settop(lua_, top);
+  }
+
   if (record_default_declarations) {
     for (std::size_t i = 0; i < plan.frames.size(); ++i)
       if (refs[i] != LUA_NOREF && !plan.frames[i].name.empty())

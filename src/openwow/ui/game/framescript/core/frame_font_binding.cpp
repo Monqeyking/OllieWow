@@ -703,13 +703,18 @@ void PrependToRegions(lua_State *L, int parent_idx) {
     lua_setfield(L, parent_idx, "__ow_regions");
   }
   int arr = lua_absindex(L, -1);
-  lua_Integer len = luaL_len(L, arr);
+  lua_getfield(L, parent_idx, "__ow_regions_count");
+  lua_Integer len = lua_isnumber(L, -1) ? lua_tointeger(L, -1)
+                                       : luaL_len(L, arr);
+  lua_pop(L, 1);
   for (lua_Integer i = len; i >= 1; --i) {
     lua_geti(L, arr, i);
     lua_seti(L, arr, i + 1);
   }
   lua_pushvalue(L, region_idx);
   lua_seti(L, arr, 1);
+  lua_pushinteger(L, len + 1);
+  lua_setfield(L, parent_idx, "__ow_regions_count");
   lua_pop(L, 1);
 }
 
@@ -726,7 +731,12 @@ bool ArrayFieldContainsExactValue(lua_State *L, int owner_idx,
   }
 
   const int array_idx = lua_absindex(L, -1);
-  const lua_Integer len = luaL_len(L, array_idx);
+  lua_Integer len = luaL_len(L, array_idx);
+  if (std::strcmp(field_name, "__ow_regions") == 0) {
+    lua_getfield(L, owner_idx, "__ow_regions_count");
+    if (lua_isnumber(L, -1) != 0) len = lua_tointeger(L, -1);
+    lua_pop(L, 1);
+  }
   for (lua_Integer i = 1; i <= len; ++i) {
     lua_geti(L, array_idx, i);
     const bool matches = lua_rawequal(L, -1, value_idx) != 0;
@@ -757,7 +767,12 @@ void RemoveExactValueFromArrayField(lua_State *L, int owner_idx,
   lua_newtable(L);
   const int replacement_idx = lua_absindex(L, -1);
   lua_Integer out_index = 1;
-  const lua_Integer len = luaL_len(L, source_idx);
+  lua_Integer len = luaL_len(L, source_idx);
+  if (std::strcmp(field_name, "__ow_regions") == 0) {
+    lua_getfield(L, owner_idx, "__ow_regions_count");
+    if (lua_isnumber(L, -1) != 0) len = lua_tointeger(L, -1);
+    lua_pop(L, 1);
+  }
   for (lua_Integer i = 1; i <= len; ++i) {
     lua_geti(L, source_idx, i);
     if (lua_rawequal(L, -1, value_idx) == 0) {
@@ -769,6 +784,10 @@ void RemoveExactValueFromArrayField(lua_State *L, int owner_idx,
 
   lua_pushvalue(L, replacement_idx);
   lua_setfield(L, owner_idx, field_name);
+  if (std::strcmp(field_name, "__ow_regions") == 0) {
+    lua_pushinteger(L, out_index - 1);
+    lua_setfield(L, owner_idx, "__ow_regions_count");
+  }
   lua_pop(L, 2);
 }
 

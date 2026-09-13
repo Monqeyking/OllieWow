@@ -39,7 +39,11 @@ int LuaUnitBuff(lua_State* L);
 int LuaUnitDebuff(lua_State* L);
 int LuaUnitAura(lua_State* L);
 int LuaGetPlayerBuff(lua_State* L);
+int LuaGetPlayerBuffTexture(lua_State* L);
+int LuaGetPlayerBuffDispelType(lua_State* L);
+int LuaGetPlayerBuffApplications(lua_State* L);
 int LuaGetPlayerBuffTimeLeft(lua_State* L);
+int LuaCancelPlayerBuff(lua_State* L);
 int LuaUnitGUID(lua_State* L);
 int LuaGetPlayerInfoByGUID(lua_State* L);
 int LuaUnitFactionGroup(lua_State* L);
@@ -168,7 +172,11 @@ constexpr openwow::ui::LuaGlobalBinding kUnitLuaBindings[] = {
     {"UnitDebuff", LuaUnitDebuff},
     {"UnitAura", LuaUnitAura},
     {"GetPlayerBuff", LuaGetPlayerBuff},
+    {"GetPlayerBuffTexture", LuaGetPlayerBuffTexture},
+    {"GetPlayerBuffDispelType", LuaGetPlayerBuffDispelType},
+    {"GetPlayerBuffApplications", LuaGetPlayerBuffApplications},
     {"GetPlayerBuffTimeLeft", LuaGetPlayerBuffTimeLeft},
+    {"CancelPlayerBuff", LuaCancelPlayerBuff},
     {"UnitGUID", LuaUnitGUID},
     {"GetPlayerInfoByGUID", LuaGetPlayerInfoByGUID},
     {"UnitFactionGroup", LuaUnitFactionGroup},

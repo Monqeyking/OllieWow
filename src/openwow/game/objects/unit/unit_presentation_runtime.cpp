@@ -1256,20 +1256,37 @@ bool UnitPresentationRuntime::InitDisplayCollisionBounds(const bool growing, con
 }
 
 bool UnitPresentationRuntime::InitPlayerDisplayCollisionBounds(const bool growing, const bool forced) {
+  auto &move_data = owner_.Movement().Data();
+  const float existing_height = move_data.GetCollisionHeightProduct();
+  const bool force_default_height =
+      forced || !std::isfinite(existing_height) || existing_height <= 0.0f;
+  const auto init_default_bounds = [&]() {
+    // Benilla keeps a usable player capsule even when display/model data is
+    // temporarily unavailable. Do the same instead of leaving height at 0.
+    move_data.InitCollisionBounds(
+        kDefaultCollisionWidth, kDefaultCollisionHeight, 1.0f, 1.0f,
+        force_default_height, owner_.Movement().IsNavigableAsPlayer());
+    return true;
+  };
+
   const auto *dbc = owner_.dbc_loader();
   if (dbc == nullptr) {
-    return true;
+    return init_default_bounds();
   }
 
-  const std::uint32_t display_id = DisplayId();
+  // Collision follows the native player display. The rendered display may be
+  // a temporary morph, while the native display remains the collision source.
+  const std::uint32_t native_display_id = NativeDisplayId();
+  const std::uint32_t display_id =
+      native_display_id != 0u ? native_display_id : DisplayId();
   const auto *cdi = dbc->creature_display_info().LookupEntry(display_id);
   if (cdi == nullptr) {
-    return true;
+    return init_default_bounds();
   }
 
   const auto *cmd = dbc->creature_model_data().LookupEntry(cdi->model_id);
   if (cmd == nullptr) {
-    return true;
+    return init_default_bounds();
   }
 
   float raw_scale = 1.0f;
@@ -1279,12 +1296,13 @@ bool UnitPresentationRuntime::InitPlayerDisplayCollisionBounds(const bool growin
   // clients it does not provide a usable collision width there. Keep the
   // model-specific height from field 15, but use the client's standard player
   // width instead of rejecting the bounds because collision_width is zero.
-  if (std::fabs(cmd->collision_height) < kRetailFloatEpsilon) {
-    return true;
+  if (!std::isfinite(cmd->collision_height) ||
+      cmd->collision_height <= kRetailFloatEpsilon) {
+    return init_default_bounds();
   }
 
-  if (effective_scale == 0.0f) {
-    return true;
+  if (!std::isfinite(effective_scale) || effective_scale <= 0.0f) {
+    return init_default_bounds();
   }
 
   if (!growing && owner_.IsActivePlayer()) {
@@ -1305,9 +1323,9 @@ bool UnitPresentationRuntime::InitPlayerDisplayCollisionBounds(const bool growin
     }
   }
 
-  auto &move_data = owner_.Movement().Data();
   move_data.InitCollisionBounds(kDefaultCollisionWidth, cmd->collision_height,
-                                effective_scale, raw_scale, forced,
+                                effective_scale, raw_scale,
+                                forced || force_default_height,
                                 owner_.Movement().IsNavigableAsPlayer());
   return true;
 }

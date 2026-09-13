@@ -591,7 +591,15 @@ void ApplyScrollingMessageFrameMethods(lua_State* L) {
       [](lua_State* Ls) -> int {
         if (!lua_istable(Ls, 1)) return 0;
         lua_getfield(Ls, 1, "__ow_font_path");
+        if (lua_isstring(Ls, -1) == 0 || lua_tostring(Ls, -1)[0] == '\0') {
+          lua_pop(Ls, 1);
+          lua_pushliteral(Ls, "Fonts\\FRIZQT__.TTF");
+        }
         lua_getfield(Ls, 1, "__ow_font_size");
+        if (lua_isnumber(Ls, -1) == 0) {
+          lua_pop(Ls, 1);
+          lua_pushnumber(Ls, 12.0);
+        }
         lua_getfield(Ls, 1, "__ow_font_flags");
         return 3;
       },

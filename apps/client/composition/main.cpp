@@ -237,6 +237,7 @@ int RunClientProcess(int argc, char** argv) {
   bool render_submit_trace_enabled = false;
   bool move_trace_enabled = false;
   std::string cli_game_data_path;
+  std::string cli_log_level;
 
   std::vector<std::string> scenario_extra_cvar_lines;
 
@@ -296,6 +297,22 @@ int RunClientProcess(int argc, char** argv) {
       move_trace_enabled = true;
       continue;
     }
+    if (arg == "--log-level" && i + 1 < argc) {
+      cli_log_level = argv[++i] ? std::string(argv[i]) : std::string();
+      continue;
+    }
+    if (arg == "--dump-vfs-file" && i + 1 < argc) {
+      const std::string virtual_path =
+          argv[++i] ? std::string(argv[i]) : std::string();
+      if (!virtual_path.empty()) {
+#if defined(_WIN32)
+        (void)_putenv_s("OPENWOW_DUMP_VFS_FILE", virtual_path.c_str());
+#else
+        (void)setenv("OPENWOW_DUMP_VFS_FILE", virtual_path.c_str(), 1);
+#endif
+      }
+      continue;
+    }
   }
   if (move_trace_enabled) {
 #if defined(_WIN32)
@@ -304,6 +321,17 @@ int RunClientProcess(int argc, char** argv) {
 #else
     (void)setenv("OPENWOW_MOVE_TRACE", "1", 1);
     (void)setenv("OPENWOW_LOG_LEVEL", "info", 1);
+#endif
+  }
+  // Client diagnostics default to kError, which hides every Lua error the
+  // runtime reports at kWarn (see InitLogging below).  --log-level makes the
+  // level selectable from the command line; it wins over --move-trace and is
+  // read back by LogLevelFromEnvOr during InitLogging.
+  if (!cli_log_level.empty()) {
+#if defined(_WIN32)
+    (void)_putenv_s("OPENWOW_LOG_LEVEL", cli_log_level.c_str());
+#else
+    (void)setenv("OPENWOW_LOG_LEVEL", cli_log_level.c_str(), 1);
 #endif
   }
   if (!startup_trace_enabled) {
@@ -491,7 +519,7 @@ int RunClientProcess(int argc, char** argv) {
 
   if (startup_trace.has_value()) startup_trace->Add("launch.resolve");
 
-  openwow::diagnostics::InitLogging("openwow-client", openwow::diagnostics::LogLevel::kWarn);
+  openwow::diagnostics::InitLogging("openwow-client", openwow::diagnostics::LogLevel::kError);
   openwow::diagnostics::Log(openwow::diagnostics::LogLevel::kInfo, "Client startup");
 
   openwow::net::PacketLog::Get().Initialize(

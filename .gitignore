@@ -37,6 +37,11 @@ Testing/
 /WTF/
 /Cache/
 
+# Local diagnosis output: WER reports, multi-hundred-megabyte minidumps and
+# WTF/config snapshots taken while chasing a crash. Evidence for a session,
+# not a source artifact -- and far past GitHub's per-file limit.
+/Client-artifacts/
+
 .DS_Store
 *.swp
 *~

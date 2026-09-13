@@ -719,6 +719,15 @@ M2CameraSampleQuery M2SpatialQueries::QueryCameraSample(
       return value.type == static_cast<std::uint32_t>(selector);
     });
     camera_index = camera == cameras.end() ? -1 : static_cast<int>(std::distance(cameras.begin(), camera));
+  } else if (kind == M2CameraLookupKind::kLookupIndex) {
+    const auto& lookups = model->second->model_data.camera_lookups;
+    if (selector < 0 || static_cast<std::size_t>(selector) >= lookups.size()) {
+      return {.status = M2ResultStatus::kUnsupported,
+              .reason = M2ResultReason::kMissingCamera,
+              .detail = "camera_lookup=" + std::to_string(selector)};
+    }
+    const auto lookup = lookups[static_cast<std::size_t>(selector)];
+    camera_index = lookup == 0xFFFFu ? -1 : static_cast<int>(lookup);
   }
   if (camera_index < 0 || static_cast<std::size_t>(camera_index) >= model->second->model_data.cameras.size())
     return {.status = M2ResultStatus::kUnsupported, .reason = M2ResultReason::kMissingCamera,

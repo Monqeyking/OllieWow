@@ -10,6 +10,7 @@ namespace openwow::render::m2 {
 
 enum class M2CameraLookupKind : std::uint8_t {
   kIndex,
+  kLookupIndex,
   kType,
 };
 

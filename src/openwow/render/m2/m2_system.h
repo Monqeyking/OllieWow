@@ -241,6 +241,7 @@ class M2System final : public api::RendererDeviceLifecycleObserver {
   [[nodiscard]] M2KeyBoneQuery QueryKeyBone(std::uint32_t instance, std::uint32_t lookup) const;
   [[nodiscard]] M2SampleBoneMatricesQuery QueryInstanceSampleBoneMatrices(std::uint32_t instance, const std::optional<RenderMatrix4x4View>& inverse = std::nullopt) const;
   [[nodiscard]] M2CameraSampleQuery QueryInstanceCameraSample(std::uint32_t instance, int camera) const;
+  [[nodiscard]] M2CameraSampleQuery QueryInstanceCameraSampleByLookup(std::uint32_t instance, int lookup) const;
   [[nodiscard]] M2CameraSampleQuery QueryInstanceCameraSampleByType(std::uint32_t instance, std::uint32_t type) const;
   [[nodiscard]] M2LightSampleQuery QueryInstanceLightSample(std::uint32_t instance, int light, std::span<const float> bones) const;
   [[nodiscard]] std::vector<M2TriggeredEvent> CollectInstanceTriggeredEvents(std::uint32_t instance, std::uint32_t previous, std::uint32_t current, std::span<const float> bones = {}, const std::optional<RenderMatrix4x4>& matrix = std::nullopt) const;
@@ -262,6 +263,7 @@ class M2System final : public api::RendererDeviceLifecycleObserver {
   [[nodiscard]] M2ResultStatus SetVisualCloneAnimation(const M2VisualCloneLease& lease, std::uint32_t animation, float speed = 1.0f);
   [[nodiscard]] M2ResultStatus SetVisualCloneAnimationSample(const M2VisualCloneLease& lease, std::uint32_t animation, std::uint32_t time, float speed = 1.0f);
   [[nodiscard]] M2CameraSampleQuery QueryVisualCloneCamera(const M2VisualCloneLease& lease, int camera) const;
+  [[nodiscard]] M2CameraSampleQuery QueryVisualCloneCameraByLookup(const M2VisualCloneLease& lease, int lookup) const;
   [[nodiscard]] M2CameraSampleQuery QueryVisualCloneCameraByType(const M2VisualCloneLease& lease, std::uint32_t type) const;
   [[nodiscard]] M2InstanceSpatialInfoQuery QueryVisualCloneSpatialInfo(const M2VisualCloneLease& lease) const;
   [[nodiscard]] M2VisualCloneSnapshotQuery QueryVisualCloneSnapshot(const M2VisualCloneLease& lease) const;

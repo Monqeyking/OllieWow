@@ -94,6 +94,13 @@ struct CreateObjectUpdate {
   bool defer_post_init{false};
 
   bool movement_applied_before_post_init{false};
+
+  // Classic/WotLK can mark the local player either with CREATE_OBJECT2 or
+  // with UPDATEFLAG_SELF in the movement block. Both describe the same
+  // local-player contract to the UI/unit API.
+  [[nodiscard]] bool IsSelf() const {
+    return is_self || movement.IsSelf();
+  }
 };
 
 struct OutOfRangeUpdate {

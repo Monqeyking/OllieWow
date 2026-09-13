@@ -2253,8 +2253,22 @@ int CMovementData::DispatchDueEvents(
         }
         break;
       case MoveEventType::kJump:
-        if (TryStartJump()) {
-          emit(0x00BBu, event);
+        {
+          const std::uint32_t flags_before = runtime_flags_;
+          const float position_z_before = transform_position_[2];
+          const bool started = TryStartJump();
+          diagnostics::Log(
+              diagnostics::LogLevel::kWarn,
+              "JumpTrace: dispatch started=" + std::to_string(started) +
+                  " flags_before=" + std::to_string(flags_before) +
+                  " flags_after=" + std::to_string(runtime_flags_) +
+                  " pos_z=" + std::to_string(position_z_before) +
+                  " fall_start_z=" + std::to_string(runtime_fall_start_z_) +
+                  " jump_z_speed=" +
+                  std::to_string(runtime_jump_z_speed_));
+          if (started) {
+            emit(0x00BBu, event);
+          }
         }
         break;
       case MoveEventType::kStartTurnLeft:
@@ -2477,8 +2491,11 @@ int CMovementData::DispatchDueEvents(
     RefreshQueuedMovementPreview(timestamp);
   }
 
+  // A stationary jump must keep consuming the frame after its queued event.
+  // Use the same admission mask as AdvanceKinematics and Update.
+  static_assert((kActiveMotionFlagMask & openwow::game::kMoveFlagFalling) != 0u);
   return event_queue_.HasEvents() ||
-                 (runtime_flags_ & 0x00C010FFu) != 0u
+                 (runtime_flags_ & kActiveMotionFlagMask) != 0u
              ? 1
              : 0;
 }

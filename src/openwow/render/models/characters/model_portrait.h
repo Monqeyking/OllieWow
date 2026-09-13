@@ -17,6 +17,7 @@ struct ModelPortraitResult {
   m2::M2ResultReason reason = m2::M2ResultReason::kNone;
   std::string detail;
   std::uint32_t submitted_draw_count = 0;
+  std::uint32_t submitted_geometry_draw_count = 0;
 
   [[nodiscard]] bool SubmittedCompleteVisual() const noexcept {
     return status == m2::M2ResultStatus::kReady &&
@@ -70,7 +71,10 @@ class ModelPortrait {
 
   void SetCamera(float yaw = 0.0f, float pitch = 0.15f,
                  float distance = 2.5f);
+  // Model:SetCamera uses the model's cameraLookup table.
   void SetCameraIndex(std::int32_t camera_index);
+  // PlayerModel panes use a raw camera-table index for their default camera.
+  void SetCameraTableIndex(std::int32_t camera_index);
   void SetCameraType(std::uint32_t camera_type);
   void SetCameraTarget(float x = 0.0f, float y = 1.2f, float z = 0.0f);
   void SetModelRotation(float radians) noexcept { model_rotation_ = radians; }
@@ -114,7 +118,7 @@ class ModelPortrait {
   void DestroyOwnedSource();
   [[nodiscard]] ModelPortraitResult EnsureOwnedSource();
   [[nodiscard]] ModelPortraitResult ComputeViewProjection(
-      float* view_mtx, float* proj_mtx);
+      float* view_mtx, float* proj_mtx, RenderMatrix4x4View model_matrix);
 
   std::uint16_t width_ = 64;
   std::uint16_t height_ = 64;
@@ -137,9 +141,13 @@ class ModelPortrait {
 
   std::optional<m2::M2CameraPose> stable_camera_pose_;
   bool stable_camera_missing_ = false;
+  // Last camera report logged for this surface (dedup for the diagnostic line
+  // that names the camera source and pose).
+  std::string last_camera_report_;
   std::int32_t camera_index_ = 0;
   std::uint32_t camera_type_ = 0u;
   bool select_camera_by_type_ = false;
+  bool select_camera_by_table_index_ = false;
   std::uint32_t animation_id_ = 0u;
   std::optional<std::uint32_t> animation_time_ms_;
   std::uint64_t animation_applied_revision_ = 0u;

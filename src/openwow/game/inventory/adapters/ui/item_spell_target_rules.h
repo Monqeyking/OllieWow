@@ -36,7 +36,7 @@ GetItemProcessingRule(const ItemSpellEffect effect) {
   case ItemSpellEffect::kMilling:
     return ItemProcessingRule{
         .required_flag = ItemTemplateProcessingFlag::kMillable,
-        .failure = SpellCastResult::kCantBeMilled,
+        .failure = SpellCastResult::kUnknown,
     };
   default:
     return std::nullopt;

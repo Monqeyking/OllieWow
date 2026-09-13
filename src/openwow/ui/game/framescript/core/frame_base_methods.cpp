@@ -142,6 +142,23 @@ void ApplyBaseFrameMethods(lua_State *L) {
   }, 0);
   lua_setfield(L, -2, "GetFrameType");
 
+  lua_pushcclosure(L, [](lua_State *Ls) -> int {
+    const int self = ValidateFrameScriptSelf(Ls);
+    if (lua_isstring(Ls, 2) == 0) {
+      return luaL_error(Ls, "Usage: %s:IsFrameType(\"type\")",
+                        lua_adapter::ScriptObjectDisplayName(Ls, self));
+    }
+
+    if (LuaFrameMatchesObjectType(GetLuaFrameRuntimeTypeName(Ls, self),
+                                  lua_tostring(Ls, 2))) {
+      lua_pushnumber(Ls, 1);
+    } else {
+      lua_pushnil(Ls);
+    }
+    return 1;
+  }, 0);
+  lua_setfield(L, -2, "IsFrameType");
+
   openwow::ui::anim::ApplyAnimationRegionMethods(L);
 
   lua_pushcclosure(L, [](lua_State *Ls) -> int {
@@ -646,7 +663,8 @@ void ApplyCommonFrameMethods(lua_State *L) {
     const float red = NormalizeBackdropLuaColorComponent(luaL_optnumber(Ls, 2, 0.0));
     const float green = NormalizeBackdropLuaColorComponent(luaL_optnumber(Ls, 3, 0.0));
     const float blue = NormalizeBackdropLuaColorComponent(luaL_optnumber(Ls, 4, 0.0));
-    const float alpha = NormalizeBackdropLuaColorComponent(luaL_optnumber(Ls, 5, 1.0));
+    const float alpha = NormalizeBackdropLuaColorComponent(
+        lua_isnumber(Ls, 5) != 0 ? lua_tonumber(Ls, 5) : 1.0);
     StoreLuaBackdropColorShadow(Ls, self_index, kLuaBackdropColorRField,
                                 kLuaBackdropColorGField, kLuaBackdropColorBField,
                                 kLuaBackdropColorAField, red, green, blue, alpha);
@@ -672,7 +690,8 @@ void ApplyCommonFrameMethods(lua_State *L) {
     const float red = NormalizeBackdropLuaColorComponent(luaL_optnumber(Ls, 2, 0.0));
     const float green = NormalizeBackdropLuaColorComponent(luaL_optnumber(Ls, 3, 0.0));
     const float blue = NormalizeBackdropLuaColorComponent(luaL_optnumber(Ls, 4, 0.0));
-    const float alpha = NormalizeBackdropLuaColorComponent(luaL_optnumber(Ls, 5, 1.0));
+    const float alpha = NormalizeBackdropLuaColorComponent(
+        lua_isnumber(Ls, 5) != 0 ? lua_tonumber(Ls, 5) : 1.0);
     StoreLuaBackdropColorShadow(
         Ls, self_index, kLuaBackdropBorderColorRField,
         kLuaBackdropBorderColorGField, kLuaBackdropBorderColorBField,
@@ -727,7 +746,10 @@ void ApplyCommonFrameMethods(lua_State *L) {
       return 0;
     }
     int arr = lua_absindex(Ls, -1);
-    lua_Integer n = luaL_len(Ls, arr);
+    lua_getfield(Ls, self_idx, "__ow_regions_count");
+    lua_Integer n = lua_isnumber(Ls, -1) ? lua_tointeger(Ls, -1)
+                                         : luaL_len(Ls, arr);
+    lua_pop(Ls, 1);
     const int result_count = openwow::ui::ReserveLuaResultCapacity(
         Ls, static_cast<std::size_t>(n), "frame regions");
     for (lua_Integer i = 1; i <= n; ++i) {
@@ -746,7 +768,11 @@ void ApplyCommonFrameMethods(lua_State *L) {
       lua_pushinteger(Ls, 0);
       return 1;
     }
-    lua_pushinteger(Ls, luaL_len(Ls, -1));
+    lua_getfield(Ls, self_idx, "__ow_regions_count");
+    if (lua_isnumber(Ls, -1) == 0) {
+      lua_pop(Ls, 1);
+      lua_pushinteger(Ls, luaL_len(Ls, -1));
+    }
     lua_remove(Ls, -2);
     return 1;
   }, 0);

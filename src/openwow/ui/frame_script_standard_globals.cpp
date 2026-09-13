@@ -279,10 +279,24 @@ int LuaRemoveMulti(lua_State* state) {
 
 int LuaLoggingErrorHandler(lua_State* state) {
   const char* message = lua_tostring(state, 1);
-  openwow::diagnostics::Log(
-      openwow::diagnostics::LogLevel::kWarn,
+  std::string log_message =
       std::string("Lua error: ") +
-          (message != nullptr ? message : "non-string error object"));
+      (message != nullptr ? message : "non-string error object");
+  if (message != nullptr &&
+      (std::string_view(message).find("FloatingChatFrame.lua") !=
+           std::string_view::npos ||
+       std::string_view(message).find("pfUI\\api\\api.lua:1335") !=
+           std::string_view::npos)) {
+    const int top = lua_gettop(state);
+    if (PushLegacyDebugStack(state) == 1 && lua_isstring(state, -1) != 0) {
+      const char* stack = lua_tostring(state, -1);
+      if (stack != nullptr) {
+        log_message = std::string("[LuaTrace] ") + stack;
+      }
+    }
+    lua_settop(state, top);
+  }
+  openwow::diagnostics::Log(openwow::diagnostics::LogLevel::kWarn, log_message);
 
   const int top = lua_gettop(state);
   lua_pushvalue(state, lua_upvalueindex(1));

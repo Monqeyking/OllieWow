@@ -5,6 +5,7 @@ namespace openwow::ui::game::events {
 inline constexpr const char* LOGOUT_CANCEL                      = "LOGOUT_CANCEL";
 inline constexpr const char* PLAYER_ALIVE                       = "PLAYER_ALIVE";
 inline constexpr const char* PLAYER_CAMPING                     = "PLAYER_CAMPING";
+inline constexpr const char* PLAYER_COMBO_POINTS                = "PLAYER_COMBO_POINTS";
 inline constexpr const char* PLAYER_DEAD                        = "PLAYER_DEAD";
 inline constexpr const char* PLAYER_ENTERING_WORLD              = "PLAYER_ENTERING_WORLD";
 inline constexpr const char* PLAYER_LEAVING_WORLD               = "PLAYER_LEAVING_WORLD";

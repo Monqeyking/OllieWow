@@ -19,6 +19,7 @@
 #include "openwow/foundation/text/ascii.h"
 #include "openwow/game/object_manager.h"
 #include "openwow/game/objects/cgunit.h"
+#include "openwow/game/unit_query_bridge.h"
 #include "openwow/game/world_session.h"
 #include "openwow/render/backend/bgfx/bgfx_text_cache.h"
 #include "openwow/render/backend/bgfx/bgfx_texture_lease.h"
@@ -174,6 +175,7 @@ constexpr const char* const kNames[] = {
     "__ow_maxlines",
     "__ow_alpha_grad_start",
     "__ow_alpha_grad_length",
+    "__ow_model_unit",
     "__ow_model_unit_guid_lo",
     "__ow_model_unit_guid_hi",
     "__ow_model_path",
@@ -871,10 +873,22 @@ void runtime::render::UiCompositor::Render(const UiCompositorFrame& compositor_f
         openwow::diagnostics::Log(openwow::diagnostics::LogLevel::kWarn,
                                   "PlayerModel " + entry.key + ": " + previous);
       };
-      const auto clear_model_state = [&player_model_diagnostic_state_,
-                                      &entry]() {
-        player_model_diagnostic_state_.erase(entry.key);
+      // Same dedup, but at INFO: the failure paths below are silent on success,
+      // which makes "renders but nothing shows" indistinguishable from "never
+      // reached".  The outcome line carries every input that decides it, so a
+      // single run separates the two.
+      const auto report_model_state = [&player_model_diagnostic_state_,
+                                       &entry](const std::string& detail) {
+        auto& previous = player_model_diagnostic_state_[entry.key];
+        if (previous == detail) return;
+        previous = detail;
+        openwow::diagnostics::Log(openwow::diagnostics::LogLevel::kInfo,
+                                  "PlayerModel " + entry.key + ": " + detail);
       };
+      report_model_state(
+          "entered rect=" + std::to_string(render_rect.width) + "x" +
+          std::to_string(render_rect.height) +
+          " alpha=" + std::to_string(alpha));
       if (!has_lua_ref || portrait_view_id >= offscreen_view_end) {
         record_model_state(!has_lua_ref ? "missing retained Lua binding"
                                         : "offscreen view budget exhausted");
@@ -887,6 +901,9 @@ void runtime::render::UiCompositor::Render(const UiCompositorFrame& compositor_f
       float model_rotation =
           frame.has_model_facing ? frame.model_facing_rad : 0.0f;
       float model_scale = frame.has_model_scale ? frame.model_scale : 1.0f;
+      const float frame_model_scale = model_scale;
+      float lua_model_scale = 0.0f;
+      bool lua_model_scale_present = false;
       float model_x = frame.has_model_position ? frame.model_x : 0.0f;
       float model_y = frame.has_model_position ? frame.model_y : 0.0f;
       float model_z = frame.has_model_position ? frame.model_z : 0.0f;
@@ -918,6 +935,16 @@ void runtime::render::UiCompositor::Render(const UiCompositorFrame& compositor_f
                        static_cast<std::uint32_t>(guid_low);
           }
         }
+        if (guid_raw == 0u && session_ != nullptr) {
+          if (const auto unit_id =
+                  ui_field::ReadString<ui_field::Ordinal("__ow_model_unit")>(
+                      lua_, -1, ui_keys);
+              unit_id.has_value() && !unit_id->empty()) {
+            guid_raw = openwow::game::UnitQueryBridge::Get()
+                           .ResolveToGuid(session_, *unit_id)
+                           .GetRawValue();
+          }
+        }
         if (const auto path =
                 ui_field::ReadString<ui_field::Ordinal("__ow_model_path")>(
                     lua_, -1, ui_keys);
@@ -945,6 +972,8 @@ void runtime::render::UiCompositor::Render(const UiCompositorFrame& compositor_f
                 lua_, -1, ui_keys, &component) &&
             std::isfinite(component) && component > 0.0) {
           model_scale = static_cast<float>(component);
+          lua_model_scale = static_cast<float>(component);
+          lua_model_scale_present = true;
         }
         if (ui_field::ReadNumber<ui_field::Ordinal("__ow_model_x")>(
                 lua_, -1, ui_keys, &component) &&
@@ -991,12 +1020,16 @@ void runtime::render::UiCompositor::Render(const UiCompositorFrame& compositor_f
           session_ != nullptr
               ? session_->objects().GetUnit(openwow::game::ObjectGuid(guid_raw))
               : nullptr;
+      if (unit != nullptr && unit->Presentation().DisplayId() != 0u) {
+        bound_display_id = unit->Presentation().DisplayId();
+      }
       const std::uint32_t instance_id =
           unit != nullptr ? unit->GetPrimaryM2InstanceId() : 0u;
 
       const bool allow_display_fallback =
           unit == nullptr || !unit->IsPlayer();
       bool use_display_fallback = false;
+      std::string display_resolution = "not_needed";
 
       std::array<std::string, 3> display_texture_paths{};
       std::optional<openwow::render::m2::M2ParticleColorRecord>
@@ -1012,10 +1045,13 @@ void runtime::render::UiCompositor::Render(const UiCompositorFrame& compositor_f
       if (model_path.empty() && bound_display_id != 0u &&
           allow_display_fallback && session_ != nullptr &&
           (instance_id == 0u || !live_visual_tree_ready)) {
+        display_resolution = "dbc_missing";
         if (const auto* dbc = session_->GetDbcLoader(); dbc != nullptr) {
+          display_resolution = "display_info_missing";
           if (const auto* display =
                   dbc->creature_display_info().LookupEntry(bound_display_id);
               display != nullptr) {
+            display_resolution = "model_data_missing";
             if (const auto* model_data =
                     dbc->creature_model_data().LookupEntry(display->model_id);
                 model_data != nullptr) {
@@ -1048,12 +1084,18 @@ void runtime::render::UiCompositor::Render(const UiCompositorFrame& compositor_f
                       };
                 }
               }
+              use_display_fallback = !model_path.empty();
+              display_resolution = model_path.empty() ? "model_path_empty"
+                                                       : "resolved";
             }
           }
         }
       }
       if (instance_id == 0u && model_path.empty()) {
-        record_model_state("bound unit has no prepared M2 instance");
+        record_model_state(
+            "stage=compositor bound unit has no prepared M2 instance display=" +
+            std::to_string(bound_display_id) +
+            " display_resolution=" + display_resolution);
         continue;
       }
 
@@ -1064,6 +1106,10 @@ void runtime::render::UiCompositor::Render(const UiCompositorFrame& compositor_f
           std::clamp(std::lround(render_rect.height), 16l, 2048l));
       if (!surface->IsValid() &&
           !surface->Initialize(target_width, target_height)) {
+        record_model_state(
+            "stage=compositor surface_initialize_failed size=" +
+            std::to_string(target_width) + "x" +
+            std::to_string(target_height));
         continue;
       }
       surface->Resize(target_width, target_height);
@@ -1085,6 +1131,16 @@ void runtime::render::UiCompositor::Render(const UiCompositorFrame& compositor_f
         surface->SetModelPath(std::move(model_path),
                               std::move(display_texture_paths),
                               std::move(display_particle_colors));
+      }
+      // A non-positive or non-finite scale collapses the model matrix - and the
+      // camera transformed by it - to a point: draws are still submitted, so the
+      // surface reports success while its texture stays empty, i.e. an invisible
+      // portrait with no error anywhere.  Substitute the neutral scale and say so
+      // in the state line instead of rendering nothing.
+      const bool scale_guard_applied =
+          !std::isfinite(model_scale) || model_scale <= 0.0f;
+      if (scale_guard_applied) {
+        model_scale = 1.0f;
       }
       surface->SetModelRotation(model_rotation);
       surface->SetModelTransform(model_scale, model_x, model_y, model_z);
@@ -1114,14 +1170,28 @@ void runtime::render::UiCompositor::Render(const UiCompositorFrame& compositor_f
       } else {
         surface->SetSimpleModelOrthographicFrame(std::nullopt);
       }
+      std::string camera_desc;
       if (has_explicit_model_camera ||
           frame.runtime_kind ==
               openwow::ui::framexml::UiFrame::RuntimeKind::Model) {
 
         surface->SetCameraIndex(model_camera);
+        camera_desc = has_explicit_model_camera
+                          ? "index:" + std::to_string(model_camera)
+                          : "model-index:" + std::to_string(model_camera);
+      } else if (frame.runtime_kind ==
+                     openwow::ui::framexml::UiFrame::RuntimeKind::PlayerModel ||
+                 frame.runtime_kind ==
+                     openwow::ui::framexml::UiFrame::RuntimeKind::DressUpModel ||
+                 frame.runtime_kind ==
+                     openwow::ui::framexml::UiFrame::RuntimeKind::TabardModel) {
+        // Vanilla PlayerModel defaults to raw cameras[1], not the type lookup.
+        surface->SetCameraTableIndex(1);
+        camera_desc = "table:1";
       } else {
 
         surface->SetCameraType(1u);
+        camera_desc = "type:1";
       }
       if (has_model_sequence) {
         surface->SetAnimation(model_sequence, model_sequence_time);
@@ -1130,17 +1200,41 @@ void runtime::render::UiCompositor::Render(const UiCompositorFrame& compositor_f
       }
       const auto result = surface->RenderToTexture(portrait_view_id);
       ++portrait_view_id;
-      if ((!result.SubmittedCompleteVisual() &&
-           !surface->HasPresentedContent()) ||
-          !bgfx::isValid(surface->GetTexture())) {
-        record_model_state(
-            "no presented visual status=" +
-            std::to_string(static_cast<int>(result.status)) +
-            " reason=" + std::to_string(static_cast<int>(result.reason)) +
-            " detail=" + result.detail);
+      const bool visual_ready =
+          (result.SubmittedCompleteVisual() || surface->HasPresentedContent()) &&
+          bgfx::isValid(surface->GetTexture());
+      const std::string model_facts =
+          " guid=" + std::to_string(guid_raw) +
+          " unit=" + (unit != nullptr ? "1" : "0") +
+          " display=" + std::to_string(bound_display_id) +
+          " instance=" + std::to_string(instance_id) +
+          " fallback=" + (use_display_fallback ? "1" : "0") +
+          " path=" + (model_path.empty() ? std::string("<none>") : model_path) +
+          " camera=" + camera_desc +
+          " scale=" + std::to_string(model_scale) +
+          " scale_src=" +
+          (lua_model_scale_present
+               ? "lua:" + std::to_string(lua_model_scale)
+               : (frame.has_model_scale ? "frame:" +
+                                              std::to_string(frame_model_scale)
+                                        : std::string("default"))) +
+          (scale_guard_applied ? " scale_guard=1" : "") +
+          " offset=" + std::to_string(model_x) + "," +
+          std::to_string(model_y) + "," + std::to_string(model_z) +
+          " rot=" + std::to_string(model_rotation) +
+          " draws=" + std::to_string(result.submitted_geometry_draw_count) +
+          "/" + std::to_string(result.submitted_draw_count) +
+          " presented=" + (surface->HasPresentedContent() ? "1" : "0") +
+          " tex=" + (bgfx::isValid(surface->GetTexture()) ? "1" : "0") +
+          " status=" + std::to_string(static_cast<int>(result.status)) +
+          " reason=" + std::to_string(static_cast<int>(result.reason)) +
+          " detail=" + result.detail;
+      report_model_state(std::string(visual_ready ? "outcome=visual"
+                                                 : "outcome=no-visual") +
+                         model_facts);
+      if (!visual_ready) {
         continue;
       }
-      clear_model_state();
 
       openwow::render::ui::Quad quad;
       quad.texture = surface->GetTexture();
@@ -1153,9 +1247,7 @@ void runtime::render::UiCompositor::Render(const UiCompositorFrame& compositor_f
       quad.flip_texture_y = bgfx::getCaps()->originBottomLeft;
       const bool submitted = ui_renderer_->Submit(quad);
       if (!submitted) {
-        record_model_state("final UI quad submission rejected");
-      } else {
-        clear_model_state();
+        report_model_state("outcome=quad-rejected" + model_facts);
       }
       if (submitted && entry.key == "CharacterModelFrame") {
         telemetry.last_render_character_model_submitted = true;

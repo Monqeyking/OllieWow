@@ -22,6 +22,12 @@ int SoundRuntime::PlaySoundKit(const std::uint32_t sound_kit_id, const float *po
   if (sound_kit_id == 0)
     return 5;
 
+  // Benilla holds all new world-side kit playback behind the loading cover.
+  // World packets and visual events are still processed while streaming.
+  if (world_entry_audio_inhibited_) {
+    return 17;
+  }
+
   const auto *kit = GetSoundKitData(sound_kit_id);
   if (!kit)
     return 5;
@@ -172,6 +178,9 @@ void SoundRuntime::PlayErrorSpeech(const std::uint32_t sound_kit_id) {
 }
 
 int SoundRuntime::PlayScriptSound(const std::string &path, std::uint32_t sound_type) {
+  if (world_entry_audio_inhibited_) {
+    return 17;
+  }
 
   if (cvar_get_bool_cb_ && !cvar_get_bool_cb_("Sound_EnableAllSound")) {
     return 17;

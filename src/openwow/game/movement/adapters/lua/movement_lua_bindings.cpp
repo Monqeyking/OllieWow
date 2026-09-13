@@ -85,7 +85,7 @@ constexpr openwow::ui::LuaGlobalBinding kMovementLuaBindings[] = {
     {"TurnOrActionStop", LuaTurnOrActionStop},
     {"TurnRightStart", LuaTurnRightStart},
     {"TurnRightStop", LuaTurnRightStop},
-    {"JumpOrAscendStart", LuaJumpOrAscendStart},
+    {"Jump", LuaJumpOrAscendStart},
 };
 
 }

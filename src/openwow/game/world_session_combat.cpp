@@ -1026,14 +1026,21 @@ void WorldSession::HandleCastFailed(const net::wotlk::WorldPacket& pkt) {
     return;
   }
 
+  // SMSG_CAST_RESULT status 0 is the normal acknowledgement that precedes
+  // SMSG_SPELL_GO. It is not a failure and must not produce an error string.
+  if (failure->status != 2u) {
+    return;
+  }
+
   const auto* const player = objects().GetLocalPlayerTyped();
   if (player != nullptr) {
     const ObjectGuid player_guid = player->GetGuid();
     if (auto* const unit = objects().GetMutableUnit(player_guid);
-        unit != nullptr && unit->Casts().IsCasting()) {
+      unit != nullptr && unit->Casts().IsCasting()) {
       const auto& cast = unit->Casts().GetCurrentCast();
-      if (cast.spell_id == failure->spell_id &&
-          cast.cast_id == failure->cast_count) {
+      // Vanilla CAST_RESULT has no cast-count field; the spell id is the
+      // matching key for the player's visible cast.
+      if (cast.spell_id == failure->spell_id) {
         unit->Casts().ClearCurrentCast();
       }
     }
@@ -1050,7 +1057,7 @@ void WorldSession::HandleCastFailed(const net::wotlk::WorldPacket& pkt) {
       event_id = kUnitSpellcastInterruptedEvent;
     }
     FireUnitSpellcastPacketEvent(
-        *this, player_guid, event_id, failure->spell_id, failure->cast_count);
+        *this, player_guid, event_id, failure->spell_id, 0);
 
     if (event_id != kUnitSpellcastFailedQuietEvent) {
       SpellAction_DisplaySpellFailure(*this, failure->spell_id, player_guid,
@@ -1058,7 +1065,7 @@ void WorldSession::HandleCastFailed(const net::wotlk::WorldPacket& pkt) {
     }
 
     spell_cast_runtime_.OnSpellFailed(
-        failure->spell_id, failure->cast_count);
+        failure->spell_id, 0);
 
     spell_book_.CancelGlobalCooldown(failure->spell_id);
   }
@@ -2047,12 +2054,27 @@ void WorldSession::HandleSpellFailure(const net::wotlk::WorldPacket& pkt) {
 
 void WorldSession::HandleSpellFailedOther(const net::wotlk::WorldPacket& pkt) {
   const auto failure =
-      net::wotlk::ParseSpellFailure(pkt.payload.data(), pkt.payload.size());
+      net::wotlk::ParseSpellFailedOther(pkt.payload.data(), pkt.payload.size());
   if (!failure.has_value()) {
     return;
   }
 
-  if (ApplyUnitSpellFailure(*this, *failure)) {
+  if (auto* const unit = objects().GetMutableUnit(failure->caster_guid);
+      unit != nullptr && unit->Casts().IsCasting()) {
+    const auto& cast = unit->Casts().GetCurrentCast();
+    // Benilla keys this observer-side teardown by caster and spell id; this
+    // Vanilla packet has no cast-count field to compare.
+    if (cast.spell_id == failure->spell_id) {
+      unit->Casts().ClearCurrentCast();
+    }
+  }
+
+  QueueSpellStopVisual(*this, failure->caster_guid, failure->spell_id);
+  FireUnitSpellcastPacketEvent(
+      *this, failure->caster_guid, kUnitSpellcastInterruptedEvent,
+      failure->spell_id, 0);
+
+  if (IsLocalPlayerSpellEvent(*this, failure->caster_guid)) {
     ClearFailedTradeSkillSpell(failure->spell_id);
     if (cast_bar_callbacks_.on_cast_interrupt) {
       cast_bar_callbacks_.on_cast_interrupt(failure->spell_id);

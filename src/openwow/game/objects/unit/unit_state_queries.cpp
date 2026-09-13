@@ -30,13 +30,12 @@ bool UnitStateRuntime::IsInCombat() const {
 }
 
 bool UnitStateRuntime::IsDead() const {
-  // The Classic client does not treat an object with an empty health block as
-  // a corpse yet.  A streamed-in corpse has MAXHEALTH, but HEALTH may be
-  // omitted because zero is the create-field default (Benilla's
-  // unit_is_dead() predicate uses the same guard).  Without this check an
-  // object could enter the death animation before its descriptors were
-  // complete and then miss the later dead-state presentation pass.
-  return (GetMaxHealth() > 0u && GetHealth() == 0u) ||
+  // Vanilla treats an omitted zero-valued HEALTH field as zero.  Creatures
+  // have a non-zero entry even when MAXHEALTH was omitted from a streamed-in
+  // corpse create block; players retain the normal MAXHEALTH guard.
+  const bool health_zero =
+      GetHealth() == 0u && (GetMaxHealth() > 0u || owner_.GetEntry() != 0u);
+  return health_zero ||
          (GetDynamicFlags() & kUnitDynFlagDead) != 0u ||
          owner_.Animation().GetStandState() == kStandStateDead;
 }

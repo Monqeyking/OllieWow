@@ -63,6 +63,10 @@ struct PortraitRenderer::Impl {
     }
 
     if (!entry.target) {
+      // Geen faal-latch: een tijdelijke framebufferfout (renderer nog niet
+      // klaar, driverhickup) moet de volgende frame gewoon opnieuw proberen.
+      // Een latch hier betekent dat een portret na één mislukking de rest van
+      // de sessie leeg blijft, zonder enige foutmelding.
       entry.target = std::make_unique<ModelPortrait>(models);
       if (!entry.target->Initialize(kPortraitExtent, kPortraitExtent)) {
         entry.target.reset();

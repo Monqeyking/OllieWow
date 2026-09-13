@@ -261,7 +261,7 @@ void ProcessEnchantEffect(ItemInteractionSession& interactions,
   if (new_enchant != nullptr && EnchantHasUseSpellEffect(*new_enchant) &&
       (HasItemUseSpell(item_template) || HasUseSpellEnchant(item, dbc))) {
     DisplayTargetFailure(localization, errors, events,
-                         SpellCastResult::kOnUseEnchant, &dbc);
+                         SpellCastResult::kError, &dbc);
     return;
   }
 

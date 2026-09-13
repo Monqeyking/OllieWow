@@ -1615,9 +1615,11 @@ void WorldSession::SetClientTimeFn(
 
 bool WorldSession::BeginLogin(const std::uint64_t character_guid) {
   pending_character_guid_ = character_guid;
+  objects().SetActivePlayer(ObjectGuid(character_guid));
   state_ = WorldState::kLoggingIn;
-  return Send(
-      net::wotlk::PacketSender::BuildPlayerLogin(character_guid));
+  const bool sent = Send(net::wotlk::PacketSender::BuildPlayerLogin(character_guid));
+  if (!sent) objects().SetActivePlayer(ObjectGuid());
+  return sent;
 }
 
 bool WorldSession::AdoptLoginVerifyWorld(
@@ -1630,12 +1632,14 @@ bool WorldSession::AdoptLoginVerifyWorld(
   }
 
   pending_character_guid_ = character_guid;
+  objects().SetActivePlayer(ObjectGuid(character_guid));
   state_ = WorldState::kLoggingIn;
   if (ApplyLoginVerifyWorld(verify)) {
     return true;
   }
 
   pending_character_guid_ = 0;
+  objects().SetActivePlayer(ObjectGuid());
   state_ = WorldState::kDisconnected;
   return false;
 }

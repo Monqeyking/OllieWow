@@ -165,7 +165,6 @@ public:
   [[nodiscard]] bool IsPlayingUsingAnimation() const;
   [[nodiscard]] std::uint32_t ResolveAnimationId(
       std::uint32_t anim_id, std::uint32_t override_instance_id = 0) const;
-  void TryPlayPendingFallAnimation();
   [[nodiscard]] bool IsAnimationUpdateSuppressed() const;
   [[nodiscard]] bool IsRangedAttackOrSitSleepBehavior(
       std::uint32_t animation_id) const;

@@ -210,11 +210,16 @@ struct SpellFailureData {
 };
 
 struct CastFailedData {
-  std::uint8_t   cast_count   = 0;
   std::uint32_t  spell_id     = 0;
+  std::uint8_t   status       = 0;
   std::uint8_t   result       = 0;
 
   std::vector<std::uint32_t> extra;
+};
+
+struct SpellFailedOtherData {
+  game::ObjectGuid caster_guid;
+  std::uint32_t    spell_id = 0;
 };
 
 struct SpellDelayedData {
@@ -244,6 +249,9 @@ ParseSpellFailure(const std::uint8_t* data, std::size_t len);
 
 [[nodiscard]] std::optional<CastFailedData>
 ParseCastFailed(const std::uint8_t* data, std::size_t len);
+
+[[nodiscard]] std::optional<SpellFailedOtherData>
+ParseSpellFailedOther(const std::uint8_t* data, std::size_t len);
 
 [[nodiscard]] std::optional<SpellDelayedData>
 ParseSpellDelayed(const std::uint8_t* data, std::size_t len);

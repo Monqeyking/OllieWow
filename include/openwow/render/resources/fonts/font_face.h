@@ -1,11 +1,20 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <string>
 #include <vector>
 
 namespace openwow::render::text {
+
+// Diagnostiek: rapporteert de levensduur van FontFace/FreeType-objecten. Wordt
+// aangeroepen waar de text-cache zijn faces opruimt, zodat een gewone sessie
+// laat zien of er dubbel vernietigd wordt of dat er nog glyph-toegang liep.
+void LogFontLifetimeSummary(const char* where, std::size_t cached_faces,
+                            std::size_t cached_atlases,
+                            std::size_t cached_layouts,
+                            std::uint64_t shutdown_calls);
 
 enum class FontOutline : std::uint8_t {
   None,

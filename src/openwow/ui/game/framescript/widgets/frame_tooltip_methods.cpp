@@ -1403,6 +1403,25 @@ void ApplyGameTooltipMethods(lua_State *L) {
         auto &tracking = openwow::game::TrackingSystem::Get();
 
         for (const auto &entry : tracking.GetActiveTracking()) {
+          if (entry.spellId == 0) continue;
+          openwow::ui::game::BuildSimpleSpellTooltip(tooltip_system, entry.spellId);
+          tooltip_system.Show();
+          SyncTooltipRegisteredLinesFromSystem(Ls, tooltip_index);
+          return 0;
+        }
+        return 0;
+      },
+      0);
+  lua_setfield(L, f, "SetTrackingSpell");
+
+  lua_pushcclosure(
+      L,
+      [](lua_State *Ls) -> int {
+        const int tooltip_index = ValidateFrameObjectSelf(Ls, "GameTooltip");
+        auto &tooltip_system = openwow::ui::game::TooltipSystem::Get();
+        auto &tracking = openwow::game::TrackingSystem::Get();
+
+        for (const auto &entry : tracking.GetActiveTracking()) {
           if (entry.spellId != 0) {
 
             openwow::ui::game::BuildSimpleSpellTooltip(tooltip_system, entry.spellId);

@@ -240,6 +240,12 @@ constexpr std::string_view kBackdropPieceNameSuffixes[] = {
 
 constexpr int kBackdropBackgroundPieceIndex = 1;
 
+// De laatst toegepaste backdrop-spec op dit frame, als string. Herbouwen kost
+// negen nieuwe frames per aanroep (zie RebuildRuntimeBackdropPieces), en de
+// referentieclient maakt bij SetBackdrop helemaal niets aan. Zonder deze
+// vergelijking kost elke SetBackdrop ~1,75 ms en loopt pfUI's config vast.
+constexpr const char* kLuaBackdropSignatureField = "__ow_backdrop_sig";
+
 }
 
 void ClearRuntimeBackdropPieces(lua_State *L, int frame_index) {
@@ -267,6 +273,8 @@ void ClearRuntimeBackdropPieces(lua_State *L, int frame_index) {
 
   lua_pushnil(L);
   lua_setfield(L, frame_index, kLuaBackdropPiecesField);
+  lua_pushnil(L);
+  lua_setfield(L, frame_index, kLuaBackdropSignatureField);
 
   if (const char *owner_key = GetFrameRuntimeKeyOrName(L, frame_index);
       owner_key != nullptr && owner_key[0] != '\0') {
@@ -283,8 +291,6 @@ void RebuildRuntimeBackdropPieces(lua_State *L, int frame_index) {
     return;
   }
   frame_index = lua_absindex(L, frame_index);
-
-  ClearRuntimeBackdropPieces(L, frame_index);
 
   openwow::ui::widgets::BackdropInfo backdrop;
   if (!TryReadLuaBackdropShadow(L, frame_index, &backdrop)) {
@@ -320,6 +326,45 @@ void RebuildRuntimeBackdropPieces(lua_State *L, int frame_index) {
     spec.border_color_a = colors->border[3];
     spec.has_border_color = true;
   }
+
+  std::string signature = spec.bg_file + "|" + spec.edge_file +
+                          (spec.tile ? "|t" : "|f");
+  signature += "|" + std::to_string(spec.tile_size);
+  signature += "|" + std::to_string(spec.edge_size);
+  signature += "|" + std::to_string(spec.inset_left);
+  signature += "|" + std::to_string(spec.inset_right);
+  signature += "|" + std::to_string(spec.inset_top);
+  signature += "|" + std::to_string(spec.inset_bottom);
+  signature += "|" + spec.alpha_mode;
+  signature += "|" + std::to_string(spec.bg_color_r) + "," +
+               std::to_string(spec.bg_color_g) + "," +
+               std::to_string(spec.bg_color_b) + "," +
+               std::to_string(spec.bg_color_a);
+  signature += "|" + std::to_string(spec.border_color_r) + "," +
+               std::to_string(spec.border_color_g) + "," +
+               std::to_string(spec.border_color_b) + "," +
+               std::to_string(spec.border_color_a);
+
+  {
+    lua_getfield(L, frame_index, kLuaBackdropPiecesField);
+    const bool pieces_present =
+        lua_istable(L, -1) != 0 && luaL_len(L, -1) > 0;
+    lua_pop(L, 1);
+    lua_getfield(L, frame_index, kLuaBackdropSignatureField);
+    const char* previous = lua_tostring(L, -1);
+    const bool same_signature = previous != nullptr && signature == previous;
+    lua_pop(L, 1);
+    // Ongewijzigde spec en de stukken staan er nog: niets doen. De
+    // referentieclient maakt bij SetBackdrop ook niets aan; alleen hier kostte
+    // het negen frames per aanroep.
+    if (pieces_present && same_signature) {
+      return;
+    }
+  }
+
+  ClearRuntimeBackdropPieces(L, frame_index);
+  lua_pushlstring(L, signature.c_str(), signature.size());
+  lua_setfield(L, frame_index, kLuaBackdropSignatureField);
 
   openwow::ui::framexml::UiFrame owner;
   owner.name = owner_key;

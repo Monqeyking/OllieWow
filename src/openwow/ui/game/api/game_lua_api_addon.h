@@ -38,8 +38,8 @@ using AddonDependenciesReturns =
     openwow::ui::lua::LuaVariableReturns<std::string>;
 using AddonLoadReturns = openwow::ui::lua::LuaReturns<
     std::optional<openwow::ui::lua::LuaTruthy>, std::optional<std::string>>;
-using AddonLoadedReturns = openwow::ui::lua::LuaReturns<
-    openwow::ui::lua::LuaTruthy, openwow::ui::lua::LuaTruthy>;
+using AddonLoadedReturns =
+    openwow::ui::lua::LuaReturns<openwow::ui::lua::LuaTruthy>;
 template <typename Result>
 using AddonResult = std::variant<Result, openwow::ui::lua::LuaUsageError>;
 using AddonVoidResult = AddonResult<openwow::ui::lua::NoLuaResults>;

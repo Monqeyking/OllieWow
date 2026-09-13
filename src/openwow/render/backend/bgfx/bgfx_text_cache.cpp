@@ -230,10 +230,17 @@ BgfxTextCache::BgfxTextCache(const openwow::vfs::VirtualFileSystem* vfs)
 BgfxTextCache::~BgfxTextCache() { Shutdown(); }
 
 void BgfxTextCache::Shutdown() {
+  ++shutdown_calls_;
+  const std::size_t cached_faces = faces_.size();
+  const std::size_t cached_atlases = atlases_.size();
+  const std::size_t cached_layouts = layouts_.size();
   layouts_.clear();
   atlases_.clear();
   faces_.clear();
   normalized_font_path_cache_.clear();
+  openwow::render::text::LogFontLifetimeSummary(
+      "BgfxTextCache::Shutdown", cached_faces, cached_atlases, cached_layouts,
+      shutdown_calls_);
 }
 
 const std::string& BgfxTextCache::NormalizedFontPath(

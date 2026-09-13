@@ -551,10 +551,10 @@ WorldPacket PacketSender::BuildPetCastSpell(
   return pkt;
 }
 
-WorldPacket PacketSender::BuildCancelCast(const std::uint8_t cast_count,
-                                           const std::uint32_t spell_id) {
+WorldPacket PacketSender::BuildCancelCast(const std::uint32_t spell_id) {
   WorldPacket pkt(Opcode::CMSG_CANCEL_CAST);
-  pkt.AppendU8(cast_count);
+  // Vanilla/Turtle CMSG_CANCEL_CAST contains only the spell id. The
+  // cast-count prefix belongs to the incompatible WotLK packet shape.
   pkt.AppendU32(spell_id);
   return pkt;
 }

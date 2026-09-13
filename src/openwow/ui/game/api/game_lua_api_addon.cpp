@@ -267,9 +267,7 @@ AddonResult<AddonLoadedReturns> IsAddOnLoaded(
   }
   const std::string& addon_name = std::get<std::string>(resolved);
   return AddonLoadedReturns(
-      openwow::ui::lua::LuaTruthy{addons.IsAddonLoaded(addon_name.c_str())},
-      openwow::ui::lua::LuaTruthy{
-          addons.IsAddonLoadFinished(addon_name.c_str())});
+      openwow::ui::lua::LuaTruthy{addons.IsAddonLoaded(addon_name.c_str())});
 }
 
 AddonResult<openwow::ui::lua::LuaTruthy> IsAddOnLoadOnDemand(

@@ -953,7 +953,9 @@ class CMovementData {
 
   static constexpr std::uint32_t kActiveMoverMotionMask = 0xC0100Fu;
 
-  static constexpr std::uint32_t kActiveMotionFlagMask = 0x40C010FFu;
+  static constexpr std::uint32_t kActiveMotionFlagMask =
+      0x40C010FFu | openwow::game::kMoveFlagFalling |
+      openwow::game::kMoveFlagFallingFar;
 
   static constexpr std::uint32_t kVehicleControlTransferFlag = 0x00000200u;
 

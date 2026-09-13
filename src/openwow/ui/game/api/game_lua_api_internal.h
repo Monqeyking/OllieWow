@@ -2456,6 +2456,9 @@ ApplyCreatureTemplateBindingToFrame(lua_State *L, int frame_index,
                                     const openwow::game::CreatureTemplateInfo &creature_template) {
   frame_index = lua_absindex(L, frame_index);
 
+  lua_pushnil(L);
+  lua_setfield(L, frame_index, "__ow_model_unit");
+
   lua_pushinteger(L, 0);
   lua_setfield(L, frame_index, "__ow_model_unit_guid_lo");
   lua_pushinteger(L, 0);

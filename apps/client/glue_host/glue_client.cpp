@@ -1546,6 +1546,31 @@ bool GlueClient::InitVFS() {
     DumpVfsIndex(login_vfs_, launch_context_.diagnostic_output_root / "mpq-index.txt");
   }
 
+  if (const auto dump_files = VfsFileToDump(); dump_files.has_value()) {
+    // ';'-separated so one run can dump a whole include chain.
+    std::size_t begin = 0;
+    while (begin <= dump_files->size()) {
+      const std::size_t end = dump_files->find(';', begin);
+      const std::string virtual_path = dump_files->substr(
+          begin, end == std::string::npos ? std::string::npos : end - begin);
+      if (!virtual_path.empty()) {
+        std::string file_name = virtual_path;
+        for (char& ch : file_name) {
+          if (ch == '/' || ch == '\\' || ch == ':') {
+            ch = '_';
+          }
+        }
+        DumpVfsFile(login_vfs_, virtual_path,
+                    launch_context_.diagnostic_output_root / "vfs-dump" /
+                        file_name);
+      }
+      if (end == std::string::npos) {
+        break;
+      }
+      begin = end + 1;
+    }
+  }
+
   validation_ = openwow::data::ValidateLoginResources(login_vfs_);
   if (validation_.ok) {
     openwow::diagnostics::Log(openwow::diagnostics::LogLevel::kInfo,

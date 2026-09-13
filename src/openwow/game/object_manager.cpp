@@ -1362,6 +1362,9 @@ bool ObjectManager::ApplyCreateBlockToExistingObject(
 }
 
 void ObjectManager::OnCreate(const CreateObjectUpdate &upd) {
+  const bool is_local_player =
+      upd.type_id == TypeID::kPlayer &&
+      (upd.IsSelf() || upd.guid == CGObject_C::GetActivePlayerGuid());
   const auto notify_create_movement_metadata = [this, &upd](CGObject_C &object) {
     if (callbacks_.on_unit_create_movement_metadata && object.IsUnit()) {
       callbacks_.on_unit_create_movement_metadata(
@@ -1385,7 +1388,7 @@ void ObjectManager::OnCreate(const CreateObjectUpdate &upd) {
     bool movement_applied = false;
     if (was_preallocated) {
 
-      if (upd.movement.IsSelf() && upd.type_id == TypeID::kPlayer) {
+      if (is_local_player) {
         SetActivePlayer(upd.guid);
       }
       notify_create_movement_metadata(*existing);
@@ -1418,7 +1421,7 @@ void ObjectManager::OnCreate(const CreateObjectUpdate &upd) {
     }
 
     if (was_preallocated) {
-      if (upd.movement.IsSelf() && upd.type_id == TypeID::kPlayer) {
+      if (is_local_player) {
         openwow::diagnostics::Log(openwow::diagnostics::LogLevel::kInfo,
                            "ObjectManager: local player created - " + upd.guid.ToString());
         if (callbacks_.on_player_self_created)
@@ -1436,7 +1439,7 @@ void ObjectManager::OnCreate(const CreateObjectUpdate &upd) {
     return;
   }
 
-  if (!(upd.movement.IsSelf() && upd.type_id == TypeID::kPlayer) &&
+  if (!is_local_player &&
       upd.guid != CGObject_C::GetActivePlayerGuid()) {
     ReapExpiredPendingObjectBeforeCreate(upd.type_id);
   }
@@ -1458,7 +1461,7 @@ void ObjectManager::OnCreate(const CreateObjectUpdate &upd) {
   notify_create_movement_metadata(*raw_ptr);
   notify_authoritative_unit_movement(*raw_ptr);
 
-  if (upd.movement.IsSelf() && upd.type_id == TypeID::kPlayer) {
+  if (is_local_player) {
 
     SetActivePlayer(upd.guid);
     openwow::diagnostics::Log(openwow::diagnostics::LogLevel::kInfo,
@@ -1814,7 +1817,8 @@ bool ObjectManager::PreallocateCreateObjects(const std::uint8_t *data, std::size
     return ResolveFieldCountForTrackedObject(guid);
   };
   handler.on_create = [this, &created_shells](const CreateObjectUpdate &upd) {
-    if (upd.movement.IsSelf() && upd.type_id == TypeID::kPlayer) {
+    if (upd.type_id == TypeID::kPlayer &&
+        (upd.IsSelf() || upd.guid == CGObject_C::GetActivePlayerGuid())) {
       SetActivePlayer(upd.guid);
     }
 

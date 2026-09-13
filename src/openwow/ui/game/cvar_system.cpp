@@ -1870,7 +1870,58 @@ bool CVarSystem::SaveToFile(const std::string &path, bool save_all) const {
                                        CVarFlags::None, save_all, &count);
   }
 
-  if (!openwow::platform::filesystem::AtomicWriteFile(path, serialized)) {
+  // Lees de bestaande CVar-regels en bewaar alles wat wij niet zelf
+  // wegschrijven. De referentieclient doet hetzelfde: instellingen van een
+  // andere client (of van CVars die hier nog niet bestaan) blijven staan.
+  // Zonder dit vervangt de write het hele bestand en verdwijnen ze stilzwijgend
+  // - dat is precies wat er met de action-bar- en per-karakterinstellingen
+  // gebeurde toen beide clients hetzelfde WTF-bestand deelden.
+  const auto extract_name = [](const std::string &line,
+                               std::string *name) -> bool {
+    if (line.size() <= 4 || line.compare(0, 4, "SET ") != 0) return false;
+    const std::size_t begin = 4;
+    const std::size_t end = line.find(' ', begin);
+    *name = line.substr(begin, end == std::string::npos ? std::string::npos
+                                                        : end - begin);
+    std::transform(name->begin(), name->end(), name->begin(),
+                   [](const unsigned char c) {
+                     return static_cast<char>(std::tolower(c));
+                   });
+    return !name->empty();
+  };
+
+  std::vector<std::string> written_names;
+  {
+    std::istringstream stream(serialized);
+    std::string line;
+    std::string name;
+    while (std::getline(stream, line)) {
+      if (extract_name(line, &name)) written_names.push_back(name);
+    }
+  }
+
+  std::string preserved;
+  {
+    std::ifstream existing(path);
+    std::string line;
+    while (std::getline(existing, line)) {
+      if (!line.empty() && line.back() == '\r') line.pop_back();
+      std::string name;
+      if (extract_name(line, &name) &&
+          std::find(written_names.begin(), written_names.end(), name) !=
+              written_names.end()) {
+        continue;  // die schrijven wij zelf, met onze eigen waarde
+      }
+      preserved += line;
+      preserved += '\n';
+    }
+  }
+
+  std::string output = serialized;
+  if (!output.empty() && output.back() != '\n') output += '\n';
+  output += preserved;
+
+  if (!openwow::platform::filesystem::AtomicWriteFile(path, output)) {
     openwow::diagnostics::Log(openwow::diagnostics::LogLevel::kWarn, "CVarSystem: write failed for " + path);
     return false;
   }

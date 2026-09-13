@@ -271,12 +271,19 @@ ParseCastFailed(const std::uint8_t* data, std::size_t len) {
   CastFailedData result;
   std::size_t off = 0;
 
-  off = ReadU8(data, len, off, result.cast_count);
-  if (off == 0) return std::nullopt;
+  // Vanilla/Turtle SMSG_CAST_RESULT is spell id, status, then (only for a
+  // failure status) the failure reason. The old WotLK-shaped decoder treated
+  // the first byte of spell_id as a cast count and turned normal replies into
+  // unrelated UI errors.
   off = ReadU32(data, len, off, result.spell_id);
   if (off == 0) return std::nullopt;
-  off = ReadU8(data, len, off, result.result);
+  off = ReadU8(data, len, off, result.status);
   if (off == 0) return std::nullopt;
+
+  if (result.status == 2u) {
+    off = ReadU8(data, len, off, result.result);
+    if (off == 0) return std::nullopt;
+  }
 
   while (off + 4 <= len) {
     std::uint32_t extra_val = 0;
@@ -285,6 +292,18 @@ ParseCastFailed(const std::uint8_t* data, std::size_t len) {
     result.extra.push_back(extra_val);
   }
 
+  return result;
+}
+
+std::optional<SpellFailedOtherData>
+ParseSpellFailedOther(const std::uint8_t* data, std::size_t len) {
+  if (!data || len == 0) return std::nullopt;
+
+  SpellFailedOtherData result;
+  std::size_t off = ReadFullGuid(data, len, 0, result.caster_guid);
+  if (off == 0) return std::nullopt;
+  off = ReadU32(data, len, off, result.spell_id);
+  if (off == 0) return std::nullopt;
   return result;
 }
 

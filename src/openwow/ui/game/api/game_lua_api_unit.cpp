@@ -2033,12 +2033,40 @@ int LuaGetPlayerBuff(lua_State *L) {
   return 2;
 }
 
+int LuaGetPlayerBuffTexture(lua_State *L) {
+  // ponytail: the current MVP has no player-aura cache; nil is Vanilla's
+  // no-texture result for an empty buff position.
+  (void)L;
+  lua_pushnil(L);
+  return 1;
+}
+
+int LuaGetPlayerBuffDispelType(lua_State *L) {
+  // ponytail: no aura cache yet; an empty position has no dispel type.
+  (void)L;
+  lua_pushnil(L);
+  return 1;
+}
+
+int LuaGetPlayerBuffApplications(lua_State *L) {
+  // Vanilla returns numeric 1 for an empty position, never nil.
+  (void)L;
+  lua_pushnumber(L, 1);
+  return 1;
+}
+
 int LuaGetPlayerBuffTimeLeft(lua_State *L) {
   // No aura timing data is exposed by the current offline MVP object model.
   // Classic callers treat zero as expired and continue safely.
   (void)L;
   lua_pushnumber(L, 0);
   return 1;
+}
+
+int LuaCancelPlayerBuff(lua_State *L) {
+  // ponytail: there is no player-aura cache to mutate in the current MVP.
+  (void)L;
+  return 0;
 }
 
 int LuaGetPlayerMapPosition(lua_State *L) {
@@ -2847,17 +2875,35 @@ int LuaUnitIsTapped(lua_State *L) {
 
 int LuaUnitPVPName(lua_State *L) {
   const LuaCallFrame call{L};
-  auto *session = call.world_session();
-  const auto uid = UnitIdArg(L, 1);
-  const auto *unit = ResolveUnit(session, uid);
-  if (session == nullptr || unit == nullptr) {
+  // Contract: deze API geeft nooit een fout. Addons gebruiken hem in
+  // string-vergelijkingen (pfUI's tooltip op tooltip.lua:77), en een exception
+  // die hier ontsnapt wordt door de binding-wrapper omgezet in
+  // "UnitPVPName: handler failed" - waarmee de hele handler sterft. Vandaar een
+  // expliciete terugval op de gewone naam in plaats van doorgooien.
+  try {
+    auto *session = call.world_session();
+    const auto uid = UnitIdArg(L, 1);
+    const auto *unit = ResolveUnit(session, uid);
+    if (session == nullptr || unit == nullptr) {
+      return call.nil();
+    }
+
+    std::string formatted;
+    const std::uint32_t parts =
+        static_cast<const ::openwow::game::CGUnit_C&>(*unit)
+            .FormatNameWithPvpTitle(*session, true, formatted);
+    if (parts != 0 && !formatted.empty()) {
+      return call.string(formatted);
+    }
+
+    if (const auto resolved = ResolveLiveObjectName(*session, *unit, true);
+        resolved.has_value()) {
+      return call.string(resolved->name);
+    }
+    return call.nil();
+  } catch (...) {
     return call.nil();
   }
-
-  std::string formatted;
-  (void)static_cast<const ::openwow::game::CGUnit_C&>(*unit)
-      .FormatNameWithPvpTitle(*session, true, formatted);
-  return call.string(formatted);
 }
 
 int LuaUnitVehicleSeatInfo(lua_State *L) {

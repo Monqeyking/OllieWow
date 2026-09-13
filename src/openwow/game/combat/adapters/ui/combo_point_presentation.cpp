@@ -15,7 +15,10 @@ void GameUI_UpdateComboPoints(
 
   session.spellbook_private_usability().Refresh(session);
   const auto player = openwow::game::CGObject_C::GetActivePlayerGuid();
-  if (!player.IsEmpty()) events.FireUnitComboPoints(player.GetRawValue());
+  if (!player.IsEmpty()) {
+    events.FireUnitComboPoints(player.GetRawValue());
+    events.FirePlayerComboPoints();
+  }
 }
 
 }

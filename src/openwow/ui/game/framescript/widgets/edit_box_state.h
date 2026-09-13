@@ -42,6 +42,13 @@ void CreateEditBoxCaretRegions(std::string_view edit_box_key,
                                runtime::FrameStore &frames,
                                runtime::RetainedLayout &layout);
 
+void CreateEditBoxFocusRegions(std::string_view edit_box_key,
+                               runtime::FrameStore &frames,
+                               runtime::RetainedLayout &layout);
+
+[[nodiscard]] std::string EditBoxFocusRegionKey(std::string_view edit_box_key,
+                                                std::string_view side);
+
 [[nodiscard]] std::string EditBoxCaretRegionKey(std::string_view edit_box_key);
 [[nodiscard]] std::string EditBoxHighlightRegionKey(
     std::string_view edit_box_key, std::size_t index);

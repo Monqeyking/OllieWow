@@ -1,7 +1,7 @@
 #include "openwow/render/models/characters/model_portrait.h"
 
-#include "openwow/foundation/math/projection_aspect.h"
 #include "openwow/foundation/diagnostics/logging.h"
+#include "openwow/foundation/math/projection_aspect.h"
 
 #include <bx/math.h>
 
@@ -16,12 +16,14 @@ namespace {
 [[nodiscard]] ModelPortraitResult MakeResult(
     const m2::M2ResultStatus status,
     const m2::M2ResultReason reason = m2::M2ResultReason::kNone,
-    std::string detail = {}, const std::uint32_t submitted_draw_count = 0u) {
+    std::string detail = {}, const std::uint32_t submitted_draw_count = 0u,
+    const std::uint32_t submitted_geometry_draw_count = 0u) {
   return {
       .status = status,
       .reason = reason,
       .detail = std::move(detail),
       .submitted_draw_count = submitted_draw_count,
+      .submitted_geometry_draw_count = submitted_geometry_draw_count,
   };
 }
 
@@ -47,6 +49,11 @@ void BuildSimpleModelOrthographicViewProjection(
                bgfx::getCaps()->homogeneousDepth, bx::Handedness::Left);
 }
 
+[[nodiscard]] std::string Vec3Text(const float* const value) {
+  return "(" + std::to_string(value[0]) + "," + std::to_string(value[1]) + "," +
+         std::to_string(value[2]) + ")";
+}
+
 }
 
 ModelPortrait::~ModelPortrait() {
@@ -63,8 +70,6 @@ bool ModelPortrait::Initialize(const std::uint16_t width,
   height_ = std::max(height, static_cast<std::uint16_t>(16));
   CreateFrameBuffer();
   if (!bgfx::isValid(fb_)) {
-    openwow::diagnostics::Log(openwow::diagnostics::LogLevel::kError,
-                       "ModelPortrait: framebuffer creation failed");
     return false;
   }
 
@@ -222,11 +227,25 @@ void ModelPortrait::SetCamera(const float yaw, const float pitch,
 
 void ModelPortrait::SetCameraIndex(const std::int32_t camera_index) {
   const std::int32_t clamped = std::max(0, camera_index);
-  if (!select_camera_by_type_ && camera_index_ == clamped) {
+  if (!select_camera_by_type_ && !select_camera_by_table_index_ &&
+      camera_index_ == clamped) {
     return;
   }
   camera_index_ = clamped;
   select_camera_by_type_ = false;
+  select_camera_by_table_index_ = false;
+  stable_camera_pose_.reset();
+  stable_camera_missing_ = false;
+}
+
+void ModelPortrait::SetCameraTableIndex(const std::int32_t camera_index) {
+  const std::int32_t clamped = std::max(0, camera_index);
+  if (select_camera_by_table_index_ && camera_index_ == clamped) {
+    return;
+  }
+  camera_index_ = clamped;
+  select_camera_by_type_ = false;
+  select_camera_by_table_index_ = true;
   stable_camera_pose_.reset();
   stable_camera_missing_ = false;
 }
@@ -237,6 +256,7 @@ void ModelPortrait::SetCameraType(const std::uint32_t camera_type) {
   }
   camera_type_ = camera_type;
   select_camera_by_type_ = true;
+  select_camera_by_table_index_ = false;
   stable_camera_pose_.reset();
   stable_camera_missing_ = false;
 }
@@ -310,21 +330,6 @@ ModelPortraitResult ModelPortrait::RenderToTexture(const bgfx::ViewId view_id) {
     animation_applied_revision_ = visual_clone_.visual_revision();
   }
 
-  float view_mtx[16]{};
-  float proj_mtx[16]{};
-  const ModelPortraitResult camera =
-      ComputeViewProjection(view_mtx, proj_mtx);
-  if (camera.status != m2::M2ResultStatus::kReady) {
-    return camera;
-  }
-
-  bgfx::setViewFrameBuffer(view_id, fb_);
-  bgfx::setViewRect(view_id, 0, 0, width_, height_);
-  bgfx::setViewClear(view_id, BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH,
-                     0x00000000, 1.0f, 0);
-  bgfx::setViewMode(view_id, bgfx::ViewMode::Sequential);
-  bgfx::setViewTransform(view_id, view_mtx, proj_mtx);
-
   float matrix_scale = model_scale_;
   float matrix_position[3] = {model_position_[0], model_position_[1],
                               model_position_[2]};
@@ -345,6 +350,24 @@ ModelPortraitResult ModelPortrait::RenderToTexture(const bgfx::ViewId view_id) {
       0.0f,                       0.0f,                      matrix_scale, 0.0f,
       matrix_position[0],         matrix_position[1],        matrix_position[2], 1.0f,
   };
+
+  float view_mtx[16]{};
+  float proj_mtx[16]{};
+  const ModelPortraitResult camera =
+      ComputeViewProjection(view_mtx, proj_mtx,
+                            RenderMatrix4x4View{model_matrix.data(),
+                                                model_matrix.size()});
+  if (camera.status != m2::M2ResultStatus::kReady) {
+    return camera;
+  }
+
+  bgfx::setViewFrameBuffer(view_id, fb_);
+  bgfx::setViewRect(view_id, 0, 0, width_, height_);
+  bgfx::setViewClear(view_id, BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH,
+                     0x00000000, 1.0f, 0);
+  bgfx::setViewMode(view_id, bgfx::ViewMode::Sequential);
+  bgfx::setViewTransform(view_id, view_mtx, proj_mtx);
+
   const auto render = m2_system_.RenderVisualClone(
       view_id, visual_clone_, model_matrix, RenderMatrix4x4View{view_mtx, 16u});
   bgfx::touch(view_id);
@@ -356,7 +379,8 @@ ModelPortraitResult ModelPortrait::RenderToTexture(const bgfx::ViewId view_id) {
     has_presented_content_ = true;
   }
   return MakeResult(render.status, render.reason, render.detail,
-                    render.submitted_draw_count);
+                    render.submitted_draw_count,
+                    render.submitted_geometry_draw_count);
 }
 
 void ModelPortrait::Resize(std::uint16_t width, std::uint16_t height) {
@@ -376,26 +400,45 @@ void ModelPortrait::Resize(std::uint16_t width, std::uint16_t height) {
 }
 
 void ModelPortrait::CreateFrameBuffer() {
-  constexpr std::uint64_t kColorFlags =
+  constexpr std::uint64_t color_flags =
       BGFX_TEXTURE_RT | BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP;
+  // Diagnostic detail for the failure path: an invalid colour/depth texture
+  // points at the renderer's handle space, while valid attachments with an
+  // invalid framebuffer point at the attachment combination itself.  Without
+  // this the caller only ever sees "not ready".
+  std::string failure_reason;
   const auto create_target = [&](bgfx::FrameBufferHandle& framebuffer,
                                  bgfx::TextureHandle& color,
                                  bgfx::TextureHandle& depth) {
     color = bgfx::createTexture2D(width_, height_, false, 1,
-                                  bgfx::TextureFormat::RGBA8, kColorFlags);
+                                  bgfx::TextureFormat::RGBA8, color_flags);
     depth = bgfx::createTexture2D(width_, height_, false, 1,
                                   bgfx::TextureFormat::D24S8,
                                   BGFX_TEXTURE_RT);
     if (!bgfx::isValid(color) || !bgfx::isValid(depth)) {
+      failure_reason = std::string("attachment color=") +
+                       (bgfx::isValid(color) ? "ok" : "invalid") + " depth=" +
+                       (bgfx::isValid(depth) ? "ok" : "invalid");
       return false;
     }
     bgfx::TextureHandle attachments[2] = {color, depth};
     framebuffer = bgfx::createFrameBuffer(2, attachments, false);
-    return bgfx::isValid(framebuffer);
+    if (!bgfx::isValid(framebuffer)) {
+      failure_reason = "framebuffer rejected for valid attachments";
+      return false;
+    }
+    return true;
   };
   if (!create_target(fb_, color_tex_, depth_tex_) ||
       !create_target(presented_fb_, presented_color_tex_,
                      presented_depth_tex_)) {
+    const bgfx::Caps* const caps = bgfx::getCaps();
+    openwow::diagnostics::Log(
+        openwow::diagnostics::LogLevel::kWarn,
+        "ModelPortrait: framebuffer creation failed size=" +
+            std::to_string(width_) + "x" + std::to_string(height_) +
+            " reason=" + failure_reason + " maxTextureSize=" +
+            std::to_string(caps != nullptr ? caps->limits.maxTextureSize : 0u));
     DestroyFrameBuffer();
   }
 }
@@ -417,7 +460,8 @@ void ModelPortrait::DestroyFrameBuffer() {
 }
 
 ModelPortraitResult ModelPortrait::ComputeViewProjection(
-    float* const view_mtx, float* const proj_mtx) {
+    float* const view_mtx, float* const proj_mtx,
+    const RenderMatrix4x4View model_matrix) {
   if (view_mtx == nullptr || proj_mtx == nullptr || !visual_clone_.valid()) {
     return MakeResult(m2::M2ResultStatus::kFailed,
                       m2::M2ResultReason::kInvalidQuery,
@@ -432,8 +476,11 @@ ModelPortraitResult ModelPortrait::ComputeViewProjection(
     const auto model_camera = select_camera_by_type_
                                   ? system.QueryVisualCloneCameraByType(
                                         visual_clone_, camera_type_)
-                                  : system.QueryVisualCloneCamera(
-                                        visual_clone_, camera_index_);
+                                  : select_camera_by_table_index_
+                                        ? system.QueryVisualCloneCamera(
+                                              visual_clone_, camera_index_)
+                                        : system.QueryVisualCloneCameraByLookup(
+                                              visual_clone_, camera_index_);
     if (model_camera.status == m2::M2ResultStatus::kReady) {
       stable_camera_pose_ = model_camera.pose;
     } else if (model_camera.status == m2::M2ResultStatus::kNotReady) {
@@ -447,15 +494,41 @@ ModelPortraitResult ModelPortrait::ComputeViewProjection(
     }
   }
   if (stable_camera_pose_.has_value()) {
+    const auto camera_pose = m2::M2System::TransformCameraPoseByModelMatrix(
+        *stable_camera_pose_, model_matrix);
     const RenderMatrix4x4 view =
-        m2::M2System::BuildCameraViewMatrix(*stable_camera_pose_);
+        m2::M2System::BuildCameraViewMatrix(camera_pose);
     std::copy(view.begin(), view.end(), view_mtx);
     const float vertical_fov = m2::M2System::BuildCameraVerticalFov(
-        stable_camera_pose_->fov_rad, aspect);
+        camera_pose.fov_rad, aspect);
     bx::mtxProj(proj_mtx, bx::toDeg(vertical_fov), aspect,
-                std::max(0.01f, stable_camera_pose_->near_clip),
-                std::max(1.0f, stable_camera_pose_->far_clip),
+                std::max(0.01f, camera_pose.near_clip),
+                std::max(1.0f, camera_pose.far_clip),
                 bgfx::getCaps()->homogeneousDepth, bx::Handedness::Left);
+    // Which rig this surface actually got: the reference picks cameraLookup[0]
+    // for a unit-frame portrait, raw cameras[1] for a <PlayerModel> pane and
+    // cameras[0] for a glue Model.  Without this the three are indistinguishable
+    // in a log, and a synthetically framed surface looks identical to a
+    // correctly framed one that simply has nothing in view.
+    const std::string report =
+        std::string("source=authored") +
+        (select_camera_by_type_
+             ? " type="
+             : (select_camera_by_table_index_ ? " table=" : " lookup=")) +
+        std::to_string(camera_index_) +
+        " pos=" + Vec3Text(stable_camera_pose_->position.data()) +
+        " target=" + Vec3Text(stable_camera_pose_->target.data()) +
+        " fov=" + std::to_string(stable_camera_pose_->fov_rad) +
+        " near=" + std::to_string(stable_camera_pose_->near_clip) +
+        " far=" + std::to_string(stable_camera_pose_->far_clip) +
+        " scale=" + std::to_string(model_scale_) +
+        " offset=" + Vec3Text(model_position_) +
+        " rot=" + std::to_string(model_rotation_);
+    if (report != last_camera_report_) {
+      last_camera_report_ = report;
+      openwow::diagnostics::Log(openwow::diagnostics::LogLevel::kInfo,
+                                "ModelPortrait camera: " + report);
+    }
     return MakeResult(m2::M2ResultStatus::kReady);
   }
 
@@ -488,6 +561,8 @@ ModelPortraitResult ModelPortrait::ComputeViewProjection(
       .near_clip = kFallbackNearClip,
       .far_clip = 1000.0f,
   };
+  fallback_pose = m2::M2System::TransformCameraPoseByModelMatrix(
+      fallback_pose, model_matrix);
   const RenderMatrix4x4 view =
       m2::M2System::BuildCameraViewMatrix(fallback_pose);
   std::copy(view.begin(), view.end(), view_mtx);
@@ -496,6 +571,22 @@ ModelPortraitResult ModelPortrait::ComputeViewProjection(
   bx::mtxProj(proj_mtx, bx::toDeg(vertical_fov), aspect,
               fallback_pose.near_clip, fallback_pose.far_clip,
               bgfx::getCaps()->homogeneousDepth, bx::Handedness::Left);
+  // The model carries no usable camera, so this surface is framed by the
+  // synthetic rig below.  The reference instead anchors a head closeup on the
+  // bind pose; log the sphere and the rig so a mis-framed surface is visible.
+  const std::string report =
+      "source=synthetic-fallback radius=" + std::to_string(radius) +
+      " center=" + Vec3Text(center.data()) +
+      " pos=" + Vec3Text(fallback_pose.position.data()) +
+      " target=" + Vec3Text(fallback_pose.target.data()) +
+      " fov=" + std::to_string(fallback_pose.fov_rad) +
+      " scale=" + std::to_string(model_scale_) +
+      " offset=" + Vec3Text(model_position_);
+  if (report != last_camera_report_) {
+    last_camera_report_ = report;
+    openwow::diagnostics::Log(openwow::diagnostics::LogLevel::kInfo,
+                              "ModelPortrait camera: " + report);
+  }
   return MakeResult(m2::M2ResultStatus::kReady);
 }
 

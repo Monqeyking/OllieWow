@@ -132,6 +132,8 @@ class FrameStore final {
   void NotifyHierarchyMutation(std::string_view key,
                                std::string_view previous_parent);
   void InvalidatePaintOrder();
+  [[nodiscard]] std::size_t PaintOrder(FrameHandle handle) const;
+  void MoveToPaintTail(std::string_view key);
   void InvalidateHitTest();
 
   [[nodiscard]] bool PushNewestEnumerableFrame(lua_State* state) const;

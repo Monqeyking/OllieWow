@@ -125,6 +125,68 @@ Gebruik Benilla om vast te stellen:
 Ga pas daarna over tot wijziging of fallback. Gebruik geen workaround die een
 Benilla-afwijking maskeert zonder die afwijking expliciet te rapporteren.
 
+## Addon-compatibiliteitsarchitectuur en punt 1
+
+Voor addon-compatibiliteit gebruiken we de Vanilla/1.12.1 FrameXML- en
+addonbron als online referentie, maar blijft de lokale Client/Turtle-data het
+leidende contract. Nuttige referenties zijn:
+
+- `https://github.com/MOUZU/Blizzard-WoW-Interface` voor geëxtraheerde
+  Blizzard-Interfacebestanden van 1.12.1;
+- `https://github.com/samwhosung/benilla` voor een onafhankelijke
+  FrameXML/Lua-clientarchitectuur en addon-loader;
+- `https://github.com/satan666/WOW-UI-SOURCE/blob/master/FrameXML/UIParent.lua`
+  voor Vanilla-achtige `LoadAddOn()`- en UIParent-flow.
+
+Deze online bronnen documenteren en illustreren het contract; zij vervangen
+geen controle tegen `D:\OllieWoW\Client`, de lokale Turtle-variant of de lokale
+serverbron. Verschillen tussen online Vanilla, lokale Turtle-Lua en OpenWow
+moeten expliciet worden gemeld.
+
+Addon-ondersteuning hoort niet in één monolithisch `addon.cpp`-bestand en mag
+geen pfUI-specifieke native uitzonderingslaag worden. Gebruik de bestaande
+OpenWow-seams:
+
+- addon- en TOC-laadvolgorde: `ui/game/runtime/framexml_runtime_loader.*`;
+- XML/Lua-inladen en addoncontext: `ui/game/framescript/xml/frame_xml_loader.*`;
+- frame-methodes en widgettypen: `ui/game/framescript/core/frame_method_registry.*`
+  plus de relevante methode- of widgetmodule;
+- anchors en layout: `ui/game/framescript/core/frame_anchor_methods.*`,
+  `frame_layout_*` en de gedeelde frame-runtime;
+- events en lifecycle: `ui/game/runtime/frame_event_runtime.*`;
+- game-API's: de domeinspecifieke `ui/game/api/game_lua_api_*.cpp/.h` en de
+  bestaande `framexml_*_native_bindings.cpp`-catalogi;
+- model- en portraitbinding: de bestaande system API, frame projection en
+  M2/model-runtime;
+- game-statefouten zoals een ontbrekende `player`-GUID: de world/objectlaag,
+  bijvoorbeeld `game/object_manager.cpp`, niet de addonlaag.
+
+Voor de eerste compatibiliteitsslice mag een read-only audittool worden
+toegevoegd die lokale `Client\Interface`-Lua/XML en addons inventariseert en
+een API-matrix of `addon-api-inventory.json` maakt. Verzamel minimaal globals,
+frametypen, framemethodes, events, XML-namen, model-/texturepaden en verwachte
+returnaantallen. Vergelijk die inventaris met OpenWow's native bindingcatalogi
+en runtime-traces. Statische inventarisatie bepaalt niet zelfstandig de
+semantiek of eventvolgorde; daarvoor zijn kleine offline contractchecks en
+een beperkte echte-clientruntimecontrole nodig.
+
+Werk voor addon-compatibiliteit in deze volgorde:
+
+1. Inventariseer de lokale addon- en Vanilla-contracten.
+2. Trace de volledige route van Lua/XML naar native API, game-state en render-
+   of eventlaag.
+3. Herstel de gedeelde ontbrekende seam op de laag waar het contract breekt.
+4. Voeg alleen een kleine offline regressiecheck toe wanneer die route
+   reproduceerbaar is.
+5. Bouw pas na expliciete toestemming en valideer daarna met een echte addon-
+   runtimecontrole; een geslaagde build bewijst geen addoncompatibiliteit.
+
+We kunnen veel addonondersteuning systematisch toevoegen, maar niet blind alle
+addons in één keer garanderen. De juiste schaalwinst komt uit gedeelde
+Vanilla-primitieven zoals frames, anchors, named-object lookup, events, Lua
+ABI en Unit-/model-API's; een fout in zo'n primitief mag niet per addon worden
+gepatcht.
+
 ## Vast analyseformat
 
 Bij een niet-triviale glue-, model- of renderafwijking zet de analyse de drie

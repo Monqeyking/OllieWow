@@ -932,6 +932,10 @@ void ScriptEventDispatch::FireUnitComboPoints(std::uint64_t guid) {
   FirePerUnitEvent(UNIT_COMBO_POINTS, guid);
 }
 
+void ScriptEventDispatch::FirePlayerComboPoints() {
+  FireGlobalEvent(PLAYER_COMBO_POINTS);
+}
+
 void ScriptEventDispatch::FireUnitAttackPower(std::uint64_t guid) {
   FirePerUnitEvent(UNIT_ATTACK_POWER, guid);
 }

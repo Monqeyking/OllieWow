@@ -141,6 +141,51 @@ void AppendAddonStatus(UiLoadStatusSink *sink, const std::string &addon_name,
   labeled_status.ReplayInto(*sink);
 }
 
+void AppendAddonTrace(UiLoadStatusSink *sink, const std::string &message) {
+  if (sink != nullptr) {
+    sink->AppendStatus(0, "[AddonTrace] " + message);
+  }
+}
+
+std::string LuaFieldDescription(lua_State *state, const int table_index,
+                                const char *field_name) {
+  lua_getfield(state, table_index, field_name);
+  const int type = lua_type(state, -1);
+  std::string value = lua_typename(state, type);
+  if (type == LUA_TSTRING) {
+    value += "(";
+    value += lua_tostring(state, -1);
+    value += ")";
+  } else if (type == LUA_TBOOLEAN) {
+    value += lua_toboolean(state, -1) != 0 ? "(true)" : "(false)";
+  } else if (type == LUA_TTABLE) {
+    value += "(len=" + std::to_string(lua_objlen(state, -1)) + ")";
+  }
+  lua_pop(state, 1);
+  return value;
+}
+
+void AppendPfUiStateTrace(UiLoadStatusSink *sink, lua_State *state) {
+  if (sink == nullptr || state == nullptr) {
+    return;
+  }
+
+  const ScopedLuaStack stack(*state);
+  lua_getglobal(state, "pfUI");
+  const int type = lua_type(state, -1);
+  std::string trace =
+      "pfUI_state global=" + std::string(lua_typename(state, type));
+  if (type == LUA_TTABLE) {
+    const int table = lua_absindex(state, -1);
+    trace += " name=" + LuaFieldDescription(state, table, "name");
+    trace += " expansion=" + LuaFieldDescription(state, table, "expansion");
+    trace += " bootup=" + LuaFieldDescription(state, table, "bootup");
+    trace += " gui=" + LuaFieldDescription(state, table, "gui");
+    trace += " modules=" + LuaFieldDescription(state, table, "modules");
+  }
+  AppendAddonTrace(sink, trace);
+}
+
 bool ExecuteAddonSavedVariablesFile(lua_State *state, const std::string &addon_name,
                                     const std::filesystem::path &path,
                                     UiLoadStatusSink *status_sink) {
@@ -545,7 +590,10 @@ bool AddonRuntimeLoader::LoadInternal(
   if (addon_state == nullptr) {
     return false;
   }
+  AppendAddonTrace(context.status_sink, "begin addon=" + addon_state->name);
   if (addon_state->loaded != 0) {
+    AppendAddonTrace(context.status_sink,
+                     "already_loaded addon=" + addon_state->name);
     return true;
   }
   if (!openwow::platform::filesystem::IsSafePathComponent(addon_state->name)) {
@@ -565,13 +613,24 @@ bool AddonRuntimeLoader::LoadInternal(
       addon_state->name.c_str(), context.allow_load_on_demand,
       ResolveCharacterName(context.identity));
   if (!loadability.loadable) {
+    std::string load_reason;
+    AppendAddonTrace(context.status_sink,
+                     "blocked addon=" + addon_state->name +
+                         " reason=" +
+                         AddOnsData::FormatLoadReason(
+                             loadability.reason, loadability.dependency_reason,
+                             load_reason));
     active_chain.erase(addon_state->name);
     return false;
   }
 
-  addons_data_.SetAddonLoadedState(addon_state->name.c_str(), true, false);
+  AppendAddonTrace(context.status_sink,
+                   "loadable addon=" + addon_state->name);
 
   for (const auto &dependency_name : addon_state->optional_deps) {
+    AppendAddonTrace(context.status_sink,
+                     "optional_dependency addon=" + addon_state->name +
+                         " dependency=" + dependency_name);
     AddonRuntimeLoadContext dependency_context = context;
     dependency_context.allow_load_on_demand = true;
     (void)LoadInternal(dependency_name, dependency_context, active_chain);
@@ -580,9 +639,15 @@ bool AddonRuntimeLoader::LoadInternal(
     if (addons_data_.IsAddonLoaded(dependency_name.c_str())) {
       continue;
     }
+    AppendAddonTrace(context.status_sink,
+                     "required_dependency addon=" + addon_state->name +
+                         " dependency=" + dependency_name);
     AddonRuntimeLoadContext dependency_context = context;
     dependency_context.allow_load_on_demand = true;
     if (!LoadInternal(dependency_name, dependency_context, active_chain)) {
+      AppendAddonTrace(context.status_sink,
+                       "dependency_failed addon=" + addon_state->name +
+                           " dependency=" + dependency_name);
       addons_data_.SetAddonLoadedState(addon_state->name.c_str(), false, false);
       active_chain.erase(addon_state->name);
       return false;
@@ -596,24 +661,45 @@ bool AddonRuntimeLoader::LoadInternal(
     const ScopedAddonExecutionContext execution_scope(
         secure_execution_, &lua_state_, secure_context, addon_state->name);
 
+    AppendAddonTrace(context.status_sink,
+                     "toc_begin addon=" + addon_state->name +
+                         " path=" + addon_state->toc_path);
     if (!ui_manager_.LoadToc(addon_state->toc_path, &addon_status,
                              context.progress, addon_state->name, nullptr)) {
+      AppendAddonTrace(context.status_sink,
+                       "toc_failed addon=" + addon_state->name);
       AppendAddonStatus(context.status_sink, addon_state->name, addon_status);
       addons_data_.SetAddonLoadedState(addon_state->name.c_str(), false,
                                        false);
       active_chain.erase(addon_state->name);
       return false;
     }
+    AppendAddonTrace(context.status_sink,
+                     "toc_ok addon=" + addon_state->name);
 
     const std::string bindings_xml_path =
         "/Interface/AddOns/" + addon_state->name + "/Bindings.xml";
     if (vfs_.Exists(bindings_xml_path)) {
+      AppendAddonTrace(context.status_sink,
+                       "bindings_begin addon=" + addon_state->name);
       (void)openwow::game::actions::bindings::adapters::xml::BindingXmlAdapter::
           LoadFile(binding_profiles_, &lua_state_, &vfs_, bindings_xml_path,
                    &addon_status, nullptr);
+      AppendAddonTrace(context.status_sink,
+                       "bindings_done addon=" + addon_state->name);
+    } else {
+      AppendAddonTrace(context.status_sink,
+                       "bindings_skip addon=" + addon_state->name);
     }
-    (void)LoadAddonSavedVariables(&lua_state_, addon_state->name,
-                                  context.identity, &addon_status);
+    AppendAddonTrace(context.status_sink,
+                     "saved_variables_begin addon=" + addon_state->name);
+    const bool saved_variables_loaded =
+        LoadAddonSavedVariables(&lua_state_, addon_state->name,
+                                context.identity, &addon_status);
+    AppendAddonTrace(context.status_sink,
+                     std::string("saved_variables_") +
+                         (saved_variables_loaded ? "ok" : "failed") +
+                         " addon=" + addon_state->name);
 
     if (secure_context) {
       const auto actual_digest = openwow::net::wotlk::ComputeAddonContentDigest(
@@ -644,7 +730,14 @@ bool AddonRuntimeLoader::LoadInternal(
 
   AppendAddonStatus(context.status_sink, addon_state->name, addon_status);
   addons_data_.SetAddonLoadedState(addon_state->name.c_str(), true, true);
+  AppendAddonTrace(context.status_sink,
+                   "addon_loaded_begin addon=" + addon_state->name);
   ui_manager_.frame_events().OnAddonLoaded(addon_state->name);
+  if (AsciiCaseInsensitiveEquals(addon_state->name, "pfUI")) {
+    AppendPfUiStateTrace(context.status_sink, &lua_state_);
+  }
+  AppendAddonTrace(context.status_sink,
+                   "addon_loaded_done addon=" + addon_state->name);
 
   for (const auto &candidate : SnapshotAddonsInRegistrationOrder(addon_manager_)) {
     for (const auto &load_with_target : candidate.load_with) {

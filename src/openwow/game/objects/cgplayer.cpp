@@ -1630,9 +1630,16 @@ std::uint8_t CGPlayer_C::GetRestState() const {
 }
 
 std::uint8_t CGPlayer_C::GetActionBarToggles() const {
-  // Classic does not expose PLAYER_FIELD_ACTION_BAR_TOGGLES. The action-bar
-  // page is persisted separately from the player update fields.
-  return 0;
+  // De vier extra action bars staan per personage in PLAYER_FIELD_BYTES byte 2
+  // (bits 0x01/0x02/0x04/0x08 voor BottomLeft/BottomRight/Right/Left). De lokale
+  // server schrijft die byte in WorldSession::HandleSetActionBarTogglesOpcode
+  // (Source\src\game\Handlers\MiscHandler.cpp:1043: SetByteValue(PLAYER_FIELD_BYTES,
+  // 2, actionBar)) en de lokale FrameXML leest hem eenmalig op
+  // PLAYER_ENTERING_WORLD via GetActionBarToggles() (patch-9.mpq
+  // Interface\FrameXML\UIParent.lua:378) om SHOW_MULTI_ACTIONBAR_1..4 te zetten -
+  // precies zoals Benilla het doet (crates\benilla-app\assets\ui\UIParent.xml:197-204).
+  // Byte 2 = bits 16-23, dezelfde byte-conventie als GetBankBagSlotCount() hierboven.
+  return static_cast<std::uint8_t>((GetUInt32(PLAYER_FIELD_BYTES) >> 16) & 0xFF);
 }
 
 std::uint8_t CGPlayer_C::GetDrunkState() const {

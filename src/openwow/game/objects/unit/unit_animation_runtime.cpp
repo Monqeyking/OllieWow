@@ -1888,7 +1888,10 @@ void UnitAnimationRuntime::HandleMovementAnimation(
   }
   if (was_falling && !is_falling) {
     if (suppress_land_animation) {
-
+      // Benilla keeps tiny/silent landings grounded without playing JumpEnd.
+      // Still refresh the grounded selector so a previously selected Fall
+      // pose cannot remain latched on the model.
+      stand_selector_refresh_pending_ = true;
       return;
     }
 
@@ -2558,40 +2561,16 @@ void UnitAnimationRuntime::ApplySelectedStandAnimation(
 void UnitAnimationRuntime::UpdatePendingFallAnimation(
     const std::uint32_t previous_movement_flags,
     const std::uint32_t current_movement_flags) {
-  constexpr std::uint32_t kPendingFallAnimation = 0x00002000u;
-  const bool was_falling =
-      (previous_movement_flags & kMoveFlagFalling) != 0u;
-  const bool is_falling = (current_movement_flags & kMoveFlagFalling) != 0u;
-  if (!is_falling) {
-    emote_internal_flags_ &= ~kPendingFallAnimation;
+  static_cast<void>(previous_movement_flags);
+  if ((current_movement_flags & kMoveFlagFallingFar) == 0u ||
+      owner_.State().IsDead()) {
     return;
   }
-  if (!was_falling) {
-    if (owner_.GetMovementInfo().HasFallingLaunchVelocity()) {
-      emote_internal_flags_ &= ~kPendingFallAnimation;
-      return;
-    }
-    emote_internal_flags_ |= kPendingFallAnimation;
-  }
-  if ((emote_internal_flags_ & kPendingFallAnimation) != 0u) {
-    TryPlayPendingFallAnimation();
-  }
-}
+  const bool was_falling_far =
+      (previous_movement_flags & kMoveFlagFallingFar) != 0u;
+  if (was_falling_far) return;
 
-void UnitAnimationRuntime::TryPlayPendingFallAnimation() {
-  constexpr std::uint32_t kPendingFallAnimation = 0x00002000u;
-  if ((emote_internal_flags_ & kPendingFallAnimation) == 0u || owner_.State().IsDead()) {
-    return;
-  }
-  const auto *const passenger = owner_.Vehicle().GetVehiclePassengerComponent();
-  if (owner_.Vehicle().VehicleSuppressesTransitionAnimation(owner_) ||
-      (passenger != nullptr &&
-       passenger->GetTransitionState() !=
-           VehiclePassengerTransitionType::kExit)) {
-    return;
-  }
-  PlayEmoteAnimation(kFallAnimationId, 0u);
-  emote_internal_flags_ &= ~kPendingFallAnimation;
+  RequestPlayback(static_cast<std::uint16_t>(kFallAnimationId), true, true);
 }
 
 bool UnitAnimationRuntime::IsAnimationUpdateSuppressed() const {
@@ -3566,9 +3545,7 @@ bool UnitAnimationRuntime::HasMovementDrivenStandAnimationOverride(
     const WorldSession &session) const {
   const auto &movement_info = owner_.GetMovementInfo();
 
-  if ((movement_info.flags & kMoveFlagFalling) != 0u &&
-      ((movement_info.flags & kMoveFlagFallingFar) != 0u ||
-       movement_info.jump.z_speed != 0.0f)) {
+  if ((movement_info.flags & kMoveFlagFallingFar) != 0u) {
     return true;
   }
   static_cast<void>(session);
@@ -4101,7 +4078,7 @@ UnitAnimationRuntime::ResolveSequenceEndFollowUp(
   case 0x27u:
     return kSelector;
   case 0x28u:
-    return play(static_cast<std::uint16_t>(kFallAnimationId));
+    return kSelector;
 
   case 0x32u:
     return play(kLootHoldAnimationId);

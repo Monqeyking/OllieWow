@@ -140,6 +140,9 @@ class BgfxTextCache {
   std::unordered_map<std::string, std::unique_ptr<BgfxGlyphAtlas>> atlases_;
   std::unordered_map<std::size_t, std::unique_ptr<CachedLayout>> layouts_;
   std::unordered_map<std::string, std::string> normalized_font_path_cache_;
+  // Diagnostiek: Shutdown hoort eenmalig te lopen; een tweede aanroep zou de
+  // faces opnieuw langs de levensduur-teller sturen.
+  std::uint64_t shutdown_calls_{};
 };
 
 }

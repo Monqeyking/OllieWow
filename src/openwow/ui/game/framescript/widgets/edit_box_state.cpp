@@ -605,6 +605,34 @@ std::string EditBoxHighlightRegionKey(const std::string_view edit_box_key,
                                         kEditBoxHighlightRegionCount - 1u)]);
 }
 
+std::string EditBoxFocusRegionKey(const std::string_view edit_box_key,
+                                  const std::string_view side) {
+  return std::string(edit_box_key) + ".__EditBoxFocus" + std::string(side);
+}
+
+void CreateEditBoxFocusRegions(const std::string_view edit_box_key,
+                               runtime::FrameStore &frames,
+                               runtime::RetainedLayout &layout) {
+  using openwow::ui::framexml::UiFrame;
+  const auto insert = [&](const std::string_view side) {
+    std::string key = EditBoxFocusRegionKey(edit_box_key, side);
+    if (frames.contains(key)) return;
+    UiFrame region;
+    region.kind = "Texture";
+    region.runtime_kind = UiFrame::RuntimeKind::Texture;
+    region.name = key;
+    region.parent = std::string(edit_box_key);
+    region.publish_to_lua = false;
+    region.draw_layer = "BACKGROUND";
+    region.visible = false;
+    frames.InsertFrame(key, std::move(region));
+    layout.PublishFrame(key);
+  };
+  insert("Left");
+  insert("Mid");
+  insert("Right");
+}
+
 void CreateEditBoxCaretRegions(const std::string_view edit_box_key,
                                runtime::FrameStore &frames,
                                runtime::RetainedLayout &layout) {

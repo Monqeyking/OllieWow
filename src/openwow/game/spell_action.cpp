@@ -489,9 +489,6 @@ void SpellAction_DisplaySpellFailure(const WorldSession& session,
   if (result == SpellCastResult::kAlreadyAtFullHealth) {
     localized_format = Localization::Get().GetString(
         "ERR_SPELL_FAILED_ALREADY_AT_FULL_HEALTH", {});
-  } else if (result == SpellCastResult::kAlreadyAtFullMana) {
-    localized_format = Localization::Get().GetString(
-        "ERR_SPELL_FAILED_ALREADY_AT_FULL_MANA", {});
   } else if (result == SpellCastResult::kAlreadyAtFullPower ||
              result == SpellCastResult::kNoPower) {
     localized_format = Localization::Get().GetString(

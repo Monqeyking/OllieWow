@@ -98,6 +98,7 @@ class FrameMaterializer final {
   [[nodiscard]] std::size_t template_node_count() const noexcept;
 
   void BeginDefaultFrameXmlLoad();
+  void ReconcileDefaultLuaGlobals();
   void EndDefaultFrameXmlLoad() noexcept;
   [[nodiscard]] LoadCheckpoint CaptureLoadCheckpoint() const;
   void RestoreLoadCheckpoint(LoadCheckpoint checkpoint);
