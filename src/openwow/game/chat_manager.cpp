@@ -22,7 +22,7 @@ net::wotlk::WorldPacket ChatManager::BuildChatMessage(
     const std::string& target) {
   net::wotlk::WorldPacket pkt(net::wotlk::Opcode::CMSG_MESSAGECHAT);
 
-  pkt.AppendU32(static_cast<std::uint32_t>(type));
+  pkt.AppendU32(static_cast<std::uint32_t>(LegacyWireFromChatMsg(type)));
   pkt.AppendU32(static_cast<std::uint32_t>(language));
 
   if (ChatTypeNeedsTarget(type)) {
@@ -74,82 +74,65 @@ bool ChatManager::ParseChatMessage(const std::uint8_t* data, std::size_t len,
 
   std::uint8_t chat_type_raw;
   if (!reader.ReadU8(chat_type_raw)) return false;
-  out.type = static_cast<ChatMsg>(chat_type_raw);
+  out.type = ChatMsgFromLegacyWire(chat_type_raw);
 
   std::uint32_t language_raw;
   if (!reader.ReadU32(language_raw)) return false;
   out.language = static_cast<Language>(language_raw);
 
-  std::uint64_t sender_guid_raw;
-  if (!reader.ReadU64(sender_guid_raw)) return false;
-  out.sender_guid = ObjectGuid(sender_guid_raw);
-
-  std::uint32_t flags;
-  if (!reader.ReadU32(flags)) return false;
-
   out.is_gm = is_gm_message;
 
+  // 1.12-body van SMSG_MESSAGECHAT (Source\src\game\Chat\Chat.cpp:2290-2340):
+  // u8 type, u32 language, dan per type een eigen kop, dan u32 len + tekst +
+  // u8 chatTag. Onze oude parser las hier nog een 3.3.5-`flags` (u32) en een
+  // receiver-guid, die de 1.12-server nooit stuurt: daardoor schoof de rest van
+  // het pakket 4-12 bytes op en kwamen say/party/yell en alle default-vormen
+  // (whisper, system, guild, raid, emote) verminkt of leeg aan. Benilla leest
+  // exact deze vormen (benilla-protocol/src/messages/chat.rs:171-210).
   if (IsMonsterChatType(out.type)) {
+    // MONSTER_WHISPER / RAID_BOSS_WHISPER / RAID_BOSS_EMOTE / MONSTER_EMOTE:
+    // naam + doelwit. MONSTER_SAY / MONSTER_YELL: sender-guid + naam + doelwit.
+    if (out.type == ChatMsg::kMonsterSay || out.type == ChatMsg::kMonsterYell) {
+      std::uint64_t sender_guid_raw;
+      if (!reader.ReadU64(sender_guid_raw)) return false;
+      out.sender_guid = ObjectGuid(sender_guid_raw);
+    }
 
     std::uint32_t sender_name_len;
     if (!reader.ReadU32(sender_name_len)) return false;
     if (!reader.ReadCString(out.sender_name)) return false;
 
-    std::uint64_t receiver_guid_raw;
-    if (!reader.ReadU64(receiver_guid_raw)) return false;
-    out.receiver_guid = ObjectGuid(receiver_guid_raw);
+    std::uint64_t target_guid_raw;
+    if (!reader.ReadU64(target_guid_raw)) return false;
+    out.receiver_guid = ObjectGuid(target_guid_raw);
 
-    if (receiver_guid_raw != 0) {
-      auto high = out.receiver_guid.GetHigh();
-      if (high != HighGuid::kPlayer && high != HighGuid::kPet) {
-        std::uint32_t recv_name_len;
-        if (!reader.ReadU32(recv_name_len)) return false;
-        if (!reader.ReadCString(out.secondary_name)) return false;
-      }
-    }
-  } else if (out.type == ChatMsg::kWhisperForeign) {
-    std::uint32_t sender_name_len;
-    if (!reader.ReadU32(sender_name_len)) return false;
-    if (!reader.ReadCString(out.sender_name)) return false;
+  } else if (out.type == ChatMsg::kSay || out.type == ChatMsg::kParty ||
+             out.type == ChatMsg::kYell) {
+    // De server schrijft de sender-guid in BEIDE slots (geen naam, geen target).
+    std::uint64_t sender_guid_raw;
+    if (!reader.ReadU64(sender_guid_raw)) return false;
+    out.sender_guid = ObjectGuid(sender_guid_raw);
 
-    std::uint64_t receiver_guid_raw;
-    if (!reader.ReadU64(receiver_guid_raw)) return false;
-    out.receiver_guid = ObjectGuid(receiver_guid_raw);
+    std::uint64_t target_guid_raw;
+    if (!reader.ReadU64(target_guid_raw)) return false;
+    out.receiver_guid = ObjectGuid(target_guid_raw);
 
-  } else if (IsBgSystemMessage(out.type)) {
-    std::uint64_t receiver_guid_raw;
-    if (!reader.ReadU64(receiver_guid_raw)) return false;
-    out.receiver_guid = ObjectGuid(receiver_guid_raw);
+  } else if (out.type == ChatMsg::kChannel) {
+    if (!reader.ReadCString(out.channel_name)) return false;
 
-    if (receiver_guid_raw != 0) {
-      auto high = out.receiver_guid.GetHigh();
-      if (high != HighGuid::kPlayer) {
-        std::uint32_t recv_name_len;
-        if (!reader.ReadU32(recv_name_len)) return false;
-        if (!reader.ReadCString(out.secondary_name)) return false;
-      }
-    }
-  } else if (IsAchievementMessage(out.type)) {
-    std::uint64_t receiver_guid_raw;
-    if (!reader.ReadU64(receiver_guid_raw)) return false;
-    out.receiver_guid = ObjectGuid(receiver_guid_raw);
+    std::uint32_t player_rank;
+    if (!reader.ReadU32(player_rank)) return false;
+
+    std::uint64_t sender_guid_raw;
+    if (!reader.ReadU64(sender_guid_raw)) return false;
+    out.sender_guid = ObjectGuid(sender_guid_raw);
 
   } else {
-
-    if (is_gm_message) {
-
-      std::uint32_t sender_name_len;
-      if (!reader.ReadU32(sender_name_len)) return false;
-      if (!reader.ReadCString(out.sender_name)) return false;
-    }
-
-    if (out.type == ChatMsg::kChannel) {
-      if (!reader.ReadCString(out.channel_name)) return false;
-    }
-
-    std::uint64_t receiver_guid_raw;
-    if (!reader.ReadU64(receiver_guid_raw)) return false;
-    out.receiver_guid = ObjectGuid(receiver_guid_raw);
+    // Alles overig (raid/guild/officer/whisper/whisper_inform/emote/system/afk/
+    // dnd/ignored/bg_system_*/combat- en spellregels): alleen de sender-guid.
+    std::uint64_t sender_guid_raw;
+    if (!reader.ReadU64(sender_guid_raw)) return false;
+    out.sender_guid = ObjectGuid(sender_guid_raw);
   }
 
   std::uint32_t message_len;
@@ -158,11 +141,7 @@ bool ChatManager::ParseChatMessage(const std::uint8_t* data, std::size_t len,
 
   std::uint8_t chat_tag_raw;
   if (!reader.ReadU8(chat_tag_raw)) return false;
-  out.chat_tag = static_cast<ChatTag>(chat_tag_raw);
-
-  if (IsAchievementMessage(out.type)) {
-    if (!reader.ReadU32(out.achievement_id)) return false;
-  }
+  out.chat_tag = ChatTagFromLegacyWire(chat_tag_raw);
 
   return true;
 }

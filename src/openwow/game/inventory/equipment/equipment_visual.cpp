@@ -397,10 +397,22 @@ std::string EquipmentVisualSystem::BuildShoulderTexturePath(const std::string_vi
   return path;
 }
 
+const char *EquipmentVisualSystem::HelmRaceFilePrefix(const uint32_t race_id) {
+  // Benilla entities/equipment/mod.rs:309-316 ("RACE_PREFIX = Hu Or Dw Ni Sc Ta
+  // Gn Tr", sex == 1 -> F). Bewijs uit onze eigen log dat de lange modelnaam fout
+  // is: "Helm_Leather_D_01_TaurenM.mdx ... reason=4", terwijl het bestand
+  // Helm_Leather_D_01_TaM.m2 heet.
+  static constexpr std::array<const char *, 8> kHelmRacePrefixes = {
+      "Hu", "Or", "Dw", "Ni", "Sc", "Ta", "Gn", "Tr"};
+  if (race_id == 0u || race_id > kHelmRacePrefixes.size()) {
+    return nullptr;
+  }
+  return kHelmRacePrefixes[race_id - 1u];
+}
+
 std::string EquipmentVisualSystem::BuildHeadModelPath(const std::string_view itemModelName,
                                                       const std::string_view raceModelToken,
-                                                      const uint8_t gender) {
-  if (itemModelName.empty() || raceModelToken.empty()) {
+                                                      const uint8_t gender) {  if (itemModelName.empty() || raceModelToken.empty()) {
     return {};
   }
 

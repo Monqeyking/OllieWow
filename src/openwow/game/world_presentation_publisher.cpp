@@ -53,6 +53,64 @@ constexpr std::array<std::size_t, 11> kNpcItemDisplayEquipmentSlots{
     render::kSlotHands, render::kSlotTabard,    render::kSlotBack,
 };
 
+// Leidt ras en geslacht af uit het modelpad van een karakter-rij
+// ("Character\Orc\Male\OrcMale.m2"). Nodig voor karakter-NPC's zonder
+// CreatureDisplayInfoExtra-rij: zonder look heeft zo'n model geen huid (het M2
+// levert die niet zelf) en tekent het dus niets.
+[[nodiscard]] bool DeriveCharacterRaceGenderFromModelPath(
+    const std::string_view model_path, std::uint8_t *const out_race,
+    std::uint8_t *const out_gender) {
+  if (out_race == nullptr || out_gender == nullptr) {
+    return false;
+  }
+  const auto is_separator = [](const char ch) { return ch == '\\' || ch == '/'; };
+
+  std::size_t index = 0u;
+  const auto take_segment = [&](std::string_view *const out) {
+    while (index < model_path.size() && is_separator(model_path[index])) {
+      ++index;
+    }
+    const std::size_t begin = index;
+    while (index < model_path.size() && !is_separator(model_path[index])) {
+      ++index;
+    }
+    if (out != nullptr) {
+      *out = model_path.substr(begin, index - begin);
+    }
+    return index > begin;
+  };
+
+  std::string_view root;
+  std::string_view race_dir;
+  std::string_view gender_dir;
+  if (!take_segment(&root) || !take_segment(&race_dir) ||
+      !take_segment(&gender_dir)) {
+    return false;
+  }
+  if (!openwow::text::EqualsIgnoreCaseAscii(root, "Character")) {
+    return false;
+  }
+
+  struct RaceDirectory {
+    const char *name;
+    std::uint8_t race;
+  };
+  static constexpr RaceDirectory kRaceDirectories[] = {
+      {"Human", 1u},    {"Orc", 2u},      {"Dwarf", 3u},   {"NightElf", 4u},
+      {"Scourge", 5u},  {"Tauren", 6u},   {"Gnome", 7u},   {"Troll", 8u},
+      {"Goblin", 9u},   {"BloodElf", 10u}, {"Draenei", 11u},
+  };
+  for (const auto &entry : kRaceDirectories) {
+    if (openwow::text::EqualsIgnoreCaseAscii(race_dir, entry.name)) {
+      *out_race = entry.race;
+      *out_gender =
+          openwow::text::EqualsIgnoreCaseAscii(gender_dir, "Female") ? 1u : 0u;
+      return true;
+    }
+  }
+  return false;
+}
+
 std::string BuildNpcBakedTexturePath(const std::string_view bake_name) {
   if (bake_name.empty()) {
     return {};
@@ -792,7 +850,25 @@ void WorldPresentationPublisher::SyncCharacterAppearance(ObjectProjection &insta
     const auto *const display = dbc_->creature_display_info().LookupEntry(instance.display_id);
     const auto *const model =
         display != nullptr ? dbc_->creature_model_data().LookupEntry(display->model_id) : nullptr;
-    if (model != nullptr && (model->flags & kCharacterComponentModelFlag) != 0u) {
+    // "Karakterlichaam" bepaalt de client aan het MODELPAD, niet (alleen) aan
+    // CreatureModelData.flags: Benilla doet exact dit
+    // (entities/display.rs:292-295: `model_path[..10].eq_ignore_ascii_case("character\\")`).
+    // De lokale Classic-tabel zet bit 0x4 niet voor elke karakterrij, en zonder
+    // deze padcheck kreeg zo'n NPC geen appearance — dus geen vervangbare
+    // lichaamstextuur, en dus een onzichtbaar model (het M2 levert die huid niet
+    // zelf).
+    const bool character_body_model = [&] {
+      if (model == nullptr) {
+        return false;
+      }
+      const std::string_view path(model->model_name);
+      return path.size() >= 10u &&
+             openwow::text::EqualsIgnoreCaseAscii(path.substr(0u, 10u),
+                                                  "character\\");
+    }();
+    if (model != nullptr &&
+        (character_body_model ||
+         (model->flags & kCharacterComponentModelFlag) != 0u)) {
       if (is_player) {
         cache.component_source = CharacterComponentSource::kPlayer;
       } else {
@@ -816,6 +892,28 @@ void WorldPresentationPublisher::SyncCharacterAppearance(ObjectProjection &insta
                 extra->item_display[index];
           }
           cache.npc_prebaked_body_texture = BuildNpcBakedTexturePath(extra->bake_name);
+        } else if (character_body_model) {
+          // Geen (bruikbare) CreatureDisplayInfoExtra-rij, maar het model IS een
+          // karakterlichaam. Benilla laat zo'n display "heel" tekenen met zijn
+          // eigen textures; een karakter-M2 heeft die niet (de huid komt uit de
+          // appearance), dus zonder deze terugval bleef de NPC onzichtbaar. Leid
+          // daarom ras en geslacht af uit het modelpad
+          // (Character\Orc\Male\OrcMale.m2) en gebruik de default-look.
+          std::uint8_t derived_race = 0u;
+          std::uint8_t derived_gender = 0u;
+          if (DeriveCharacterRaceGenderFromModelPath(model->model_name, &derived_race,
+                                                     &derived_gender)) {
+            cache.component_source = CharacterComponentSource::kNpc;
+            cache.npc_selection = {};
+            cache.npc_selection.race = derived_race;
+            cache.npc_selection.gender = derived_gender;
+            openwow::diagnostics::Log(
+                openwow::diagnostics::LogLevel::kWarn,
+                "WorldPresentation: karakter-NPC zonder display-extra, ras/geslacht "
+                "uit modelpad gehaald (race=" + std::to_string(derived_race) +
+                    " gender=" + std::to_string(derived_gender) + " path=" +
+                    std::string(model->model_name) + ")");
+          }
         }
       }
     }

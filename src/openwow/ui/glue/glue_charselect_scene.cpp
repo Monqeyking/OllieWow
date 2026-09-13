@@ -807,13 +807,16 @@ void GlueCharSelectScene::RefreshCharacterEquipmentModels() {
   };
 
   if (const auto *display = resolve_display(0u); display != nullptr) {
-    const auto *race = chr_races_ != nullptr
-                           ? chr_races_->LookupEntry(selected_character_appearance_.race)
-                           : nullptr;
-    if (race != nullptr && !race->model_client_prefix.empty()) {
+    // Helm-modellen heten <stem>_<Ra><S>.m2 met de twee-letterige racetoken; de
+    // lange modelnaam ("Tauren") bestaat als bestand niet (zie
+    // EquipmentVisualSystem::HelmRaceFilePrefix en benilla equipment/mod.rs:309).
+    const char *const race_file_prefix =
+        openwow::game::EquipmentVisualSystem::HelmRaceFilePrefix(
+            selected_character_appearance_.race);
+    if (race_file_prefix != nullptr) {
       append_model(0u, openwow::render::m2::kM2AttachmentLookupHelm,
                    openwow::game::EquipmentVisualSystem::BuildHeadModelPath(
-                       display->model_name_left, race->model_client_prefix,
+                       display->model_name_left, race_file_prefix,
                        selected_character_appearance_.gender),
                    BuildObjectComponentTexturePath(kHeadTexturePathPrefix,
                                                    display->texture_name_left),

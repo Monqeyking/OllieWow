@@ -235,6 +235,65 @@ inline constexpr const char* CHAT_MSG_WHISPER                   = "CHAT_MSG_WHIS
 inline constexpr const char* CHAT_MSG_WHISPER_INFORM            = "CHAT_MSG_WHISPER_INFORM";
 inline constexpr const char* CHAT_MSG_YELL                      = "CHAT_MSG_YELL";
 
+// 1.12-only chatregels. WotLK verving de losse combat- en spelltypes door
+// COMBAT_LOG_EVENT, maar de lokale 1.12-server stuurt ze nog en de lokale
+// addons (CombatText, pfUI, SCT) registreren ze. Numerieke kant:
+// ChatMsgFromLegacyWire() in game/chat_types.h (Source SharedDefines.h:1365-1462).
+inline constexpr const char* CHAT_MSG_COMBAT_SELF_HITS                = "CHAT_MSG_COMBAT_SELF_HITS";
+inline constexpr const char* CHAT_MSG_COMBAT_SELF_MISSES              = "CHAT_MSG_COMBAT_SELF_MISSES";
+inline constexpr const char* CHAT_MSG_COMBAT_PET_HITS                 = "CHAT_MSG_COMBAT_PET_HITS";
+inline constexpr const char* CHAT_MSG_COMBAT_PET_MISSES               = "CHAT_MSG_COMBAT_PET_MISSES";
+inline constexpr const char* CHAT_MSG_COMBAT_PARTY_HITS               = "CHAT_MSG_COMBAT_PARTY_HITS";
+inline constexpr const char* CHAT_MSG_COMBAT_PARTY_MISSES             = "CHAT_MSG_COMBAT_PARTY_MISSES";
+inline constexpr const char* CHAT_MSG_COMBAT_FRIENDLYPLAYER_HITS      = "CHAT_MSG_COMBAT_FRIENDLYPLAYER_HITS";
+inline constexpr const char* CHAT_MSG_COMBAT_FRIENDLYPLAYER_MISSES    = "CHAT_MSG_COMBAT_FRIENDLYPLAYER_MISSES";
+inline constexpr const char* CHAT_MSG_COMBAT_HOSTILEPLAYER_HITS       = "CHAT_MSG_COMBAT_HOSTILEPLAYER_HITS";
+inline constexpr const char* CHAT_MSG_COMBAT_HOSTILEPLAYER_MISSES     = "CHAT_MSG_COMBAT_HOSTILEPLAYER_MISSES";
+inline constexpr const char* CHAT_MSG_COMBAT_CREATURE_VS_SELF_HITS    = "CHAT_MSG_COMBAT_CREATURE_VS_SELF_HITS";
+inline constexpr const char* CHAT_MSG_COMBAT_CREATURE_VS_SELF_MISSES  = "CHAT_MSG_COMBAT_CREATURE_VS_SELF_MISSES";
+inline constexpr const char* CHAT_MSG_COMBAT_CREATURE_VS_PARTY_HITS   = "CHAT_MSG_COMBAT_CREATURE_VS_PARTY_HITS";
+inline constexpr const char* CHAT_MSG_COMBAT_CREATURE_VS_PARTY_MISSES = "CHAT_MSG_COMBAT_CREATURE_VS_PARTY_MISSES";
+inline constexpr const char* CHAT_MSG_COMBAT_CREATURE_VS_CREATURE_HITS = "CHAT_MSG_COMBAT_CREATURE_VS_CREATURE_HITS";
+inline constexpr const char* CHAT_MSG_COMBAT_CREATURE_VS_CREATURE_MISSES = "CHAT_MSG_COMBAT_CREATURE_VS_CREATURE_MISSES";
+inline constexpr const char* CHAT_MSG_COMBAT_FRIENDLY_DEATH           = "CHAT_MSG_COMBAT_FRIENDLY_DEATH";
+inline constexpr const char* CHAT_MSG_COMBAT_HOSTILE_DEATH            = "CHAT_MSG_COMBAT_HOSTILE_DEATH";
+inline constexpr const char* CHAT_MSG_SPELL_SELF_DAMAGE               = "CHAT_MSG_SPELL_SELF_DAMAGE";
+inline constexpr const char* CHAT_MSG_SPELL_SELF_BUFF                 = "CHAT_MSG_SPELL_SELF_BUFF";
+inline constexpr const char* CHAT_MSG_SPELL_PET_DAMAGE                = "CHAT_MSG_SPELL_PET_DAMAGE";
+inline constexpr const char* CHAT_MSG_SPELL_PET_BUFF                  = "CHAT_MSG_SPELL_PET_BUFF";
+inline constexpr const char* CHAT_MSG_SPELL_PARTY_DAMAGE              = "CHAT_MSG_SPELL_PARTY_DAMAGE";
+inline constexpr const char* CHAT_MSG_SPELL_PARTY_BUFF                = "CHAT_MSG_SPELL_PARTY_BUFF";
+inline constexpr const char* CHAT_MSG_SPELL_FRIENDLYPLAYER_DAMAGE     = "CHAT_MSG_SPELL_FRIENDLYPLAYER_DAMAGE";
+inline constexpr const char* CHAT_MSG_SPELL_FRIENDLYPLAYER_BUFF       = "CHAT_MSG_SPELL_FRIENDLYPLAYER_BUFF";
+inline constexpr const char* CHAT_MSG_SPELL_HOSTILEPLAYER_DAMAGE      = "CHAT_MSG_SPELL_HOSTILEPLAYER_DAMAGE";
+inline constexpr const char* CHAT_MSG_SPELL_HOSTILEPLAYER_BUFF        = "CHAT_MSG_SPELL_HOSTILEPLAYER_BUFF";
+inline constexpr const char* CHAT_MSG_SPELL_CREATURE_VS_SELF_DAMAGE   = "CHAT_MSG_SPELL_CREATURE_VS_SELF_DAMAGE";
+inline constexpr const char* CHAT_MSG_SPELL_CREATURE_VS_SELF_BUFF     = "CHAT_MSG_SPELL_CREATURE_VS_SELF_BUFF";
+inline constexpr const char* CHAT_MSG_SPELL_CREATURE_VS_PARTY_DAMAGE  = "CHAT_MSG_SPELL_CREATURE_VS_PARTY_DAMAGE";
+inline constexpr const char* CHAT_MSG_SPELL_CREATURE_VS_PARTY_BUFF    = "CHAT_MSG_SPELL_CREATURE_VS_PARTY_BUFF";
+inline constexpr const char* CHAT_MSG_SPELL_CREATURE_VS_CREATURE_DAMAGE = "CHAT_MSG_SPELL_CREATURE_VS_CREATURE_DAMAGE";
+inline constexpr const char* CHAT_MSG_SPELL_CREATURE_VS_CREATURE_BUFF = "CHAT_MSG_SPELL_CREATURE_VS_CREATURE_BUFF";
+inline constexpr const char* CHAT_MSG_SPELL_TRADESKILLS               = "CHAT_MSG_SPELL_TRADESKILLS";
+inline constexpr const char* CHAT_MSG_SPELL_DAMAGESHIELDS_ON_SELF     = "CHAT_MSG_SPELL_DAMAGESHIELDS_ON_SELF";
+inline constexpr const char* CHAT_MSG_SPELL_DAMAGESHIELDS_ON_OTHERS   = "CHAT_MSG_SPELL_DAMAGESHIELDS_ON_OTHERS";
+inline constexpr const char* CHAT_MSG_SPELL_AURA_GONE_SELF            = "CHAT_MSG_SPELL_AURA_GONE_SELF";
+inline constexpr const char* CHAT_MSG_SPELL_AURA_GONE_PARTY           = "CHAT_MSG_SPELL_AURA_GONE_PARTY";
+inline constexpr const char* CHAT_MSG_SPELL_AURA_GONE_OTHER           = "CHAT_MSG_SPELL_AURA_GONE_OTHER";
+inline constexpr const char* CHAT_MSG_SPELL_ITEM_ENCHANTMENTS         = "CHAT_MSG_SPELL_ITEM_ENCHANTMENTS";
+inline constexpr const char* CHAT_MSG_SPELL_BREAK_AURA                = "CHAT_MSG_SPELL_BREAK_AURA";
+inline constexpr const char* CHAT_MSG_SPELL_PERIODIC_SELF_DAMAGE      = "CHAT_MSG_SPELL_PERIODIC_SELF_DAMAGE";
+inline constexpr const char* CHAT_MSG_SPELL_PERIODIC_SELF_BUFFS       = "CHAT_MSG_SPELL_PERIODIC_SELF_BUFFS";
+inline constexpr const char* CHAT_MSG_SPELL_PERIODIC_PARTY_DAMAGE     = "CHAT_MSG_SPELL_PERIODIC_PARTY_DAMAGE";
+inline constexpr const char* CHAT_MSG_SPELL_PERIODIC_PARTY_BUFFS      = "CHAT_MSG_SPELL_PERIODIC_PARTY_BUFFS";
+inline constexpr const char* CHAT_MSG_SPELL_PERIODIC_FRIENDLYPLAYER_DAMAGE = "CHAT_MSG_SPELL_PERIODIC_FRIENDLYPLAYER_DAMAGE";
+inline constexpr const char* CHAT_MSG_SPELL_PERIODIC_FRIENDLYPLAYER_BUFFS = "CHAT_MSG_SPELL_PERIODIC_FRIENDLYPLAYER_BUFFS";
+inline constexpr const char* CHAT_MSG_SPELL_PERIODIC_HOSTILEPLAYER_DAMAGE = "CHAT_MSG_SPELL_PERIODIC_HOSTILEPLAYER_DAMAGE";
+inline constexpr const char* CHAT_MSG_SPELL_PERIODIC_HOSTILEPLAYER_BUFFS = "CHAT_MSG_SPELL_PERIODIC_HOSTILEPLAYER_BUFFS";
+inline constexpr const char* CHAT_MSG_SPELL_PERIODIC_CREATURE_DAMAGE  = "CHAT_MSG_SPELL_PERIODIC_CREATURE_DAMAGE";
+inline constexpr const char* CHAT_MSG_SPELL_PERIODIC_CREATURE_BUFFS   = "CHAT_MSG_SPELL_PERIODIC_CREATURE_BUFFS";
+inline constexpr const char* CHAT_MSG_SPELL_FAILED_LOCALPLAYER        = "CHAT_MSG_SPELL_FAILED_LOCALPLAYER";
+inline constexpr const char* CHAT_MSG_HARDCORE                        = "CHAT_MSG_HARDCORE";
+
 inline constexpr const char* EXECUTE_CHAT_LINE                  = "EXECUTE_CHAT_LINE";
 inline constexpr const char* UPDATE_CHAT_COLOR                  = "UPDATE_CHAT_COLOR";
 inline constexpr const char* UPDATE_CHAT_COLOR_NAME_BY_CLASS    = "UPDATE_CHAT_COLOR_NAME_BY_CLASS";

@@ -604,14 +604,19 @@ int CMovementData::ExecStopForwardBackward() {
   flags = runtime_flags_;
 
   if ((flags & openwow::game::kMoveFlagFalling) != 0u) {
-    constexpr std::uint32_t kDeferClearMask =
-        openwow::game::kMoveFlagPendingStop |
-        openwow::game::kMoveFlagPendingForward |
-
-        openwow::game::kMoveFlagPendingBackward;
-
-    runtime_flags_ = (flags & ~kDeferClearMask) |
-                     openwow::game::kMoveFlagPendingStop;
+    // Benilla/Vanilla (movement_net.rs:261-265 + wow-re §5): een *release* midden
+    // in de vlucht laat de flag-state direct los - "flags drop FORWARD but keep
+    // FALLING" - en stuurt geen pakket. De horizontale vaart staat op dat moment
+    // al vast (AdvanceKinematics gebruikt de bij take-off bevroren vector), dus
+    // dit verandert de boog niet; de landings-FALL_LAND vertelt de server wat de
+    // toetsen nu zeggen.
+    //
+    // Het oude uitstel via kMoveFlagPendingStop deelde zijn bit (0x4000) met
+    // kMoveFlagFallingFar: de landingsclear ~(Falling|FallingFar) plus
+    // SyncPresentedMovementInfo() wisten die latch, waarna Forward bleef staan en
+    // de speler na de landing doorliep. Op de wire gemeten: MSG_MOVE_STOP
+    // f=0x00006001 mid-air, gevolgd door MSG_MOVE_FALL_LAND f=0x00000001.
+    StopForwardBackwardAndRecalculate(false);
     return 0;
   }
 

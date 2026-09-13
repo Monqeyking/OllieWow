@@ -278,6 +278,12 @@ struct RenderInstance {
   float animation_playback_rate{1.0f};
   bool character_appearance_declared{false};
   bool character_appearance_applied{false};
+  // Aparte vlag: zijn de *vervangbare texturen* van deze appearance al gezet?
+  // `character_appearance_applied` betekent alleen "de tekenlus mag dit frame
+  // door" (die staat ook aan zolang de compositie nog in de maak is). Zonder dit
+  // onderscheid werden de texturen elke frame opnieuw gezet - dat kostte wérk en
+  // liet o.a. het portrait van de speler trillen.
+  bool character_appearance_textures_applied{false};
   bool creature_display_overrides_applied{false};
 
   bool dynamic_object_visual_applied{false};

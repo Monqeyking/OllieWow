@@ -297,19 +297,45 @@ void ChatFrame::Render(std::uint8_t view_id, float screen_w, float screen_h) {
   const float text_x = box_x + 4.0f;
   float text_y = box_y + box_h - line_h;
 
+  // Lange berichten horen binnen de box af te breken; de presenter tekende elke
+  // regel in één keer en liet hem dus rechts buiten de box lopen. De client
+  // wrapt op woordgrens (met karakter-fallback voor lange woorden).
+  const float wrap_width = std::max(1.0f, box_w - 8.0f);
+  std::vector<std::pair<std::string, const ChatLine *>> wrapped;
+  wrapped.reserve(lines_.size());
+  for (const auto &line : lines_) {
+    const std::string text =
+        render_->text_renderer.WrapRichText(line.formatted_text, wrap_width);
+    std::size_t start = 0;
+    for (;;) {
+      const std::size_t newline = text.find('\n', start);
+      wrapped.emplace_back(newline == std::string::npos
+                               ? text.substr(start)
+                               : text.substr(start, newline - start),
+                           &line);
+      if (newline == std::string::npos) {
+        break;
+      }
+      start = newline + 1;
+    }
+  }
+
   const int max_visible = std::max(1, static_cast<int>(box_h / line_h));
   const int start_idx =
-      std::max(0, static_cast<int>(lines_.size()) - max_visible - static_cast<int>(scroll_offset_));
-  const int end_idx = std::min(static_cast<int>(lines_.size()), start_idx + max_visible);
+      std::max(0, static_cast<int>(wrapped.size()) - max_visible -
+                      static_cast<int>(scroll_offset_));
+  const int end_idx =
+      std::min(static_cast<int>(wrapped.size()), start_idx + max_visible);
 
   for (int i = end_idx - 1; i >= start_idx; --i) {
-    const auto &line = lines_[static_cast<std::size_t>(i)];
-    if (line.alpha <= 0.01f) {
+    const auto &line = wrapped[static_cast<std::size_t>(i)];
+    if (line.second->alpha <= 0.01f) {
       text_y -= line_h;
       continue;
     }
-    render_->text_renderer.DrawTextAlpha(view_id, text_x, text_y, line.formatted_text, line.color,
-                                         line.alpha);
+    render_->text_renderer.DrawTextAlpha(view_id, text_x, text_y, line.first,
+                                         line.second->color,
+                                         line.second->alpha);
     text_y -= line_h;
   }
 
@@ -319,7 +345,32 @@ void ChatFrame::Render(std::uint8_t view_id, float screen_w, float screen_h) {
 
     const std::string label = GetModeLabel();
     const std::string display = label + input_text_ + "_";
-    render_->text_renderer.DrawText(view_id, text_x, input_y + 3.0f, display, 0xFFFFFFFF);
+    // De invoerregel hoort de kleur van het gekozen kanaal te hebben (yell rood,
+    // say wit); eerder was die altijd wit.
+    std::uint8_t mode_type = 0x01;
+    switch (chat_mode_) {
+    case ChatMode::kParty:
+      mode_type = 0x02;
+      break;
+    case ChatMode::kGuild:
+      mode_type = 0x03;
+      break;
+    case ChatMode::kWhisper:
+      mode_type = 0x07;
+      break;
+    case ChatMode::kYell:
+      mode_type = 0x06;
+      break;
+    case ChatMode::kRaid:
+      mode_type = 0x04;
+      break;
+    case ChatMode::kSay:
+    default:
+      mode_type = 0x01;
+      break;
+    }
+    render_->text_renderer.DrawText(view_id, text_x, input_y + 3.0f, display,
+                                    GetColorForType(mode_type));
   }
   render_->ui_renderer.End();
 }
@@ -413,7 +464,10 @@ std::string ChatFrame::GetPrefix(std::uint8_t type, const std::string &sender,
   case 0x0A:
     return sender + " ";
   case 0x0B:
-    return sender + " ";
+    // Tekstemotes (CHAT_MSG_TEXT_EMOTE) bevatten de afzender al in de zin
+    // ("Dalando greets everyone with a hearty hello!"), dus geen prefix - anders
+    // staat de naam dubbel.
+    return "";
   case 0x0C:
     return sender + " says: ";
   case 0x0E:

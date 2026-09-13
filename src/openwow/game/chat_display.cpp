@@ -650,6 +650,116 @@ const char *ResolveChatEventName(const int chat_type) {
     return CHAT_MSG_BN_INLINE_TOAST_BROADCAST_INFORM;
   case ChatMsg::kBnInlineToastConversation:
     return CHAT_MSG_BN_INLINE_TOAST_CONVERSATION;
+
+  // 1.12-only combat-/spellregels (zie ChatMsgFromLegacyWire in chat_types.h).
+  case ChatMsg::kCombatSelfHits:
+    return CHAT_MSG_COMBAT_SELF_HITS;
+  case ChatMsg::kCombatSelfMisses:
+    return CHAT_MSG_COMBAT_SELF_MISSES;
+  case ChatMsg::kCombatPetHits:
+    return CHAT_MSG_COMBAT_PET_HITS;
+  case ChatMsg::kCombatPetMisses:
+    return CHAT_MSG_COMBAT_PET_MISSES;
+  case ChatMsg::kCombatPartyHits:
+    return CHAT_MSG_COMBAT_PARTY_HITS;
+  case ChatMsg::kCombatPartyMisses:
+    return CHAT_MSG_COMBAT_PARTY_MISSES;
+  case ChatMsg::kCombatFriendlyPlayerHits:
+    return CHAT_MSG_COMBAT_FRIENDLYPLAYER_HITS;
+  case ChatMsg::kCombatFriendlyPlayerMisses:
+    return CHAT_MSG_COMBAT_FRIENDLYPLAYER_MISSES;
+  case ChatMsg::kCombatHostilePlayerHits:
+    return CHAT_MSG_COMBAT_HOSTILEPLAYER_HITS;
+  case ChatMsg::kCombatHostilePlayerMisses:
+    return CHAT_MSG_COMBAT_HOSTILEPLAYER_MISSES;
+  case ChatMsg::kCombatCreatureVsSelfHits:
+    return CHAT_MSG_COMBAT_CREATURE_VS_SELF_HITS;
+  case ChatMsg::kCombatCreatureVsSelfMisses:
+    return CHAT_MSG_COMBAT_CREATURE_VS_SELF_MISSES;
+  case ChatMsg::kCombatCreatureVsPartyHits:
+    return CHAT_MSG_COMBAT_CREATURE_VS_PARTY_HITS;
+  case ChatMsg::kCombatCreatureVsPartyMisses:
+    return CHAT_MSG_COMBAT_CREATURE_VS_PARTY_MISSES;
+  case ChatMsg::kCombatCreatureVsCreatureHits:
+    return CHAT_MSG_COMBAT_CREATURE_VS_CREATURE_HITS;
+  case ChatMsg::kCombatCreatureVsCreatureMisses:
+    return CHAT_MSG_COMBAT_CREATURE_VS_CREATURE_MISSES;
+  case ChatMsg::kCombatFriendlyDeath:
+    return CHAT_MSG_COMBAT_FRIENDLY_DEATH;
+  case ChatMsg::kCombatHostileDeath:
+    return CHAT_MSG_COMBAT_HOSTILE_DEATH;
+  case ChatMsg::kSpellSelfDamage:
+    return CHAT_MSG_SPELL_SELF_DAMAGE;
+  case ChatMsg::kSpellSelfBuff:
+    return CHAT_MSG_SPELL_SELF_BUFF;
+  case ChatMsg::kSpellPetDamage:
+    return CHAT_MSG_SPELL_PET_DAMAGE;
+  case ChatMsg::kSpellPetBuff:
+    return CHAT_MSG_SPELL_PET_BUFF;
+  case ChatMsg::kSpellPartyDamage:
+    return CHAT_MSG_SPELL_PARTY_DAMAGE;
+  case ChatMsg::kSpellPartyBuff:
+    return CHAT_MSG_SPELL_PARTY_BUFF;
+  case ChatMsg::kSpellFriendlyPlayerDamage:
+    return CHAT_MSG_SPELL_FRIENDLYPLAYER_DAMAGE;
+  case ChatMsg::kSpellFriendlyPlayerBuff:
+    return CHAT_MSG_SPELL_FRIENDLYPLAYER_BUFF;
+  case ChatMsg::kSpellHostilePlayerDamage:
+    return CHAT_MSG_SPELL_HOSTILEPLAYER_DAMAGE;
+  case ChatMsg::kSpellHostilePlayerBuff:
+    return CHAT_MSG_SPELL_HOSTILEPLAYER_BUFF;
+  case ChatMsg::kSpellCreatureVsSelfDamage:
+    return CHAT_MSG_SPELL_CREATURE_VS_SELF_DAMAGE;
+  case ChatMsg::kSpellCreatureVsSelfBuff:
+    return CHAT_MSG_SPELL_CREATURE_VS_SELF_BUFF;
+  case ChatMsg::kSpellCreatureVsPartyDamage:
+    return CHAT_MSG_SPELL_CREATURE_VS_PARTY_DAMAGE;
+  case ChatMsg::kSpellCreatureVsPartyBuff:
+    return CHAT_MSG_SPELL_CREATURE_VS_PARTY_BUFF;
+  case ChatMsg::kSpellCreatureVsCreatureDamage:
+    return CHAT_MSG_SPELL_CREATURE_VS_CREATURE_DAMAGE;
+  case ChatMsg::kSpellCreatureVsCreatureBuff:
+    return CHAT_MSG_SPELL_CREATURE_VS_CREATURE_BUFF;
+  case ChatMsg::kSpellTradeskills:
+    return CHAT_MSG_SPELL_TRADESKILLS;
+  case ChatMsg::kSpellDamageShieldsOnSelf:
+    return CHAT_MSG_SPELL_DAMAGESHIELDS_ON_SELF;
+  case ChatMsg::kSpellDamageShieldsOnOthers:
+    return CHAT_MSG_SPELL_DAMAGESHIELDS_ON_OTHERS;
+  case ChatMsg::kSpellAuraGoneSelf:
+    return CHAT_MSG_SPELL_AURA_GONE_SELF;
+  case ChatMsg::kSpellAuraGoneParty:
+    return CHAT_MSG_SPELL_AURA_GONE_PARTY;
+  case ChatMsg::kSpellAuraGoneOther:
+    return CHAT_MSG_SPELL_AURA_GONE_OTHER;
+  case ChatMsg::kSpellItemEnchantments:
+    return CHAT_MSG_SPELL_ITEM_ENCHANTMENTS;
+  case ChatMsg::kSpellBreakAura:
+    return CHAT_MSG_SPELL_BREAK_AURA;
+  case ChatMsg::kSpellPeriodicSelfDamage:
+    return CHAT_MSG_SPELL_PERIODIC_SELF_DAMAGE;
+  case ChatMsg::kSpellPeriodicSelfBuffs:
+    return CHAT_MSG_SPELL_PERIODIC_SELF_BUFFS;
+  case ChatMsg::kSpellPeriodicPartyDamage:
+    return CHAT_MSG_SPELL_PERIODIC_PARTY_DAMAGE;
+  case ChatMsg::kSpellPeriodicPartyBuffs:
+    return CHAT_MSG_SPELL_PERIODIC_PARTY_BUFFS;
+  case ChatMsg::kSpellPeriodicFriendlyPlayerDamage:
+    return CHAT_MSG_SPELL_PERIODIC_FRIENDLYPLAYER_DAMAGE;
+  case ChatMsg::kSpellPeriodicFriendlyPlayerBuffs:
+    return CHAT_MSG_SPELL_PERIODIC_FRIENDLYPLAYER_BUFFS;
+  case ChatMsg::kSpellPeriodicHostilePlayerDamage:
+    return CHAT_MSG_SPELL_PERIODIC_HOSTILEPLAYER_DAMAGE;
+  case ChatMsg::kSpellPeriodicHostilePlayerBuffs:
+    return CHAT_MSG_SPELL_PERIODIC_HOSTILEPLAYER_BUFFS;
+  case ChatMsg::kSpellPeriodicCreatureDamage:
+    return CHAT_MSG_SPELL_PERIODIC_CREATURE_DAMAGE;
+  case ChatMsg::kSpellPeriodicCreatureBuffs:
+    return CHAT_MSG_SPELL_PERIODIC_CREATURE_BUFFS;
+  case ChatMsg::kSpellFailedLocalPlayer:
+    return CHAT_MSG_SPELL_FAILED_LOCALPLAYER;
+  case ChatMsg::kHardcore:
+    return CHAT_MSG_HARDCORE;
   default:
     return nullptr;
   }
@@ -901,17 +1011,46 @@ std::uint32_t MakeArgbColor(const ChatColor &color) {
 }
 
 std::string NormalizeSpeechBubbleText(const int chat_type, const std::string_view message) {
-  if (chat_type != ChatDisplayType::kMonsterSay && chat_type != ChatDisplayType::kMonsterYell) {
-    return std::string(message);
-  }
-
   std::string normalized;
   normalized.reserve(message.size());
-  for (std::size_t i = 0; i < message.size(); ++i) {
+
+  // De server wikkelt GM-chat in een kleurcode (Source Chat.cpp:2283:
+  // "|c1049e6ff" .. "|r"), en spelers kunnen zelf kleuren meesturen. De
+  // tekstballon tekent platte tekst, dus die escapes moeten eruit - anders staat
+  // er letterlijk "|c1049e6ff hey|r" boven het hoofd. (De chatframe-kant gebruikt
+  // hiervoor UiTextEscapes::StripColorCodes in render/ui; die laag hangt niet
+  // onder game/, vandaar deze kleine eigen lus.)
+  const bool collapse_percent =
+      chat_type == ChatDisplayType::kMonsterSay ||
+      chat_type == ChatDisplayType::kMonsterYell;
+
+  for (std::size_t i = 0; i < message.size();) {
+    if (message[i] == '|' && i + 1 < message.size()) {
+      const char command = message[i + 1];
+      if (command == 'c' || command == 'C') {
+        bool hex_ok = i + 10 <= message.size();
+        for (std::size_t j = i + 2; hex_ok && j < i + 10; ++j) {
+          const char ch = message[j];
+          hex_ok = (ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f') ||
+                   (ch >= 'A' && ch <= 'F');
+        }
+        if (hex_ok) {
+          i += 10;
+          continue;
+        }
+      }
+      if (command == 'r' || command == 'R') {
+        i += 2;
+        continue;
+      }
+    }
+
     normalized.push_back(message[i]);
-    if (message[i] == '%' && i + 1 < message.size() && message[i + 1] == '%') {
+    if (collapse_percent && message[i] == '%' && i + 1 < message.size() &&
+        message[i + 1] == '%') {
       ++i;
     }
+    ++i;
   }
   return normalized;
 }
@@ -940,8 +1079,29 @@ void MaybeCreateSpeechBubble(const ObjectManager& objects,
                               static_cast<ChatMsg>(static_cast<std::uint8_t>(chat_type)))));
 }
 
-bool MaybeReplaceEmptyChatText(std::string *message, int *chat_type) {
-  if (message == nullptr || chat_type == nullptr || !message->empty()) {
+// Turtle wikkelt ELKE GM-chat in "|c1049e6ff" .. "|r" (Source\src\game\Chat\
+// Chat.cpp:2283). In het chatframe overschrijft die wrap de kanaalkleur (say
+// hoort wit te zijn, yell rood); de GM-markering staat al bij de naam
+// (player_chat_flags -> "GM" in de prefix). Haal daarom precies die wrap eraf
+// zodra de afzender als GM gemarkeerd is.
+void StripGameMasterColorWrap(std::string *message, const std::string_view flag_tag) {
+  if (message == nullptr || !IsGameMasterTag(flag_tag)) {
+    return;
+  }
+  constexpr std::string_view kGmColorWrap = "|c1049e6ff";
+  constexpr std::string_view kColorReset = "|r";
+  if (message->size() < kGmColorWrap.size() + kColorReset.size() ||
+      message->compare(0, kGmColorWrap.size(), kGmColorWrap) != 0 ||
+      message->compare(message->size() - kColorReset.size(), kColorReset.size(),
+                       kColorReset) != 0) {
+    return;
+  }
+  *message = message->substr(kGmColorWrap.size(),
+                             message->size() - kGmColorWrap.size() -
+                                 kColorReset.size());
+}
+
+bool MaybeReplaceEmptyChatText(std::string *message, int *chat_type) {  if (message == nullptr || chat_type == nullptr || !message->empty()) {
     return false;
   }
 
@@ -1663,6 +1823,9 @@ void ChatFrame_DisplayMessage(const ObjectManager& objects, const char *message,
       ChatFrame_FormatMessage(objects, static_cast<std::uint32_t>(language_id),
                               comprehension_value, message,
                               {.output_limit = 3000});
+  StripGameMasterColorWrap(&rendered_message,
+                           flag_tag != nullptr ? std::string_view(flag_tag)
+                                               : std::string_view());
   RecolorQuestLinksForDisplay(objects, &rendered_message);
 
   if (IsSpamFilterEligibleMessageType(chat_type) &&

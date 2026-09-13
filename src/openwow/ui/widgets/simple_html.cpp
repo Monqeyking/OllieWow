@@ -293,7 +293,12 @@ bool ParseColorEscape(const std::string& text, std::size_t pos,
     if (c >= 'A' && c <= 'F') return c - 'A' + 10;
     return 0;
   };
-  a = static_cast<float>(hex(text[pos + 2]) * 16 + hex(text[pos + 3])) / 255.0f;
+  a = 1.0f;
+  // De klassieke client negeert de alpha-byte in een tekstkleur (`|cAARRGGBB`):
+  // de tekst wordt altijd met de opgegeven RGB en volle dekking getekend. Onze
+  // oude lezing nam de AA-byte over, en de Turtle-server stuurt voor GM-chat
+  // "|c1049e6ff" (AA = 0x10): daardoor werd elk GM-bericht bijna onzichtbaar
+  // (grijs) in plaats van in de chatkleur.
   r = static_cast<float>(hex(text[pos + 4]) * 16 + hex(text[pos + 5])) / 255.0f;
   g = static_cast<float>(hex(text[pos + 6]) * 16 + hex(text[pos + 7])) / 255.0f;
   b = static_cast<float>(hex(text[pos + 8]) * 16 + hex(text[pos + 9])) / 255.0f;

@@ -42,6 +42,14 @@ Testing/
 # not a source artifact -- and far past GitHub's per-file limit.
 /Client-artifacts/
 
+# Safety net for the same kind of output when it lands elsewhere: crash dumps
+# and the client's own Logs folder (a .log file is matched above; this catches
+# anything else in there).
+*.dmp
+*.mdmp
+*.wer
+/Logs/
+
 .DS_Store
 *.swp
 *~

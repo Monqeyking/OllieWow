@@ -528,6 +528,7 @@ void ObjectRenderer::BindDbc(const openwow::data::dbc::DbcLoader *dbc) {
     inst.character_appearance_declared = false;
     inst.character_appearance_selection_initialized = false;
     inst.character_appearance_applied = false;
+inst.character_appearance_textures_applied = false;
     inst.submitted_draw_count = 0u;
     if (inst.type_id == game::TypeID::kGameObject) {
       inst.art_kit_visuals_initialized = false;
@@ -553,6 +554,7 @@ void ObjectRenderer::SetFileLoader(
     (void)guid;
     if (inst.character_appearance_declared) {
       inst.character_appearance_applied = false;
+inst.character_appearance_textures_applied = false;
       inst.submitted_draw_count = 0u;
     }
   }
@@ -2189,6 +2191,7 @@ void ObjectRenderer::ApplyProjection(RenderInstance &inst, ObjectProjection &&pr
   }
   if (appearance_changed) {
     inst.character_appearance_applied = false;
+inst.character_appearance_textures_applied = false;
   }
 
   const bool equipment_changed =
@@ -2793,8 +2796,8 @@ void ObjectRenderer::CommitCharacterAppearanceUploads() {
 }
 
 void ObjectRenderer::ApplyCharacterAppearance(RenderInstance &inst) {
-  if (!inst.character_appearance_declared || inst.character_appearance_applied ||
-      inst.m2_instance_id == 0u || inst.CharacterAppearanceKey().empty()) {
+  if (!inst.character_appearance_declared || inst.m2_instance_id == 0u ||
+      inst.CharacterAppearanceKey().empty()) {
     return;
   }
 
@@ -2803,6 +2806,24 @@ void ObjectRenderer::ApplyCharacterAppearance(RenderInstance &inst) {
   if (record_it == character_appearance_cache_.end() ||
       (record_it->second.phase != CharacterAppearancePhase::kReady &&
        record_it->second.phase != CharacterAppearancePhase::kFailed)) {
+    // De compositie is nog in de maak (of de worker komt er niet uit). Het model
+    // heeft zijn eigen M2-texturen, dus teken het gewoon vast en zet de
+    // vervangbare texturen er later op: de tekenlus slaat een instantie over
+    // zolang `declared && !applied` (zie de gates hierboven), en daardoor bleef
+    // een humanoïde NPC met een trage/vastgelopen NPC-compositie permanent
+    // onzichtbaar. Spelers hadden hier geen last van omdat hun compositie al bij
+    // het characterselect is voorbereid en in de cache zit.
+    if (!inst.character_appearance_applied) {
+      inst.character_appearance_applied = true;
+      openwow::diagnostics::Log(
+          openwow::diagnostics::LogLevel::kWarn,
+          "ObjectRenderer: appearance nog niet klaar, model alvast getekend (key=" +
+              inst.CharacterAppearanceKey() + ")");
+    }
+    return;
+  }
+
+  if (inst.character_appearance_textures_applied) {
     return;
   }
 
@@ -2820,11 +2841,23 @@ void ObjectRenderer::ApplyCharacterAppearance(RenderInstance &inst) {
     }
   }
 
-  if (status == m2::M2ResultStatus::kReady) {
-    inst.character_appearance_applied = true;
-  } else if (m2::IsTerminalM2ResultStatus(status)) {
-    ClearM2Binding(inst);
+  // De vervangbare texturen (lichaam/haar/cape/extra) zijn cosmetisch: als er
+  // één niet laadt, mag het MODEL niet verdwijnen. Eerder riep een terminale
+  // textuurfout ClearM2Binding() aan, en omdat de instantie dan op "declared
+  // maar niet applied" bleef staan, werd hij bij het tekenen overgeslagen.
+  if (status != m2::M2ResultStatus::kReady &&
+      !record_it->second.replaceable_paths.empty() &&
+      openwow::diagnostics::IsLogEnabled(openwow::diagnostics::LogLevel::kWarn)) {
+    openwow::diagnostics::Log(
+        openwow::diagnostics::LogLevel::kWarn,
+        "ObjectRenderer: karaktertexturen niet klaar (phase=" +
+            std::to_string(static_cast<int>(record_it->second.phase)) +
+            " status=" + std::to_string(static_cast<int>(status)) +
+            " key=" + inst.CharacterAppearanceKey() +
+            ") - model wordt zonder compositie getekend");
   }
+  inst.character_appearance_applied = true;
+  inst.character_appearance_textures_applied = true;
 }
 
 void ObjectRenderer::QueueEquipmentTexture(const std::string &path) {
@@ -3063,6 +3096,7 @@ void ObjectRenderer::ClearM2Binding(RenderInstance &inst) {
   inst.creature_display_overrides_applied = false;
   inst.visible_submeshes_applied = false;
   inst.character_appearance_applied = false;
+inst.character_appearance_textures_applied = false;
   inst.submitted_draw_count = 0u;
   inst.applied_hand_pose_mask = 0u;
   inst.hand_pose_body_instance_id = 0u;
@@ -3421,6 +3455,7 @@ void ObjectRenderer::PublishStreamedModelForInstance(RenderInstance &inst) {
   inst.m2_instance_id = created.instance_id;
   inst.creature_display_overrides_applied = false;
   inst.character_appearance_applied = false;
+inst.character_appearance_textures_applied = false;
   inst.submitted_draw_count = 0u;
   inst.needs_model_load = false;
   inst.model_retry_seconds = 0.0f;

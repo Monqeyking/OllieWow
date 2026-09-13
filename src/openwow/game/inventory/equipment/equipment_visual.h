@@ -241,6 +241,11 @@ public:
                                                       std::string_view raceModelToken,
                                                       uint8_t gender);
 
+  // De client noemt helm-modellen `<stem>_<Ra><S>.m2` met een TWEE-letterige
+  // racetoken (1..8 = Hu, Or, Dw, Ni, Sc, Ta, Gn, Tr). Geeft nullptr buiten dat
+  // bereik (custom races houden dan hun eigen lange token).
+  [[nodiscard]] static const char *HelmRaceFilePrefix(uint32_t race_id);
+
   [[nodiscard]] static std::string NormalizeModelPathToM2(std::string_view path);
 
   [[nodiscard]] static bool

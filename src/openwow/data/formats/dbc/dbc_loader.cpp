@@ -60,7 +60,7 @@ bool IsClassicMvpDbc(const std::string_view filename) {
   // Keep this list tied to the current Classic world-entry MVP. The full
   // catalog remains available for later Classic feature work, but loading it
   // eagerly retains a large amount of data that the MVP never reads.
-  static constexpr std::array<std::string_view, 80> kClassicMvpTables = {
+  static constexpr std::array<std::string_view, 81> kClassicMvpTables = {
       "DBFilesClient\\AreaTable.dbc",
       "DBFilesClient\\AnimationData.dbc",
       "DBFilesClient\\CharBaseInfo.dbc",
@@ -71,6 +71,12 @@ bool IsClassicMvpDbc(const std::string_view filename) {
       "DBFilesClient\\ChrClasses.dbc",
       "DBFilesClient\\ChrRaces.dbc",
       "DBFilesClient\\CreatureDisplayInfo.dbc",
+      // De look van karakter-model NPC's (ras/geslacht/current én de
+      // Equipment0..9-kolommen) zit in deze tabel. Zonder hem is de store leeg,
+      // geeft LookupEntry() nullptr en krijgt zo'n NPC geen huid en geen
+      // uitrusting: precies de humanoïde wachters/trainers/innkeepers die
+      // onzichtbaar of kaal bleven.
+      "DBFilesClient\\CreatureDisplayInfoExtra.dbc",
       "DBFilesClient\\CreatureFamily.dbc",
       "DBFilesClient\\CreatureModelData.dbc",
       "DBFilesClient\\CreatureMovementInfo.dbc",

@@ -1615,6 +1615,35 @@ void CMovementData::AdvanceKinematics(const std::uint32_t step_ms) {
   if (falling) {
     runtime_fall_time_ += step_ms;
 
+    // Benilla/Vanilla (movement_net.rs:117-124, wow-re §5): de horizontale vaart
+    // staat bij take-off vast (de vector die TryStartJump seedt) en toetsen
+    // verplaatsen een airborne avatar niet - ze veranderen alleen de flag-state.
+    // Daarom komt de horizontale stap hier uit die bevroren vector in plaats van
+    // uit de richtingflags; zwemmen/vliegen/transport blijven wel bestuurbaar.
+    constexpr std::uint32_t kAirSteerableFlags =
+        openwow::game::kMoveFlagSwimming |
+        openwow::game::kMoveFlagFlying |
+        openwow::game::kMoveFlagOnTransport;
+    if ((state.flags & kAirSteerableFlags) == 0u) {
+      // Enige uitzondering is de "air nudge" (benilla decision 0627): een richting
+      // die vanuit stilstand in de lucht wordt ingedrukt herzaait de vector, anders
+      // zou die press de avatar niet verplaatsen.
+      constexpr float kAirNudgeSpeedEpsilon = 1.0e-4f;
+      constexpr std::uint32_t kDirectionalFlagMask = 0x0Fu;
+      if (std::fabs(runtime_jump_xy_speed_) <= kAirNudgeSpeedEpsilon &&
+          (state.flags & kDirectionalFlagMask) != 0u) {
+        runtime_jump_cos_angle_ = facing_cos_;
+        runtime_jump_sin_angle_ = facing_sin_;
+        runtime_jump_xy_speed_ = current_speed_;
+      }
+      transform_position_[0] +=
+          runtime_jump_cos_angle_ * runtime_jump_xy_speed_ * elapsed_seconds -
+          step.x;
+      transform_position_[1] +=
+          runtime_jump_sin_angle_ * runtime_jump_xy_speed_ * elapsed_seconds -
+          step.y;
+    }
+
     transform_position_[2] -= ComputeCollisionFallDisplacement(
         state.flags, runtime_jump_z_speed_, state.z, runtime_fall_start_z_,
         runtime_fall_time_);
@@ -2159,6 +2188,17 @@ int CMovementData::DispatchDueEvents(
   };
   const auto emit = [&](const std::uint16_t opcode,
                         const CPlayerMoveEvent& event) {
+    // Benilla/Vanilla (benilla-app/src/player/movement_net.rs:241-265, sniff-
+    // verified tegen de 1.12.1-client): airborne gaan de fwd/back/strafe-
+    // transities NIET de deur uit. De live flag-state rijdt mee op de pakketten
+    // die wel gaan (heartbeat/turn/facing) en de FALL_LAND bij het landen draagt
+    // de flags zoals de toetsen dan staan - de echte client stuurt daarna geen
+    // losse Stop meer.
+    if ((runtime_flags_ & openwow::game::kMoveFlagFalling) != 0u &&
+        event.event_type <=
+            static_cast<std::uint32_t>(MoveEventType::kStopStrafe)) {
+      return;
+    }
     if (dispatch_movement_opcode_callback_) {
       dispatch_movement_opcode_callback_(*this, opcode, timestamp, event);
     }

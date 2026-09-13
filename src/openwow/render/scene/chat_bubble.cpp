@@ -237,15 +237,18 @@ void ChatBubblePresenter::Render(
   const float tail_overlap = kTailOverlap * ui_scale;
   const float minimum_text_width = kMinimumTextWidth * ui_scale;
 
-  const float diagonal = std::sqrt(screen_w * screen_w + screen_h * screen_h);
-  const float diag_scale = diagonal / kUiCoordinateDiagonalReference;
-  const float text_padding = kTextPadding * diag_scale;
+  // De tekst schaalde met de schermdiagonaal (`diagonal / 1280`), terwijl de
+  // rest van de ballon (randen, tegels, staart, padding) de UI-schaal gebruikt:
+  // op een groot scherm werd de tekst daardoor ~1.8x en oogde hij veel te groot.
+  // Nu volgt de tekst dezelfde ui_scale als de rest van de ballon.
+  const float text_scale = ui_scale;
+  const float text_padding = kTextPadding * ui_scale;
 
   const float maximum_text_width = std::max(
       minimum_text_width, kMaxTextWidthReferencePixels * ui_scale);
   for (const auto& draw : draws) {
     const auto& layout =
-        PrepareLayout(draw.bubble, maximum_text_width, diag_scale);
+        PrepareLayout(draw.bubble, maximum_text_width, text_scale);
     if (layout.lines.empty()) {
       continue;
     }
@@ -360,8 +363,8 @@ void ChatBubblePresenter::Render(
           draw.screen_x - layout.line_widths[line] * 0.5f;
       (void)text_renderer_.DrawTextAlpha(
           view_id, text_x, text_y, layout.lines[line], draw.bubble.color,
-          alpha, diag_scale);
-      text_y += text_renderer_.line_height() * diag_scale;
+          alpha, text_scale);
+      text_y += text_renderer_.line_height() * text_scale;
     }
     ++last_rendered_bubble_count_;
   }

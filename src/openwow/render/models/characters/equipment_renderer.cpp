@@ -342,16 +342,18 @@ EquipmentVisuals EquipmentRenderer::ComputeVisuals(
 
         const std::string helm_model_name(entry->model_name_left);
         const std::string helm_texture(entry->texture_name_left);
-        const auto* race_entry = dbc_->chr_races().LookupEntry(race);
-        if (!helm_model_name.empty() && race_entry != nullptr &&
-            !race_entry->model_client_prefix.empty()) {
+        // De client gebruikt hier de TWEE-letterige racetoken (Ta, Hu, ...), niet
+        // de lange modelnaam: de bestanden heten <stem>_<Ra><S>.m2. Zie
+        // EquipmentVisualSystem::HelmRaceFilePrefix (benilla equipment/mod.rs:309).
+        const char *const race_file_prefix =
+            openwow::game::EquipmentVisualSystem::HelmRaceFilePrefix(race);
+        if (!helm_model_name.empty() && race_file_prefix != nullptr) {
           WeaponAttachmentVisual wav;
           wav.attachment_id = 11;
           wav.model_path =
               openwow::game::EquipmentVisualSystem::NormalizeModelPathToM2(
                   openwow::game::EquipmentVisualSystem::BuildHeadModelPath(
-                      helm_model_name, race_entry->model_client_prefix,
-                      gender));
+                      helm_model_name, race_file_prefix, gender));
           wav.texture_path = helm_texture;
           visuals.helm_attachment = wav;
         }

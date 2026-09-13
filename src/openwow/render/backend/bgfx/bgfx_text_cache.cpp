@@ -96,7 +96,12 @@ std::vector<BgfxTextColorToken> ResolveColors(
   for (std::size_t index = 0; index < layout.tokens.size(); ++index) {
     const auto& token = layout.tokens[index];
     if (token.kind == openwow::render::text::FormattedTokenKind::Color) {
-      current = {.inline_abgr = ArgbToAbgr(token.color_argb),
+      // De klassieke client negeert de alpha-byte van een tekstkleur
+      // (`|cAARRGGBB`): tekst wordt altijd met volle dekking getekend. De
+      // Turtle-server stuurt voor GM-chat "|c1049e6ff" (AA = 0x10); zonder deze
+      // mask werd elk GM-bericht bijna onzichtbaar (grijs) in plaats van in de
+      // opgegeven kleur.
+      current = {.inline_abgr = ArgbToAbgr(token.color_argb | 0xFF000000u),
                  .inherits_base = false};
     } else if (token.kind ==
                openwow::render::text::FormattedTokenKind::ResetColor) {
