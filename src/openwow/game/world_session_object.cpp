@@ -71,8 +71,6 @@ namespace openwow::game {
 
 namespace {
 
-constexpr std::uint32_t kShapeshiftFormFlagSuppressCreateUiRefresh = 0x1u;
-
 [[nodiscard]] std::optional<DancePlayerClass> ToDancePlayerClass(
     const std::uint8_t external_class) {
   switch (external_class) {
@@ -935,17 +933,13 @@ void WorldSession::OnLocalPlayerCreated(const ObjectGuid &guid) {
   CurrencySystem::Get().OnCurrencyDisplayUpdate(objects());
   ui::game::ScriptEventDispatch::Get().FireEvent(ui::game::events::CURRENCY_DISPLAY_UPDATE);
   ui::game::detail::RefreshActionBarBootstrapState(*this);
-  if (const auto* const local_player = objects().GetLocalPlayerTyped();
-      local_player != nullptr) {
-    const auto form_id =
-        static_cast<std::uint32_t>(local_player->Animation().GetShapeshiftForm());
-    const auto* const form =
-        form_id != 0u ? dbc_->spell_shapeshift_form().LookupEntry(form_id)
-                      : nullptr;
-    if (form != nullptr &&
-        (form->flags & kShapeshiftFormFlagSuppressCreateUiRefresh) == 0u) {
-      RefreshPlayerShapeshiftUiState(*this);
-    }
+  if (objects().GetLocalPlayerTyped() != nullptr) {
+    // The Classic record carries no "suppress create UI refresh" bit: its 14
+    // fields hold flags at index 11, where 0x1 means ALLOW_ACTIVITY
+    // (Source\src\game\SharedDefines.h:1627-1633). Refreshing the shapeshift UI
+    // on world entry therefore stays unconditional; an active form is exactly
+    // when that UI has to be repainted.
+    RefreshPlayerShapeshiftUiState(*this);
   }
   RefreshQuestRuntimeFromPlayer(true);
   RequestVisibleQuestgiverStatusRefresh();

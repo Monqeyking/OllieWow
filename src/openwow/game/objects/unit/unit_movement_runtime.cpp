@@ -3081,6 +3081,8 @@ bool UnitMovementRuntime::CanChangeDirection() const {
 bool UnitMovementRuntime::CanTurn() const {
   constexpr std::uint32_t kMovementDirectionLockedUnitFlag = 0x00100000u;
   constexpr std::uint32_t kTurnWhileMovingFlag2 = 0x02000000u;
+  // Absent from the 14-field Classic SpellShapeshiftForm.dbc, so turning stays
+  // available in every form.
   constexpr std::uint32_t kTurnLockedShapeshiftFlag = 0x100u;
   if ((owner_.State().GetUnitFlags() & kMovementDirectionLockedUnitFlag) != 0u) {
     return false;

@@ -119,12 +119,21 @@ inline constexpr int kMaxLocales = static_cast<int>(kDbcLocaleCount);
 
 inline constexpr std::uint32_t kSpellAuraPeriodicTriggerSpellFromClient = 48;
 
-inline constexpr std::uint32_t kShapeshiftFormFlagIsStance = 0x1;
-
+// SpellShapeshiftForm.dbc flags, the Classic record's field 11. The meanings
+// come from Source\src\game\SharedDefines.h:1627-1633, and
+// Source\src\game\Objects\Unit.cpp:6571-6580 spells out that
+// "!(flags1 & ALLOW_ACTIVITY)" is what the server uses while
+// "Mirroring clientside gameplay logic" - so that is the client's own
+// "this form restricts player activities" test.
+inline constexpr std::uint32_t kShapeshiftFormFlagAllowsActivity = 0x1;
 inline constexpr std::uint32_t kShapeshiftFormFlagAllowsNpcInteraction = 0x8;
 
+// Carried by Cat Form (0x70) in the local SpellShapeshiftForm.dbc.
 inline constexpr std::uint32_t kShapeshiftFormFlagApFromAgility = 0x20;
 
+// Not present in the 14-field Classic record: every form in the local
+// SpellShapeshiftForm.dbc stays within 0x7F, so these bits always read as zero
+// on Classic data and the checks using them stay inert.
 inline constexpr std::uint32_t kShapeshiftFormFlagBlocksAutoCancel = 0x100;
 
 inline constexpr std::uint32_t kShapeshiftFormFlagCancelOverride = 0x800;

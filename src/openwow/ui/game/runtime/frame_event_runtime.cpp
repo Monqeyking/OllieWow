@@ -72,6 +72,23 @@ void FrameEventRuntime::Update(const float elapsed_seconds) {
     }
 
     const int frame_index = lua_absindex(lua_, -1);
+
+    // Classic Model frames carry OnUpdateModel instead of OnUpdate, and it takes
+    // no arguments (the action bar's cooldown frames have exactly that handler
+    // and no OnUpdate at all). Probing the stored script is safe here: storage
+    // is checked before the frame field, so a frame that has it never reaches
+    // the frame's own __index dispatcher with an unknown name.
+    if (PushFrameScriptHandler(lua_, frame_index, "OnUpdateModel")) {
+      lua_pop(lua_, 1);
+      const auto invocation =
+          InvokeFrameScriptHandler(lua_, frame_index, "OnUpdateModel", 0);
+      if (invocation.status != LUA_OK) {
+        lua_pop(lua_, 1);
+      }
+      lua_settop(lua_, top);
+      continue;
+    }
+
     lua_pushnumber(lua_, static_cast<double>(elapsed_seconds));
 
     const auto invocation =

@@ -429,20 +429,6 @@ bool BuildSpellTooltipHasModifier(const WorldSession& session,
   return false;
 }
 
-bool HasNonStanceShapeshiftEffect(const data::dbc::SpellEntry& spell,
-                                  const data::dbc::DbcLoader& dbc) {
-  for (std::size_t i = 0; i < data::dbc::kMaxSpellEffects; ++i) {
-    if (spell.effect_apply_aura[i] != kSpellAuraModShapeshift)
-      continue;
-
-    const auto form_id = static_cast<std::uint32_t>(spell.effect_misc_value[i]);
-    const auto* form = dbc.spell_shapeshift_form().LookupEntry(form_id);
-    if (!form || (form->flags & data::dbc::kShapeshiftFormFlagIsStance) == 0)
-      return true;
-  }
-  return false;
-}
-
 bool CanStopChanneling(const WorldSession& session) {
   const auto* player = session.objects().GetActivePlayer();
   if (player == nullptr) return false;

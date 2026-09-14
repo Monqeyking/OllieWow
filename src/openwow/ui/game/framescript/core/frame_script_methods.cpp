@@ -180,8 +180,25 @@ static int LuaFrame_SetScript(lua_State* L) {
   StoreLuaFrameScriptTaintSource(L, self_index, script_info->canonical_name,
                                  arg3_type == LUA_TFUNCTION, caller_source);
 
-  if (std::strcmp(script_info->canonical_name, "OnUpdate") == 0) {
-    SyncLuaFrameOnUpdateRegistration(L, self_index, arg3_type == LUA_TFUNCTION);
+  // Model frames carry their per-frame script as OnUpdateModel (the 1.12
+  // Cooldown.lua machine: CooldownFrame_SetTimer -> SetSequence(0) + Show, then
+  // OnUpdateModel scrubs sequence 0 and OnAnimFinished hides it). They join the
+  // same update list as OnUpdate; the dispatcher picks the script that exists.
+  const bool is_on_update =
+      std::strcmp(script_info->canonical_name, "OnUpdate") == 0;
+  const bool is_on_update_model =
+      std::strcmp(script_info->canonical_name, "OnUpdateModel") == 0;
+  if (is_on_update || is_on_update_model) {
+    bool should_register = arg3_type == LUA_TFUNCTION;
+    if (!should_register) {
+      // Clearing one of the two per-frame scripts must not drop the frame while
+      // the other one is still set.
+      const char* const other = is_on_update ? "OnUpdateModel" : "OnUpdate";
+      PushLuaFrameScript(L, self_index, other);
+      should_register = lua_isfunction(L, -1) != 0;
+      lua_pop(L, 1);
+    }
+    SyncLuaFrameOnUpdateRegistration(L, self_index, should_register);
   }
 
   NotifyFrameInputMutation(L, self_index, true);

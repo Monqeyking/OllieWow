@@ -11,7 +11,11 @@ namespace openwow::game {
 
 inline constexpr std::uint32_t kAttackActionSpellEffectId = 78u;
 inline constexpr std::uint32_t kShapeshiftAuraType = 36u;
-inline constexpr std::uint32_t kTurnSensitiveShapeshiftFlag = 0x1u;
+// A form that does not ALLOW_ACTIVITY is the one where use needs the
+// turn-sensitive path (Source\src\game\Objects\Unit.cpp:6571-6580, "mirroring
+// clientside gameplay logic").
+inline constexpr std::uint32_t kTurnSensitiveShapeshiftFlag =
+    data::dbc::kShapeshiftFormFlagAllowsActivity;
 inline constexpr std::uint32_t kCancelableDisplayModelFlag = 0x4u;
 
 [[nodiscard]] inline bool SpellHasAttackActionEffect(

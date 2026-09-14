@@ -454,6 +454,10 @@ void FrameMaterializer::WireScriptHandlers(const UiFrame &frame, int ref) {
   }
   if (has_update)
     lua_pop(lua_, 1);
+  // OnUpdateModel is registered where the script itself is set (see
+  // frame_script_methods.cpp), not here: probing every frame's handler at
+  // materialization time walked the frame __index dispatcher for a name it does
+  // not know and crashed world entry.
   if (!key.empty()) {
     if (auto *tracked = dependencies_.frames.FindFrame(key); tracked != nullptr)
       SyncRuntimeMetadata(index, *tracked);

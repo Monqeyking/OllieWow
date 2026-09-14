@@ -361,7 +361,7 @@ bool CanActivePlayerInteractWithNpcUnits(
       dbc != nullptr ? dbc->spell_shapeshift_form().LookupEntry(form_id)
                      : nullptr;
   constexpr std::uint32_t kFormsAllowingNpcInteraction =
-      openwow::data::dbc::kShapeshiftFormFlagIsStance |
+      openwow::data::dbc::kShapeshiftFormFlagAllowsActivity |
       openwow::data::dbc::kShapeshiftFormFlagAllowsNpcInteraction;
   if (form != nullptr && (form->flags & kFormsAllowingNpcInteraction) != 0u) {
     return true;

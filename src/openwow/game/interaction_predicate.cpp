@@ -32,10 +32,15 @@ constexpr double kNonUnitInteractionRangeSquared = 25.0;
     return false;
   }
 
-  if ((form->flags & data::dbc::kShapeshiftFormFlagIsStance) != 0u) {
-    return false;
-  }
-
+  // Deliberately not keyed on ALLOW_ACTIVITY (0x1): this predicate also gates
+  // the mouseover loot cursor and auto-loot (game_loop.cpp:1007-1023), and
+  // Classic lets a player loot while shapeshifted. The form rules live where
+  // they belong instead: talking to NPCs in
+  // npc_interaction_controller.cpp (ALLOW_ACTIVITY | ALLOW_NPC_INTERACT, which
+  // Source\src\game\Objects\Unit.cpp:6571-6580 mirrors for item use and
+  // interaction) and game object use in cggameobject.cpp (0x8).
+  // 0x100 is absent from the 14-field Classic record (see dbc_enums.h), so this
+  // answer stays false for every Classic form.
   return (form->flags & data::dbc::kShapeshiftFormFlagBlocksAutoCancel) != 0u;
 }
 

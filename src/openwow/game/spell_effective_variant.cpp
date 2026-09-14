@@ -14,6 +14,8 @@ namespace {
 
 constexpr std::uint32_t kDungeonCreatureType = 1u;
 constexpr std::uint32_t kRaidCreatureType = 2u;
+// Absent from the 14-field Classic SpellShapeshiftForm.dbc (every form stays
+// within 0x7F), so this stays false on Classic data.
 constexpr std::uint32_t kShapeshiftFormRaidMapFlag = 0x100u;
 constexpr std::size_t kSpellDifficultyVariantCount = 4u;
 

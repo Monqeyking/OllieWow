@@ -14,6 +14,8 @@ namespace {
 
 constexpr std::uint8_t kCancelableAuraSlotFlag = 0x10u;
 
+// In the local SpellShapeshiftForm.dbc only the three warrior stances carry
+// 0x2 (0x7), which matches that a stance cannot be left by hand.
 constexpr std::uint32_t kShapeshiftFormSuppressManualCancelFlag = 0x2u;
 
 [[nodiscard]] bool HasRetailAuraApplyingEffect(

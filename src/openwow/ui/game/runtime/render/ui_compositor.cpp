@@ -50,6 +50,85 @@
 
 namespace openwow::ui::game::runtime::render {
 
+namespace {
+
+// Classic action-button cooldowns are Model frames: CooldownFrame_SetTimer
+// stores start/duration/enable on the frame and Cooldown.lua's OnUpdateModel
+// scrubs the spiral and hides the frame again (Benilla
+// crates/benilla-ui/src/script/cooldown.rs:5-8). The compositor no longer has to
+// drive the rotation itself now that OnUpdateModel is dispatched, but it keeps
+// reading that timing for one thing the reference machine does on
+// `OnAnimFinished` - hiding a finished overlay. Without it a shown overlay stays
+// drawn as a static dark disc and reads as a permanently dimmed action button
+// whose spell still works.
+struct ClassicCooldownOverlay {
+  bool is_overlay = false;
+  bool finished = false;
+  std::uint32_t start_tick_ms = 0;
+  std::uint32_t duration_tick_ms = 0;
+};
+
+// The reference sweep is a 60% black pie (Benilla
+// crates/benilla-ui/src/script/cooldown.rs:12 pins those pixels).
+inline constexpr std::uint32_t kClassicCooldownFillAbgr = 0x99000000u;
+
+[[nodiscard]] ClassicCooldownOverlay ReadClassicCooldownOverlay(
+    lua_State* lua, const int lua_ref, const std::uint32_t now_tick_ms) {
+  ClassicCooldownOverlay overlay;
+  if (lua == nullptr || lua_ref == LUA_NOREF) {
+    return overlay;
+  }
+
+  const int top = lua_gettop(lua);
+  lua_rawgeti(lua, LUA_REGISTRYINDEX, lua_ref);
+  if (lua_istable(lua, -1) == 0) {
+    lua_settop(lua, top);
+    return overlay;
+  }
+  const int frame_index = lua_absindex(lua, -1);
+
+  // One lookup decides it for every other Model widget: without a numeric
+  // "duration" field this is not a Classic cooldown overlay at all.
+  lua_getfield(lua, frame_index, "duration");
+  const bool has_duration = lua_isnumber(lua, -1) != 0;
+  const double duration = has_duration ? lua_tonumber(lua, -1) : 0.0;
+  lua_pop(lua, 1);
+
+  double start = 0.0;
+  bool has_start = false;
+  if (has_duration) {
+    lua_getfield(lua, frame_index, "start");
+    has_start = lua_isnumber(lua, -1) != 0;
+    start = has_start ? lua_tonumber(lua, -1) : 0.0;
+    lua_pop(lua, 1);
+  }
+  lua_settop(lua, top);
+
+  if (!has_duration || !has_start) {
+    return overlay;
+  }
+
+  overlay.is_overlay = true;
+  if (start > 0.0) {
+    overlay.start_tick_ms =
+        static_cast<std::uint32_t>(std::min(start * 1000.0, 4294967295.0));
+  }
+  if (!(duration > 0.0)) {
+    overlay.finished = true;
+    return overlay;
+  }
+  overlay.duration_tick_ms =
+      static_cast<std::uint32_t>(std::min(duration * 1000.0, 4294967295.0));
+
+  const double elapsed = static_cast<double>(now_tick_ms) / 1000.0 - start;
+  if (elapsed >= duration) {
+    overlay.finished = true;
+  }
+  return overlay;
+}
+
+}
+
 UiCompositor::UiCompositor(Dependencies dependencies) noexcept
     : frame_traversal_index_(dependencies.traversal),
       frame_store_(dependencies.frames),
@@ -895,6 +974,41 @@ void runtime::render::UiCompositor::Render(const UiCompositorFrame& compositor_f
         continue;
       }
 
+      const auto classic_cooldown = ReadClassicCooldownOverlay(
+          lua_, entry.lua_ref, openwow::core::GameClock::GetTickCount32());
+      if (classic_cooldown.is_overlay) {
+        // The 1.12 cooldown is a Model, but this client never plays that model's
+        // own animation, so the sweep is drawn from the frame's timing with the
+        // same plan the Cooldown widget uses - the engine-side approach Benilla
+        // takes (crates/benilla-ui/src/script/cooldown.rs:5-13).
+        if (!classic_cooldown.finished && classic_cooldown.duration_tick_ms != 0u) {
+          stateful_widgets::CooldownState sweep;
+          sweep.enabled = true;
+          sweep.start_tick_ms = classic_cooldown.start_tick_ms;
+          sweep.duration_ms = classic_cooldown.duration_tick_ms;
+          sweep.fill_abgr = kClassicCooldownFillAbgr;
+          const auto plan = stateful_widgets::BuildCooldownRenderPlan(
+              sweep, render_rect, openwow::core::GameClock::GetTickCount32());
+          if (plan.draw_sweep) {
+            std::array<openwow::render::ui::MeshVertex, 11u> vertices{};
+            for (std::size_t index = 0u; index < plan.sweep_vertex_count;
+                 ++index) {
+              const auto& source = plan.sweep_vertices[index];
+              vertices[index] = {source.x, source.y, source.u, source.v,
+                                 kClassicCooldownFillAbgr};
+            }
+            (void)ui_renderer_->SubmitSolidMesh({
+                .vertices = std::span<const openwow::render::ui::MeshVertex>(
+                    vertices.data(), plan.sweep_vertex_count),
+                .indices = std::span<const std::uint16_t>(
+                    plan.sweep_indices.data(), plan.sweep_index_count),
+                .blend = openwow::render::ui::BlendMode::kAlpha,
+            });
+          }
+        }
+        continue;
+      }
+
       std::uint64_t guid_raw = 0u;
 
       std::uint32_t bound_display_id = 0u;
@@ -1014,6 +1128,7 @@ void runtime::render::UiCompositor::Render(const UiCompositorFrame& compositor_f
               static_cast<double>(std::numeric_limits<std::uint32_t>::max())));
         }
       }
+
       lua_settop(lua_, top);
 
       const auto* unit =

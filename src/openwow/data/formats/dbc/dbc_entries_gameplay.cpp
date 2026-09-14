@@ -26,16 +26,22 @@ OPENWOW_DBC_SCHEMA(SpellRuneCostEntry,
   DBC_U32(runic_power, 4)
 )
 
+// The local Classic record is the 14-field vanilla one that
+// dbc_retail_catalog.inc declares for DBFilesClient\SpellShapeshiftForm.dbc
+// (14 fields / 56 bytes) and that
+// Source\src\game\Database\DBCStructure.h:713-723 documents: ID(0),
+// bonusActionBar(1), Name[8](2-9), string flags(10), flags(11),
+// creatureType(12), attackIconID(13). The later WotLK-only fields
+// (combatRoundTime, creatureDisplayID[4], presetSpellID[8]) do not exist here:
+// DbcFile::FieldPtr rejects any field at or past field_count, so reading them
+// only ever produced zeros.
 OPENWOW_DBC_SCHEMA(SpellShapeshiftFormEntry,
   DBC_U32(id, 0)
   DBC_U32(bonus_action_bar, 1)
   DBC_LOCALIZED(name, 2)
-  DBC_U32(flags, 19)
-  DBC_U32(creature_type, 20)
-  DBC_U32(attack_icon_id, 21)
-  DBC_U32(combat_round_time, 22)
-  DBC_U32_ARRAY(creature_display_id, 23)
-  DBC_U32_ARRAY(override_actions, 27)
+  DBC_U32(flags, 11)
+  DBC_U32(creature_type, 12)
+  DBC_U32(attack_icon_id, 13)
 )
 
 OPENWOW_DBC_SCHEMA(SpellItemEnchantmentEntry,
