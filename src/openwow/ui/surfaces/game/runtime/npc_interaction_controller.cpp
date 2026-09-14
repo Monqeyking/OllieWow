@@ -243,6 +243,13 @@ void CloseNpcInteractionTarget(game::WorldSession& session,
     if (trade_result.send_cancel_packet) {
       session.interaction().SendCancelTrade();
     }
+  } else if (gossip.has_trainer() &&
+             gossip.trainer().trainer_guid.GetRawValue() == unit_guid) {
+    // Vóór de gossip-tak: `HandleTrainerList` zet `interaction_guid_` op de
+    // trainer-GUID, dus anders sloot de gossip-tak de trainer-sessie stil
+    // (zonder TRAINER_CLOSED) en bleef het trainer-venster leeg achter.
+    CloseTrainerInteraction(session, unit, cause,
+                            NpcInteractionFeedback::Suppress);
   } else if (gossip.interaction_guid().GetRawValue() == unit_guid) {
 
     gossip.DismissAll();
@@ -261,10 +268,6 @@ void CloseNpcInteractionTarget(game::WorldSession& session,
              session.taxi().GetFlightMasterGuid() == unit_guid) {
     session.taxi().CloseTaxiMap();
     ScriptEventDispatch::Get().FireTaxiMapClosed();
-  } else if (gossip.has_trainer() &&
-             gossip.trainer().trainer_guid.GetRawValue() == unit_guid) {
-    CloseTrainerInteraction(session, unit, cause,
-                            NpcInteractionFeedback::Suppress);
   } else if (session.bank_npc_guid() == unit_guid) {
     SetBankInteractionTarget(session, {});
   } else if (guild.GetBankerGuid() == unit_guid) {
@@ -476,6 +479,11 @@ void CloseTrainerInteraction(
     return;
   }
 
+  // Eerst de sessie-state wissen, dan pas het event: de 1.12-Lua hangt aan
+  // TRAINER_CLOSED de frame-hide, en die roept op zijn beurt `CloseTrainer()`
+  // weer aan (die guard't hierboven op een lege trainer).
+  gossip.ClearTrainerList();
+
   ScriptEventDispatch::Get().FireTrainerClosed();
   if (feedback == NpcInteractionFeedback::Apply) {
     ApplyNpcInteractionCloseFeedback(session, unit, cause);
@@ -521,6 +529,17 @@ void CloseGossipInteraction(game::WorldSession& session) {
   auto& gossip = session.gossip();
   const auto gossip_guid = gossip.interaction_guid();
   if (gossip_guid.IsEmpty()) {
+    return;
+  }
+
+  // Het trainer-venster is een eigen NPC-sessie (1.12/Benilla): het sluiten van
+  // de gossip-dialoog beëindigt de NPC-interactie niet zolang de trainer op
+  // dezelfde NPC open staat. Anders wist de hide van het gossip-venster (die
+  // het tonen van ClassTrainerFrame uitlokt) meteen de spellijst, het portrait
+  // en de naam van het trainer-venster.
+  if (gossip.has_trainer() && gossip.trainer().trainer_guid == gossip_guid) {
+    gossip.ClearGossipDialog();
+    ScriptEventDispatch::Get().FireGossipClosed();
     return;
   }
 

@@ -20,6 +20,7 @@ int LuaSetTrainerServiceTypeFilter(lua_State* L);
 int LuaBuyTrainerServiceApi(lua_State* L);
 int LuaGetTrainerGreetingText(lua_State* L);
 int LuaIsTradeskillTrainer(lua_State* L);
+int LuaIsTrainerServiceLearnSpell(lua_State* L);
 int LuaCloseTrainer(lua_State* L);
 int LuaGetTrainerServiceStepReq(lua_State* L);
 int LuaGetTrainerSkillLineFilter(lua_State* L);
@@ -107,6 +108,7 @@ constexpr openwow::ui::LuaGlobalBinding kTradeSkillLuaBindings[] = {
     {"BuyTrainerService", LuaBuyTrainerServiceApi},
     {"GetTrainerGreetingText", LuaGetTrainerGreetingText},
     {"IsTradeskillTrainer", LuaIsTradeskillTrainer},
+    {"IsTrainerServiceLearnSpell", LuaIsTrainerServiceLearnSpell},
     {"CloseTrainer", LuaCloseTrainer},
     {"GetTrainerServiceStepReq", LuaGetTrainerServiceStepReq},
     {"GetTrainerSkillLineFilter", LuaGetTrainerSkillLineFilter},

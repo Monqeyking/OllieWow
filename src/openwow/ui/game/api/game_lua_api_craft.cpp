@@ -182,19 +182,20 @@ int LuaGetTradeskillRepeatCount(lua_State *L) {
 }
 
 int LuaGetTrainerSelectionIndex(lua_State *L) {
+  // De 1.12-FrameXML (Blizzard_TrainerUI.lua:75-76) doet
+  // `if (GetTrainerSelectionIndex() > 1)`: een nil hier laat de hele
+  // TRAINER_UPDATE-handler klappen, waardoor de spellijst leeg blijft én
+  // ClassTrainerFrame_Update() niet loopt (dus ook geen naam, begroeting en
+  // portrait). Het echte contract is een GETAL: 0 als er niets geselecteerd is.
   auto *session = GetWorldSession(L);
   if (!session) {
-    lua_pushnil(L);
+    lua_pushnumber(L, 0);
     return 1;
   }
 
   const auto *dbc = GetDbcLoader(L);
   const auto selected_index = openwow::game::Trainer_GetSelectionIndex(*session, dbc);
-  if (!selected_index) {
-    lua_pushnil(L);
-  } else {
-    lua_pushnumber(L, static_cast<lua_Integer>(*selected_index));
-  }
+  lua_pushnumber(L, selected_index ? static_cast<lua_Integer>(*selected_index) : 0);
   return 1;
 }
 

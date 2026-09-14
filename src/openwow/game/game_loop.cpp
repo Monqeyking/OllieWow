@@ -2926,6 +2926,19 @@ void GameLoop::FireWorldUiLifecycleEvent(const openwow::ui::game::WorldUiLifecyc
       }
     }
     game_ui_.frame_events().OnPlayerEnteringWorld();
+
+    // De action-slot usability wordt ook gezet tijdens login en de
+    // spellbook-materialisatie (`ResetUsabilityStates` zet alles op de default
+    // "onbruikbaar", de initial spells materialiseren daarna pas). De events die
+    // daaruit voortkomen kunnen vallen vóór de action buttons bestaan, en dan
+    // blijft de tint/sweep grijs tot een toevallig volgend event. Nu de wereld-UI
+    // zeker staat: herbereken en forceer één volledige repaint van de balk.
+    if (world_session() != nullptr) {
+      (void)openwow::ui::game::detail::RefreshAllActionSlotValidation(*world_session());
+      auto &dispatch = openwow::ui::game::ScriptEventDispatch::Get();
+      dispatch.FireActionbarUpdateUsable();
+      dispatch.FireActionbarSlotChanged(0);
+    }
     if (world_session() != nullptr) {
 
       const auto* const dbc = world_session()->GetDbcLoader();

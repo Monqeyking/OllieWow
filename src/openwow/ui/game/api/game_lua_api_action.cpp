@@ -44,6 +44,7 @@
 #include "openwow/foundation/diagnostics/logging.h"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cmath>
 #include <optional>
@@ -2352,8 +2353,21 @@ int LuaIsUsableAction(lua_State *L) {
   }
 
   SyncGeneratedActionSlots(*session);
-  const auto &usability =
-      session->action_assignments().GetUsabilityState(static_cast<std::size_t>(slot - 1));
+  auto &assignments = session->action_assignments();
+  const auto slot_index = static_cast<std::size_t>(slot - 1);
+
+  // De usability-cache wordt alleen op events herberekend (target/mana/attack/
+  // action-button-snapshot). Een eenmaal gecachte "onbruikbaar" kan daardoor
+  // blijven staan (grijze knop) terwijl de spreuk allang bruikbaar is — precies
+  // wat er bij het inloggen gebeurt: `ResetUsabilityStates()` zet alles op de
+  // default en de initial spells materialiseren pas daarna. De reference is hier
+  // een live query, dus herbereken de opgevraagde slot voordat we antwoorden.
+  if (!assignments.GetUsabilityState(slot_index).is_usable) {
+    (void)assignments.UpdateUsabilityState(
+        slot_index, ComputeActionSlotUsability(*session, slot_index));
+  }
+
+  const auto &usability = assignments.GetUsabilityState(slot_index);
   if (!usability.is_usable) {
     lua_pushnil(L);
     lua_pushnil(L);

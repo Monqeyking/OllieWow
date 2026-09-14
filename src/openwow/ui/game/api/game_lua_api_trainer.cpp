@@ -355,6 +355,43 @@ int LuaIsTradeskillTrainer(lua_State *L) {
   return 1;
 }
 
+int LuaIsTrainerServiceLearnSpell(lua_State *L) {
+  // De 1.12-FrameXML gebruikt dit paar alleen om in het detailpaneel de
+  // pet-suffix te zetten (Blizzard_TrainerUI.lua:388-393). `isLearnSpell` is de
+  // learn-wrapper-scan over de WIRE-service (`SPELL_EFFECT_LEARN_SPELL` 36 /
+  // `SPELL_EFFECT_LEARN_PET_SPELL` 57, eerste match in de drie effect-slots);
+  // `isPetLearnSpell` is de pet-variant daarvan — dezelfde scan die de
+  // icon/tooltip-law gebruikt (Benilla `ui_trainer/law.rs:38-40, 96-101`).
+  constexpr std::uint32_t kSpellEffectLearnSpell = 36u;
+  constexpr std::uint32_t kSpellEffectLearnPetSpell = 57u;
+
+  bool is_learn_spell = false;
+  bool is_pet_learn_spell = false;
+
+  const auto one_based_index =
+      lua_isnumber(L, 1) != 0 ? TruncateLuaNumberToSseI32(lua_tonumber(L, 1)) : 0;
+  const auto *spell =
+      one_based_index > 0 ? ResolveVisibleTrainerSpell(L, one_based_index) : nullptr;
+  const auto *dbc = GetDbcTrainer(L);
+  if (spell != nullptr && dbc != nullptr) {
+    if (const auto *spell_entry =
+            dbc->spell().LookupEntry(static_cast<std::uint32_t>(spell->spell_id));
+        spell_entry != nullptr) {
+      for (const auto effect : spell_entry->effect) {
+        if (effect == kSpellEffectLearnSpell || effect == kSpellEffectLearnPetSpell) {
+          is_learn_spell = true;
+          is_pet_learn_spell = effect == kSpellEffectLearnPetSpell;
+          break;
+        }
+      }
+    }
+  }
+
+  lua_pushwowbool(L, is_learn_spell);
+  lua_pushwowbool(L, is_pet_learn_spell);
+  return 2;
+}
+
 int LuaCloseTrainer(lua_State *L) {
   auto *session = GetWorldSession(L);
   if (session != nullptr && session->gossip().has_trainer()) {

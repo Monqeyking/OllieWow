@@ -130,14 +130,28 @@ class GossipManager {
     display_text_.clear();
   }
 
+  // Sluit de gossip-dialoog (en de vendor-lijst). De trainer hoort hier NIET
+  // bij: in 1.12 is het trainer-venster een eigen NPC-sessie (Benilla
+  // `TrainerOpen`), die blijft staan wanneer de gossip-dialoog sluit. De
+  // 1.12-FrameXML verbergt het gossip-venster zodra `ClassTrainerFrame` in
+  // dezelfde `left`-area opent (UIParent.lua `SetUIPanel`), en die hide roept
+  // `CloseGossip()` aan; dat mag de spellijst niet wissen.
   void DismissAll() {
     gossip_.reset();
     display_text_.clear();
     interaction_guid_ = {};
-    trainer_.reset();
     merchant_.Close();
   }
-  void Clear() { DismissAll(); }
+  // Expliciet sluiten van de trainer-sessie (Exit-knop, NPC weg, logout).
+  void ClearTrainerList() {
+    trainer_.reset();
+    trainer_type_ = -1;
+  }
+  // Wereld-reset/disconnect: alles weg.
+  void Clear() {
+    DismissAll();
+    ClearTrainerList();
+  }
 
   [[nodiscard]] const GossipQuestItem* GetGossipAvailableQuest(
       std::uint32_t index) const;

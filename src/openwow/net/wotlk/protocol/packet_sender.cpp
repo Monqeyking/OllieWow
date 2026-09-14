@@ -637,9 +637,11 @@ WorldPacket PacketSender::BuildGossipSelectOption(std::uint64_t npc_guid,
                                                   std::uint32_t menu_id,
                                                   std::uint32_t gossip_list_id,
                                                   std::string_view code_text) {
+  (void)menu_id;
+  // 1.12: guid + gossipListId (+ code). De menu_id is 3.3.5 en hoort er niet
+  // tussen (lokale server: HandleGossipSelectOptionOpcode).
   WorldPacket pkt(Opcode::CMSG_GOSSIP_SELECT_OPTION);
   pkt.AppendU64(npc_guid);
-  pkt.AppendU32(menu_id);
   pkt.AppendU32(gossip_list_id);
   if (!code_text.empty()) {
     AppendNullString(pkt, code_text);

@@ -22,7 +22,20 @@ bool GossipManager::HandleGossipMessage(const std::uint8_t* data,
   PacketReader r(data, len);
   GossipDialogData d;
   if (!r.ReadGuid(d.npc_guid)) return false;
-  if (!r.ReadU32(d.menu_id) || !r.ReadU32(d.title_text_id)) return false;
+
+  // 1.12-body (Source\src\game\GossipDef.cpp, SendGossipMenu):
+  //   u64 guid, u32 textId, u32 gossipCount,
+  //     { u32 index, u8 icon, u8 coded, cstring message }
+  //   u32 questCount,
+  //     { u32 questID, u32 icon, u32 level, cstring title }
+  // Onze oude lezing was de 3.3.5-vorm: een extra menu_id vóór de tekst-id,
+  // box_money/box_message per gossipregel en quest_flags + repeatable per quest.
+  // Daardoor verschoof alles en parste het gossipvenster niet (of met de
+  // verkeerde opties), en kon je bij een trainer/innkeeper dus niets aanklikken.
+  std::uint32_t text_id = 0u;
+  if (!r.ReadU32(text_id)) return false;
+  d.menu_id = 0u;
+  d.title_text_id = text_id;
 
   std::uint32_t gossip_count;
   if (!r.ReadU32(gossip_count)) return false;
@@ -34,11 +47,12 @@ bool GossipManager::HandleGossipMessage(const std::uint8_t* data,
     auto& item = d.items[i];
     std::uint8_t is_coded;
     if (!r.ReadU32(item.menu_item_id) || !r.ReadU8(item.icon) ||
-        !r.ReadU8(is_coded) || !r.ReadU32(item.box_money) ||
-        !r.ReadCString(item.message, kGossipOptionTextMaxBytesIncludingNul) ||
-        !r.ReadCString(item.box_message, kGossipOptionTextMaxBytesIncludingNul))
+        !r.ReadU8(is_coded) ||
+        !r.ReadCString(item.message, kGossipOptionTextMaxBytesIncludingNul))
       return false;
     item.is_coded = is_coded != 0;
+    item.box_money = 0u;
+    item.box_message.clear();
   }
 
   std::uint32_t quest_count;
@@ -48,13 +62,12 @@ bool GossipManager::HandleGossipMessage(const std::uint8_t* data,
 
   for (std::uint32_t i = 0; i < quest_count; ++i) {
     auto& q = d.quests[i];
-    std::uint8_t repeatable;
     if (!r.ReadU32(q.quest_id) || !r.ReadU32(q.quest_icon) ||
-        !r.ReadI32(q.quest_level) || !r.ReadU32(q.quest_flags) ||
-        !r.ReadU8(repeatable) ||
+        !r.ReadI32(q.quest_level) ||
         !r.ReadCString(q.title, kGossipQuestTitleMaxBytesIncludingNul))
       return false;
-    q.is_repeatable = repeatable != 0;
+    q.quest_flags = 0u;
+    q.is_repeatable = false;
   }
 
   gossip_ = std::move(d);
@@ -145,12 +158,18 @@ bool GossipManager::HandleListInventory(const std::uint8_t* data,
   for (std::uint8_t i = 0; i < item_count; ++i) {
     auto& vi = v.items[i];
     std::int32_t max_count;
+    // 1.12 heeft ZEVEN u32 per vendoritem (Source ItemHandler.cpp,
+    // SendListInventory): index, itemId, displayInfoId, aantal, prijs,
+    // maxDurability, buyCount. Onze oude lezing las er acht (extended_cost, dat
+    // 3.3.5 is), waardoor het laatste item buiten de buffer liep en het hele
+    // vendorpakket als "malformed" werd afgewezen - het venster bleef leeg.
     if (!r.ReadU32(vi.slot) || !r.ReadU32(vi.item_id) ||
         !r.ReadU32(vi.display_info_id) || !r.ReadI32(max_count) ||
         !r.ReadU32(vi.price) || !r.ReadU32(vi.max_durability) ||
-        !r.ReadU32(vi.buy_count) || !r.ReadU32(vi.extended_cost)) {
+        !r.ReadU32(vi.buy_count)) {
       return false;
     }
+    vi.extended_cost = 0u;
     vi.max_count = max_count;
   }
 
@@ -167,9 +186,14 @@ WorldPacket GossipManager::BuildGossipHello(const ObjectGuid& npc) {
 WorldPacket GossipManager::BuildGossipSelectOption(
     const ObjectGuid& npc, std::uint32_t menu_id,
     std::uint32_t gossip_list_id, const std::string& code) {
+  (void)menu_id;
   WorldPacket pkt(Opcode::CMSG_GOSSIP_SELECT_OPTION);
+  // De 1.12-server leest ALLEEN guid + gossipListId (+ eventueel de code bij een
+  // coded optie): Source\src\game\Handlers\NPCHandler.cpp,
+  // HandleGossipSelectOptionOpcode. De extra menu_id die wij meestuurden is
+  // 3.3.5 en verschoof de optie-index, waardoor een klik op de verkeerde optie
+  // (of helemaal niet) landde.
   pkt.AppendU64(npc.GetRawValue());
-  pkt.AppendU32(menu_id);
   pkt.AppendU32(gossip_list_id);
   if (!code.empty()) pkt.AppendString(code.c_str());
   return pkt;

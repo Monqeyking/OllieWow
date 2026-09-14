@@ -1209,9 +1209,15 @@ void ObjectManager::HandleDestroyObject(const std::uint8_t *data, std::size_t le
   if (!reader.ReadGuid(guid))
     return;
 
+  // 1.12 stuurt hier alleen de guid: Source Objects/Object.cpp:426
+  // (`WorldPacket data(SMSG_DESTROY_OBJECT, 8); data << GetObjectGuid();`). De
+  // u8 'onDeath' is een TBC/WotLK-veld; hem verplicht lezen liet ELKE destroy
+  // mislukken, waardoor units/players die de server verwijdert (o.a. de
+  // massa-destroy bij teleport/logout) als spoken bleven staan.
   std::uint8_t destroy_flag = 0;
-  if (!reader.ReadU8(destroy_flag))
-    return;
+  if (reader.HasBytes(1u)) {
+    (void)reader.ReadU8(destroy_flag);
+  }
 
   if (objects_.contains(guid)) {
     (void)StageActiveObjectForServerRemoval(guid, destroy_flag != 0);
@@ -1329,6 +1335,28 @@ void ObjectManager::Clear() {
   DestroyAllObjects();
 }
 
+namespace {
+
+// Onze eigen guid staat al vast vanaf het inloggen (WorldSession::BeginLogin ->
+// SetActivePlayer) — de SELF-vlag van een create is dus alleen nog nodig als we
+// hem nog niet kennen. Deze server draait playerbots; een bot die dezelfde
+// WorldSession deelt stuurt zijn eigen self-create (`BuildCreateUpdateBlockForPlayer
+// (&data, bot)` zet UPDATEFLAG_SELF) over onze verbinding, en die mocht de
+// identiteit niet overnemen: dat kost camera, besturing, action bar en spells
+// tot een relog.
+[[nodiscard]] bool IsLocalPlayerCreate(const CreateObjectUpdate &upd,
+                                       const ObjectGuid active_player_guid) {
+  if (upd.type_id != TypeID::kPlayer) {
+    return false;
+  }
+  if (upd.guid == active_player_guid) {
+    return true;
+  }
+  return active_player_guid.IsEmpty() && upd.IsSelf();
+}
+
+}  // namespace
+
 void ObjectManager::ApplyCreateFieldsToExistingObject(
     CGObject_C &object, const CreateObjectUpdate &upd,
     const bool clear_missing_fields) {
@@ -1363,8 +1391,7 @@ bool ObjectManager::ApplyCreateBlockToExistingObject(
 
 void ObjectManager::OnCreate(const CreateObjectUpdate &upd) {
   const bool is_local_player =
-      upd.type_id == TypeID::kPlayer &&
-      (upd.IsSelf() || upd.guid == CGObject_C::GetActivePlayerGuid());
+      IsLocalPlayerCreate(upd, CGObject_C::GetActivePlayerGuid());
   const auto notify_create_movement_metadata = [this, &upd](CGObject_C &object) {
     if (callbacks_.on_unit_create_movement_metadata && object.IsUnit()) {
       callbacks_.on_unit_create_movement_metadata(
@@ -1817,8 +1844,7 @@ bool ObjectManager::PreallocateCreateObjects(const std::uint8_t *data, std::size
     return ResolveFieldCountForTrackedObject(guid);
   };
   handler.on_create = [this, &created_shells](const CreateObjectUpdate &upd) {
-    if (upd.type_id == TypeID::kPlayer &&
-        (upd.IsSelf() || upd.guid == CGObject_C::GetActivePlayerGuid())) {
+    if (IsLocalPlayerCreate(upd, CGObject_C::GetActivePlayerGuid())) {
       SetActivePlayer(upd.guid);
     }
 
@@ -1967,6 +1993,12 @@ void ObjectManager::ClearAllTrackedReferences() {
 
 void ObjectManager::ClearTrackedReferences(ObjectGuid guid) {
   if (guid == local_player_guid_) {
+    // Zou in-game nooit mogen gebeuren: als dit toch verschijnt, is het eigen
+    // player-object door de client verwijderd (destroy/out-of-range) en valt
+    // daarna besturing, spellboek en camera weg tot een relog.
+    openwow::diagnostics::Log(
+        openwow::diagnostics::LogLevel::kWarn,
+        "ObjectManager: active player object removed - " + guid.ToString());
     SetActivePlayer(ObjectGuid());
   }
   if (guid == target_) {

@@ -198,6 +198,11 @@ void HandleTrainerListPacket(
   if (!gossip.HandleTrainerList(pkt.payload.data(), pkt.payload.size())) {
     return;
   }
+  // Het trainer-venster is een eigen NPC-sessie (1.12/Benilla `TrainerOpen`):
+  // zet de NPC-interactie expliciet op de trainer, net als de vendor-list dat
+  // doet. Anders leunt `UnitName("npc")`/`SetPortraitTexture(..., "npc")` op de
+  // gossip-interactie, die het tonen van ClassTrainerFrame juist beeindigt.
+  ui::game::SetNpcInteractionTarget(gossip.trainer().trainer_guid);
   if (update_greeting) {
     update_greeting();
   }

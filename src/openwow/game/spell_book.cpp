@@ -499,9 +499,15 @@ bool SpellBook::HandleSpellCooldown(const std::uint8_t* data, std::size_t len) {
   PacketReader reader(data, len);
 
   std::uint64_t unit_guid;
-  std::uint8_t flags;
+  std::uint8_t flags = 0;
   if (!reader.ReadU64(unit_guid)) return false;
-  if (!reader.ReadU8(flags)) return false;
+  // 1.12 stuurt géén flags-byte: Source Objects/Pet.cpp:1646 heeft die regel
+  // uitgecommentarieerd ("//[-ZERO] data << uint8(0x0); // flags (0x1, 0x2)"),
+  // terwijl WotLK hem wel stuurt. Verplicht lezen schoof elke (spell, duration)-
+  // pair één byte op, wat willekeurige cooldowns op willekeurige spreuken gaf.
+  if (reader.Remaining() % 8u == 1u) {
+    if (!reader.ReadU8(flags)) return false;
+  }
 
   bool is_pet = false;
   {

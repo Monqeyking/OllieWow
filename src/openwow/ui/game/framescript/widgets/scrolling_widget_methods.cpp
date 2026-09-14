@@ -994,6 +994,19 @@ void ApplyCooldownMethods(lua_State* L) {
       },
       0);
   lua_setfield(L, f, "GetDrawEdge");
+
+  // Ontbrak: de C++-kant bestaat al (CSimpleCooldown::GetCooldownTimes,
+  // simple_cooldown.h:32) maar was niet aan Lua gebonden.
+  lua_pushcclosure(
+      L,
+      [](lua_State* Ls) -> int {
+        const int self_index = ValidateFrameObjectSelf(Ls, "Cooldown");
+        lua_getfield(Ls, self_index, "__ow_cd_start");
+        lua_getfield(Ls, self_index, "__ow_cd_duration");
+        return 2;
+      },
+      0);
+  lua_setfield(L, f, "GetCooldownTimes");
 }
 
 }

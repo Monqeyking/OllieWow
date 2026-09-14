@@ -1111,6 +1111,7 @@
     {"trainer", "GetTrainerServiceStepReq"},
     {"trainer", "GetTrainerServiceDescription"},
     {"trainer", "IsTrainerServiceSkillStep"},
+    {"trainer", "IsTrainerServiceLearnSpell"},
     {"trainer", "GetTrainerServiceStepIncrease"},
     {"trainer", "BuyTrainerService"},
     {"trainer", "SetTrainerServiceTypeFilter"},

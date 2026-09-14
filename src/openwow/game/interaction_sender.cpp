@@ -977,10 +977,11 @@ void InteractionSender::SendGossipHello(std::uint64_t guid) {
 
 void InteractionSender::SendGossipSelectOption(std::uint64_t guid, std::uint32_t menu_id,
                                                std::uint32_t option_id, const std::string &code) {
-
+  (void)menu_id;
+  // 1.12 leest guid + option_id (+ code); de 3.3.5 menu_id hoort er niet tussen
+  // (zie HandleGossipSelectOptionOpcode in de lokale server).
   WorldPacket pkt(Opcode::CMSG_GOSSIP_SELECT_OPTION);
   pkt.AppendU64(guid);
-  pkt.AppendU32(menu_id);
   pkt.AppendU32(option_id);
   if (!code.empty()) {
     pkt.AppendString(code.c_str());
