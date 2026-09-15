@@ -1,7 +1,7 @@
 # Benilla-afwijkingen: audit + werkvoorraad
 
 Status: levende checklist.
-Laatste update: 2026-09-13 (batch 1 deels afgerond: chat).
+Laatste update: 2026-09-15 (NPC-interactionflags, tooltip-ownership).
 
 Dit document is de werkvoorraad voor het gelijktrekken van onze client met de
 Vanilla/Turtle-referentie. Het is opgesteld met acht parallelle read-only audits
@@ -98,8 +98,19 @@ is. Klein werk, groot bereik.
       Classic-tabel (`dbc_structures.cpp:374-382` leest schaal op veld 5-6 die 0
       blijft) → `ceffect_c.cpp:126-132` klemt elke effect-schaal op 0 en valt
       terug op 1.0x. Alle attach-VFX staan op 1x.
+- [x] **NPC-interactionflags naar 1.12** - de cursor- en dispatchtabellen gebruikten
+      3.3.5-bits (VENDOR `0x80`, REPAIR `0x1000`, FLIGHTMASTER `0x2000`,
+      INNKEEPER `0x10000`, BANKER `0x20000`, AUCTIONEER `0x200000`) terwijl 1.12
+      `0x04`/`0x4000`/`0x08`/`0x80`/`0x100`/`0x1000` gebruikt (`Source
+      UnitDefines.h:445-460`, benilla `cursor_mode.rs:150-163`). Symptoom:
+      rechtsklik op een vendor deed niets, want de VENDOR-tak vuurde nooit.
+      Gewijzigd in `cursor_surface.h`, `game_loop.cpp`,
+      `unit_interaction_runtime.cpp`, `taxi_session.cpp`,
+      `world_session_object.cpp`, `game_lua_api_pvp.cpp`,
+      `petition_session_handlers.cpp`, `npc_interaction_controller.cpp`.
+      **Runtime-bevestiging van vendor/questgiver staat nog open.**
 
-### Batch 2 — visueel en ruimtelijk
+### Batch 2 - visueel en ruimtelijk
 
 - [ ] **Unit-schaal dubbel toegepast** — `cgobject.h:231`
       (`native_scale_ * SCALE_X`) plus `object_renderer.cpp:397,2251`
@@ -192,8 +203,20 @@ is. Klein werk, groot bereik.
       (`frame_event_methods.cpp:195`) en de catalogus mist nog events die lokale
       addons registreren (o.a. `UNIT_CASTEVENT`, `CRAFT_SHOW`,
       `MINIMAP_ZONE_CHANGED`, `UI_SCALE_CHANGED`).
+- [x] **`GameTooltip:IsOwned()` bleef waar na `Hide()`** - vanilla's
+      `GameTooltip_Hide()` zet `this.owner = nil`; wij lieten het Lua-veld
+      `__ow_tooltip_owner_frame` staan. 1.12 `ContainerFrame.lua:693`
+      (`ContainerFrameItemButton_OnUpdate`) hertoont de tooltip zolang
+      `IsOwned(this)` waar is, dus een backpack-item-tooltip kwam elke
+      `TOOLTIP_UPDATE_TIME` terug (~230 ms gemeten) en was niet weg te krijgen.
+      `IsOwned` eist nu ook `TooltipSystem::IsShown()`
+      (`frame_tooltip_methods.cpp`). Bewijs: de echte FrameXML is met
+      `--dump-vfs-file` uit de client-MPQ gehaald.
+      **Dit is een familie, geen losse bug**: elke Lua-zichtbare methode waarvan
+      het contract afwijkt laat vanilla-FrameXML stil in een lus of verkeerde tak
+      lopen. Zie ook `SetPoint(nil)`, `SetAlpha` en `SetFrameLevel` hierboven.
 
-### Batch 4 — beweging, persistentie en rest
+### Batch 4 - beweging, persistentie en rest
 
 - [ ] **`FALLING` ontbreekt in `kActiveMoverMotionMask`** (`player_move_event.h:954`)
       → van een rand lopen stuurt geen enkel pakket meer, dus geen

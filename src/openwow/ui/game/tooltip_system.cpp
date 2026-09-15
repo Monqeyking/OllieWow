@@ -1579,6 +1579,17 @@ void TooltipSystem::HandlePendingItemTemplateRefresh(const std::uint32_t generat
     return;
   }
 
+  // De item-template-query loopt async: de response kan pas binnenkomen nadat
+  // de speler de cursor al van het item heeft weggehaald, waarna de OnLeave van
+  // dat item de tooltip al verborgen heeft. Zonder deze guard publiceert de late
+  // response de tooltip opnieuw -- precies het gedrag "tooltip verdwijnt en
+  // popt een halve seconde later weer op". De wereld-gameobject-variant hierna
+  // heeft zo'n guard al (identiteitscheck op guid).
+  if (!IsShown()) {
+    pending_item_template_refresh_.reset();
+    return;
+  }
+
   const PendingItemTemplateRefresh pending = *pending_item_template_refresh_;
   pending_item_template_refresh_.reset();
   (void)SetItemInternal(pending.item_id, pending.random_property_id, pending.suffix_factor,
@@ -1612,6 +1623,13 @@ void TooltipSystem::HandlePendingWorldGameObjectRefresh(
 
   const auto *const game_object = session->objects().GetGameObject(guid);
   if (game_object == nullptr) {
+    return;
+  }
+
+  // Zelfde late-response-val als bij de item-refresh hierboven: niets meer
+  // opnieuw opbouwen als de tooltip inmiddels verborgen is.
+  if (!IsShown()) {
+    pending_world_game_object_refresh_.reset();
     return;
   }
 
@@ -2051,6 +2069,12 @@ void TooltipSystem::PublishToLiveGameTooltipFrame() {
 }
 
 void TooltipSystem::HideLiveGameTooltipFrame() {
+  // De frame-zichtbaarheid en shown_ konden uiteenlopen: een pad dat alleen de
+  // frame verborg (de OnLeave-kant van de hover) liet shown_ op true, waarna
+  // de presentatie-sync de tooltip opnieuw publiceerde -- precies het gedrag
+  // "tooltip verdwijnt en popt even later weer op". Alles wat de frame
+  // verbergt moet daarom ook de staat verbergen.
+  Hide();
   HideLiveWorldGameObjectTooltipFrame();
 }
 

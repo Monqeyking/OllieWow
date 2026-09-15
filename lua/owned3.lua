@@ -1,0 +1,1 @@
+local owned="none"; for i=1,16 do local b=getglobal("ContainerFrame1Item"..i); if b then local ok,r=pcall(function() return GameTooltip:IsOwned(b) end); if ok and r then owned="Item"..i end end end; DEFAULT_CHAT_FRAME:AddMessage("OWNEDPROBE owned="..owned.." shown="..tostring(GameTooltip:IsShown()).." vis="..tostring(GameTooltip:IsVisible()))

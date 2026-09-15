@@ -1,0 +1,1 @@
+local a=ContainerFrame1Item16; local b=ContainerFrame1Item1; local s="OWNED i16="..tostring(GameTooltip:IsOwned(a)).." i1="..tostring(GameTooltip:IsOwned(b)).." shown="..tostring(GameTooltip:IsShown()).." vis="..tostring(GameTooltip:IsVisible()); DEFAULT_CHAT_FRAME:AddMessage(s)

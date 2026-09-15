@@ -41,6 +41,7 @@ int LuaGetTotemInfo(lua_State* L);
 int LuaGetTotemTimeLeft(lua_State* L);
 int LuaDestroyTotem(lua_State* L);
 int LuaHasPetSpells(lua_State* L);
+int LuaPlayerHasSpells(lua_State* L);
 int LuaGetMultiCastTotemSpells(lua_State* L);
 int LuaGetShapeshiftFormCooldown(lua_State* L);
 int LuaSetMultiCastSpell(lua_State* L);
@@ -107,6 +108,7 @@ constexpr openwow::ui::LuaGlobalBinding kSpellLuaBindings[] = {
     {"GetTotemTimeLeft", LuaGetTotemTimeLeft},
     {"DestroyTotem", LuaDestroyTotem},
     {"HasPetSpells", LuaHasPetSpells},
+    {"PlayerHasSpells", LuaPlayerHasSpells},
     {"CastSpell", kCastSpell.handler},
     {"GetMultiCastTotemSpells", LuaGetMultiCastTotemSpells},
     {"GetShapeshiftFormCooldown", LuaGetShapeshiftFormCooldown},

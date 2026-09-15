@@ -1,0 +1,1 @@
+OWH={}; local o=GameTooltip.SetOwner; OWH.n=0; GameTooltip.SetOwner=function(self,a,b) OWH.owner=a; OWH.anchor=b; if OWH.n<3 then OWH.n=OWH.n+1; local nm="?"; if a and a.GetName then nm=tostring(a:GetName()) end; DEFAULT_CHAT_FRAME:AddMessage("SETOWNER "..nm.." anchor="..tostring(b)) end; return o(self,a,b) end; DEFAULT_CHAT_FRAME:AddMessage("OWNERHOOK-OK")

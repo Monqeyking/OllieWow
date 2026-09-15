@@ -195,6 +195,7 @@ void HandleNpcTextUpdatePacket(
 void HandleTrainerListPacket(
     GossipManager& gossip, const std::function<void()>& update_greeting,
     const net::wotlk::WorldPacket& pkt) {
+  const bool trainer_was_open = gossip.has_trainer();
   if (!gossip.HandleTrainerList(pkt.payload.data(), pkt.payload.size())) {
     return;
   }
@@ -206,7 +207,16 @@ void HandleTrainerListPacket(
   if (update_greeting) {
     update_greeting();
   }
-  ui::game::ScriptEventDispatch::Get().FireTrainerShow();
+
+  // A trainer list can refresh an already visible trainer window (for example
+  // after a purchase). TRAINER_SHOW is only for the initial open; the existing
+  // FrameXML window listens to TRAINER_UPDATE for in-place rebuilding.
+  if (trainer_was_open) {
+    ui::game::ScriptEventDispatch::Get().FireEvent(
+        ui::game::events::TRAINER_UPDATE);
+  } else {
+    ui::game::ScriptEventDispatch::Get().FireTrainerShow();
+  }
 }
 
 void HandleMerchantListPacket(ObjectManager& objects, GossipManager& gossip,
@@ -295,8 +305,25 @@ void HandleMerchantBuyFailurePacket(
 }
 
 void HandleTrainerBuySucceededPacket(
-    PetitionHandler& petition, const net::wotlk::WorldPacket& pkt) {
-  petition.HandleTrainerBuySucceeded(pkt.payload.data(), pkt.payload.size());
+    GossipManager& gossip, PetitionHandler& petition,
+    const net::wotlk::WorldPacket& pkt) {
+  if (!petition.HandleTrainerBuySucceeded(pkt.payload.data(), pkt.payload.size())) {
+    return;
+  }
+
+  const auto& result = petition.last_trainer_buy();
+  if (!result.succeeded || !gossip.has_trainer() ||
+      gossip.trainer().trainer_guid.GetRawValue() != result.trainer_guid) {
+    return;
+  }
+
+  // SMSG_TRAINER_BUY_SUCCEEDED carries the trainer service id (not the
+  // learned spell id). Update that service before notifying FrameXML so
+  // GetTrainerServiceInfo immediately reports TRAINER_SPELL_KNOWN.
+  if (gossip.MarkTrainerSpellKnown(result.spell_id)) {
+    ui::game::ScriptEventDispatch::Get().FireEvent(
+        ui::game::events::TRAINER_UPDATE);
+  }
 }
 
 void HandleTrainerBuyFailedPacket(

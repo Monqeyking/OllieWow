@@ -108,6 +108,11 @@ std::string FormatDuration(const std::uint64_t duration_seconds,
   std::uint64_t remaining = duration_seconds;
   std::vector<std::string> units;
   units.reserve(2);
+  // 1.12 levert kale eenheidsnamen: DAYS_ABBR="Day", HOURS_ABBR="Hr",
+  // MINUTES_ABBR="Min", SECONDS_ABBR="Sec" -- zonder placeholder. Het aantal
+  // hoort ervoor. De oude vorm probeerde het aantal in die global string te
+  // printf-en, waardoor het getal wegviel en een cooldown als "Cooldown: Sec"
+  // verscheen (wrapper "Cooldown: %s" met eenheid "Sec" als %s).
   const auto append_unit = [&](const std::uint64_t divisor,
                                const std::string_view key,
                                const std::string_view fallback) {
@@ -116,16 +121,15 @@ std::string FormatDuration(const std::uint64_t duration_seconds,
     }
     const auto count = remaining / divisor;
     remaining %= divisor;
-    units.push_back(FormatLocalized(key, fallback,
-                                    {std::to_string(count)}));
+    units.push_back(std::to_string(count) + " " + Localized(key, fallback));
   };
 
-  append_unit(kDay, "DAYS_ABBR", "%s Day(s)");
-  append_unit(kHour, "HOURS_ABBR", "%s Hour(s)");
-  append_unit(kMinute, "MINUTES_ABBR", "%s Minute(s)");
+  append_unit(kDay, "DAYS_ABBR", "Day");
+  append_unit(kHour, "HOURS_ABBR", "Hr");
+  append_unit(kMinute, "MINUTES_ABBR", "Min");
   if (units.size() < 2u && (remaining != 0u || units.empty())) {
-    units.push_back(FormatLocalized("SECONDS_ABBR", "%s Second(s)",
-                                    {std::to_string(remaining)}));
+    units.push_back(std::to_string(remaining) + " " +
+                    Localized("SECONDS_ABBR", "Sec"));
   }
 
   const auto delimiter = Localized("TIME_UNIT_DELIMITER", " ");

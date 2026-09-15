@@ -1956,7 +1956,8 @@ void WorldSession::RequestVisibleQuestgiverStatusRefresh() {
     return;
   }
 
-  constexpr std::uint32_t kNpcFlagFlightmaster = 0x00002000u;
+  // 1.12: FLIGHTMASTER = 0x8 (Source\src\game\Objects\UnitDefines.h).
+  constexpr std::uint32_t kNpcFlagFlightmaster = 0x00000008u;
 
   objects().EnumVisibleObjectsMutable([&](WorldObject &obj) {
     if (obj.IsUnit() && !obj.IsPlayer()) {

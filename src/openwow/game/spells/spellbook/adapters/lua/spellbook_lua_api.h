@@ -12,6 +12,8 @@ namespace openwow::ui::game::detail {
 
 int LuaHasPetSpells(lua_State* L);
 
+int LuaPlayerHasSpells(lua_State* L);
+
 int LuaGetShapeshiftFormCooldown(lua_State* L);
 int LuaToggleSpellAutocast(lua_State* L);
 

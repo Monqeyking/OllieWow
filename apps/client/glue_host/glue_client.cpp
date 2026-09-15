@@ -1,5 +1,8 @@
 #include "glue_client.h"
 #include "glue_host/presentation_settings.h"
+
+#include <cerrno>
+#include <cstdio>
 #include "glue_host/settings_capability_policy.h"
 #include "scenarios/offline_world_fixture.h"
 
@@ -1458,9 +1461,16 @@ bool GlueClient::Initialize() {
     return false;
   }
   if (!InitDebugControl()) {
-    if (startup_trace_)
-      startup_trace_->Add("glue.Initialize.fail");
-    return false;
+    // Debug-control is optioneel gereedschap: als het kanaal niet opgezet kan
+    // worden (endpoint niet schrijfbaar, poort bezet) hoort de client gewoon te
+    // starten. Eerder maakte dit de hele start onmogelijk -- en een gefaalde
+    // start eindigde bovendien in terminate/abort in plaats van een melding.
+    std::fprintf(stderr,
+                 "debug-control: kanaal niet beschikbaar; client start zonder.\n");
+    std::fflush(stderr);
+    openwow::diagnostics::Log(
+        openwow::diagnostics::LogLevel::kWarn,
+        "Debug control unavailable; continuing without it");
   }
   if (startup_trace_)
     startup_trace_->Add("glue.Initialize.ok");
@@ -2220,9 +2230,19 @@ bool GlueClient::InitDebugControl() {
 #ifdef _WIN32
     descriptor = ::_wopen(temporary_path.c_str(), _O_WRONLY | _O_CREAT | _O_EXCL | _O_BINARY,
                           _S_IREAD | _S_IWRITE);
+    if (descriptor < 0) {
+      std::fprintf(stderr, "debug-control: _wopen failed errno=%d path=%s\n", errno,
+                   temporary_path.string().c_str());
+      std::fflush(stderr);
+    }
 #else
     descriptor = ::open(temporary_path.c_str(), O_WRONLY | O_CREAT | O_EXCL, S_IRUSR | S_IWUSR);
 #endif
+  } else {
+    std::fprintf(stderr, "debug-control: pre-write error=%s path=%s\n",
+                 file_error.message().c_str(),
+                 debug_control_endpoint_path_.string().c_str());
+    std::fflush(stderr);
   }
   const std::string endpoint_json =
       "{\"address\":\"" + endpoint.address + "\",\"port\":" + std::to_string(endpoint.port) +
@@ -2269,6 +2289,11 @@ bool GlueClient::InitDebugControl() {
     std::filesystem::rename(temporary_path, debug_control_endpoint_path_, file_error);
   }
   if (file_error) {
+    std::fprintf(stderr, "debug-control: publication failed err=%s endpoint=%s tmp=%s\n",
+                 file_error.message().c_str(),
+                 debug_control_endpoint_path_.string().c_str(),
+                 temporary_path.string().c_str());
+    std::fflush(stderr);
     std::error_code ignored;
     std::filesystem::remove(temporary_path, ignored);
     stop_ui_inspector();

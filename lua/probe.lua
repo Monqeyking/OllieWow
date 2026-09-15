@@ -1,0 +1,1 @@
+local o=GameTooltip.owner; local n="nil"; if o and o.GetName then n=tostring(o:GetName()) end; local u="nil"; if o then u=tostring(o.UpdateTooltip ~= nil) end; local ou=tostring(GameTooltip:GetScript("OnUpdate") ~= nil); DEFAULT_CHAT_FRAME:AddMessage("PROBE owner="..n.." UpdateTooltip="..u.." gtOnUpdate="..ou)

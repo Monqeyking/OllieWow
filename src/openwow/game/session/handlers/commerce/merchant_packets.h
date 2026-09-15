@@ -39,7 +39,8 @@ void HandleTrainerListPacket(
     GossipManager& gossip, const std::function<void()>& update_greeting,
     const net::wotlk::WorldPacket& packet);
 void HandleTrainerBuySucceededPacket(
-    PetitionHandler& petition, const net::wotlk::WorldPacket& packet);
+    GossipManager& gossip, PetitionHandler& petition,
+    const net::wotlk::WorldPacket& packet);
 void HandleTrainerBuyFailedPacket(
     PetitionHandler& petition, const net::wotlk::WorldPacket& packet);
 

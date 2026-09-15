@@ -1,0 +1,1 @@
+local s=""; for i=1,16 do local b=getglobal("ContainerFrame1Item"..i); if b then local m="?"; if b.IsMouseOver then if b:IsMouseOver() then m="1" else m="0" end end; s=s..i..":"..m.." " end end; DEFAULT_CHAT_FRAME:AddMessage("MOUSE "..s)

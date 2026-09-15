@@ -240,7 +240,8 @@ void WorldSession::HandleTaxiNodeStatus(const net::wotlk::WorldPacket &pkt) {
   auto *unit = objects().GetMutableUnit(ObjectGuid(status.npc_guid));
   if (!unit) return;
 
-  constexpr std::uint32_t kNpcFlagFlightmaster = 0x00002000;
+  // 1.12: FLIGHTMASTER = 0x8 (Source\src\game\Objects\UnitDefines.h).
+  constexpr std::uint32_t kNpcFlagFlightmaster = 0x00000008;
   if ((unit->State().GetNpcFlags() & kNpcFlagFlightmaster) == 0) return;
 
   unit->SetOverlayModelIndexOverride(status.status == 0 ? kOverlayModelIndexTaxiEnable : 0);

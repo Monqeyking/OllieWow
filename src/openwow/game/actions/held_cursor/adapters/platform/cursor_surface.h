@@ -78,16 +78,24 @@ struct RetailCursorRequest {
   }
 };
 
+// 1.12/Classic-nummering. Autoriteit: lokale Source,
+// D:\OllieWoW\Source\src\game\Objects\UnitDefines.h (enum NPCFlags).
+// Deze tabel stond op de 3.3.5-nummering: VENDOR=0x80 (in 1.12 INNKEEPER),
+// FLIGHTMASTER=0x2000 (1.12 STABLEMASTER), REPAIR=0x1000 (1.12 AUCTIONEER),
+// INNKEEPER=0x10000 (1.12 BANKER), BANKER=0x20000, AUCTIONEER=0x200000.
+// Daardoor kon de vendor-/innkeeper-/taxi-tak nooit vuren en deed een
+// rechtsklik op zo'n NPC niets.
 enum NpcFlags : std::uint32_t {
   UNIT_NPC_FLAG_GOSSIP       = 0x00000001,
   UNIT_NPC_FLAG_QUESTGIVER   = 0x00000002,
+  UNIT_NPC_FLAG_VENDOR       = 0x00000004,
+  UNIT_NPC_FLAG_FLIGHTMASTER = 0x00000008,
   UNIT_NPC_FLAG_TRAINER      = 0x00000010,
-  UNIT_NPC_FLAG_VENDOR       = 0x00000080,
-  UNIT_NPC_FLAG_REPAIR       = 0x00001000,
-  UNIT_NPC_FLAG_FLIGHTMASTER = 0x00002000,
-  UNIT_NPC_FLAG_INNKEEPER    = 0x00010000,
-  UNIT_NPC_FLAG_BANKER       = 0x00020000,
-  UNIT_NPC_FLAG_AUCTIONEER   = 0x00200000,
+  UNIT_NPC_FLAG_INNKEEPER    = 0x00000080,
+  UNIT_NPC_FLAG_BANKER       = 0x00000100,
+  UNIT_NPC_FLAG_AUCTIONEER   = 0x00001000,
+  UNIT_NPC_FLAG_STABLEMASTER = 0x00002000,
+  UNIT_NPC_FLAG_REPAIR       = 0x00004000,
 
   UNIT_NPC_FLAG_CIVILIAN     = 0x04000000,
 };

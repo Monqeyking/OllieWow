@@ -1,5 +1,7 @@
 #include "openwow/ui/runtime/lua/retail_native_binding_plan.h"
 
+#include "openwow/foundation/diagnostics/logging.h"
+
 #include <algorithm>
 #include <array>
 #include <deque>
@@ -175,18 +177,40 @@ RetailNativeBindingPlan ComposeRetailNativeBindings(
 
 }
 
+namespace {
+
+// Een ontbrekende of niet-geregistreerde native binding liet de client eerder
+// hard crashen: de logic_error uit ComposeRetailNativeBindings was ongevangen,
+// waardoor std::terminate -> abort() volgde (0xC0000409 in ucrtbase.dll)
+// zonder enige aanwijzing in het log. Log de reden en ga verder met een leeg
+// plan -- de UI mist dan die ene global, maar de client start en het log zegt
+// welke binding ontbreekt.
+RetailNativeBindingPlan ComposeOrReport(
+    std::vector<NativeBindingCatalog> sources,
+    const std::span<const RetailRegistration> order,
+    const BindingScope scope) {
+  try {
+    return ComposeRetailNativeBindings(std::move(sources), order, scope);
+  } catch (const std::exception& error) {
+    openwow::diagnostics::Log(
+        openwow::diagnostics::LogLevel::kError,
+        std::string("retail native binding plan failed: ") + error.what());
+    return {};
+  }
+}
+
+}
+
 RetailNativeBindingPlan ComposeRetailWorldNativeBindings(
     std::vector<NativeBindingCatalog> sources) {
-  return ComposeRetailNativeBindings(
-      std::move(sources), kRetailRegistrationOrder,
-      BindingScope::kWorld);
+  return ComposeOrReport(std::move(sources), kRetailRegistrationOrder,
+                         BindingScope::kWorld);
 }
 
 RetailNativeBindingPlan ComposeRetailGlueNativeBindings(
     std::vector<NativeBindingCatalog> sources) {
-  return ComposeRetailNativeBindings(
-      std::move(sources), kRetailGlueRegistrationOrder,
-      BindingScope::kGlue);
+  return ComposeOrReport(std::move(sources), kRetailGlueRegistrationOrder,
+                         BindingScope::kGlue);
 }
 
 }

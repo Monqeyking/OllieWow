@@ -1,6 +1,10 @@
 
 #include "composition/client_helpers.h"
 
+#include <cstdio>
+#include <cstdlib>
+#include <exception>
+
 #if defined(__APPLE__)
 #include <pthread/qos.h>
 #endif
@@ -613,6 +617,25 @@ int RunClientProcess(int argc, char** argv) {
 }
 
 int main(int argc, char** argv) {
+  // Een ongevangen exception laat de CRT abort() gebruiken en eindigt op
+  // Windows als 0xC0000409 in ucrtbase.dll, zonder enige aanwijzing in het log
+  // (dat op dat moment nog gebufferd is). Schrijf de reden naar stderr zodat
+  // een start-crash te diagnostiseren is.
+  std::set_terminate([]() {
+    if (const auto exception = std::current_exception()) {
+      try {
+        std::rethrow_exception(exception);
+      } catch (const std::exception& error) {
+        std::fprintf(stderr, "terminate: %s\n", error.what());
+      } catch (...) {
+        std::fprintf(stderr, "terminate: unknown exception\n");
+      }
+    } else {
+      std::fprintf(stderr, "terminate: no active exception\n");
+    }
+    std::fflush(stderr);
+    std::abort();
+  });
 
   return openwow::core::RunLegacyStartupFiberBootstrap(
       [&]() { return RunClientProcess(argc, argv); });

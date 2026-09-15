@@ -31,7 +31,8 @@ namespace game = ::openwow::game;
 constexpr std::size_t kNpcInteractionCloseSoundSlot = 1;
 
 constexpr std::size_t kNpcInteractionGreetingSoundSlot = 0;
-constexpr std::uint32_t kNpcFlagTabardVendor = 0x00080000u;
+// 1.12: TABARDDESIGNER = 0x400 (Source\src\game\Objects\UnitDefines.h).
+constexpr std::uint32_t kNpcFlagTabardVendor = 0x00000400u;
 constexpr std::uint32_t kUnitFlagCannotInteract = 0x02000000u;
 
 constexpr std::uint32_t kUnitFlag2AllowEnemyInteract = 0x00004000u;

@@ -877,20 +877,23 @@ constexpr std::uint32_t kCursorTypeSkinAlliance = 21u;
 constexpr std::uint32_t kCursorTypeInnkeeper = 22u;
 constexpr std::uint32_t kCursorTypeVehicle = 26u;
 
+// 1.12/Classic-nummering; zie Source\src\game\Objects\UnitDefines.h.
 constexpr std::uint32_t kCursorNpcFlagGossip = 0x00000001u;
+constexpr std::uint32_t kCursorNpcFlagVendor = 0x00000004u;
+constexpr std::uint32_t kCursorNpcFlagFlightMaster = 0x00000008u;
 constexpr std::uint32_t kCursorNpcFlagTrainer = 0x00000010u;
-constexpr std::uint32_t kCursorNpcFlagVendor = 0x00000080u;
-constexpr std::uint32_t kCursorNpcFlagRepair = 0x00001000u;
-constexpr std::uint32_t kCursorNpcFlagFlightMaster = 0x00002000u;
-constexpr std::uint32_t kCursorNpcFlagSpiritHealer = 0x00004000u;
-constexpr std::uint32_t kCursorNpcFlagSpiritGuide = 0x00008000u;
-constexpr std::uint32_t kCursorNpcFlagInnkeeper = 0x00010000u;
-constexpr std::uint32_t kCursorNpcFlagBanker = 0x00020000u;
-constexpr std::uint32_t kCursorNpcFlagPetitioner = 0x00040000u;
-constexpr std::uint32_t kCursorNpcFlagTabardDesigner = 0x00080000u;
-constexpr std::uint32_t kCursorNpcFlagBattlemaster = 0x00100000u;
-constexpr std::uint32_t kCursorNpcFlagAuctioneer = 0x00200000u;
-constexpr std::uint32_t kCursorNpcFlagStableMaster = 0x00400000u;
+constexpr std::uint32_t kCursorNpcFlagSpiritHealer = 0x00000020u;
+constexpr std::uint32_t kCursorNpcFlagSpiritGuide = 0x00000040u;
+constexpr std::uint32_t kCursorNpcFlagInnkeeper = 0x00000080u;
+constexpr std::uint32_t kCursorNpcFlagBanker = 0x00000100u;
+constexpr std::uint32_t kCursorNpcFlagPetitioner = 0x00000200u;
+constexpr std::uint32_t kCursorNpcFlagTabardDesigner = 0x00000400u;
+constexpr std::uint32_t kCursorNpcFlagBattlemaster = 0x00000800u;
+constexpr std::uint32_t kCursorNpcFlagAuctioneer = 0x00001000u;
+constexpr std::uint32_t kCursorNpcFlagStableMaster = 0x00002000u;
+constexpr std::uint32_t kCursorNpcFlagRepair = 0x00004000u;
+// Bestaat niet in 1.12; beide bits zijn daar ongebruikt, dus deze twee checks
+// vuren nooit. Laten staan zodat de bedoeling leesbaar blijft.
 constexpr std::uint32_t kCursorNpcFlagGuildBanker = 0x00800000u;
 constexpr std::uint32_t kCursorNpcFlagSpellClick = 0x01000000u;
 

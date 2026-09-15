@@ -1536,8 +1536,17 @@ void ApplyGameTooltipMethods(lua_State *L) {
                             lua_adapter::ScriptObjectDisplayName(Ls, tooltip_index));
         }
 
+        // Vanilla's GameTooltip_Hide() zet this.owner = nil, waardoor
+        // IsOwned(frame) na een Hide() onwaar wordt. OpenWow laat het
+        // owner-veld staan. Zonder deze voorwaarde blijft IsOwned waar en
+        // hertoont ContainerFrameItemButton_OnUpdate (1.12
+        // Interface\FrameXML\ContainerFrame.lua:693, uit de client-MPQ) de
+        // tooltip elke TOOLTIP_UPDATE_TIME -- precies het gedrag "tooltip
+        // verdwijnt en popt even later weer op" bij backpack-items. Een
+        // eigendomvergelijking is alleen zinvol zolang de tooltip getoond wordt.
         lua_getfield(Ls, tooltip_index, kTooltipOwnerFrameField);
-        const bool owned = lua_istable(Ls, -1) != 0 && lua_rawequal(Ls, -1, 2) != 0;
+        const bool owned = lua_istable(Ls, -1) != 0 && lua_rawequal(Ls, -1, 2) != 0 &&
+                           openwow::ui::game::TooltipSystem::Get().IsShown();
         lua_pop(Ls, 1);
         lua_pushboolean(Ls, owned);
         return 1;

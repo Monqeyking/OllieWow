@@ -6,6 +6,7 @@
 #include "openwow/data/formats/dbc/dbc_loader.h"
 #include "openwow/data/formats/dbc/dbc_structures.h"
 #include "openwow/game/chat_display.h"
+#include "openwow/foundation/diagnostics/logging.h"
 #include "openwow/game/conditional_text_tag.h"
 #include "openwow/game/honor_system.h"
 #include "openwow/game/localization.h"
@@ -486,14 +487,33 @@ std::int32_t ComputeTooltipSpellDurationMs(
   duration += entry->duration_per_level
       * (scaled_level - static_cast<std::int32_t>(spell.base_level));
 
-  std::int32_t clamped_duration = entry->max_duration;
-  if (duration < clamped_duration) {
-    clamped_duration = duration;
+  // 1.12/vmangos: MaxDuration kapt alleen af wanneer die niet nul is; nul
+  // betekent "geen maximum". De oude vorm begon bij max_duration en maakte
+  // daardoor elke gewone duur 0 (verreweg de meeste SpellDuration-rijen hebben
+  // MaxDuration = 0). Gevolg: $o1 rekende met duur 0 en werd 0, en $d viel in
+  // de "until cancelled"-tak -- samen "Restores 0 health over until cancelled".
+  std::int32_t clamped_duration = duration;
+  if (entry->max_duration != 0 && clamped_duration > entry->max_duration) {
+    clamped_duration = entry->max_duration;
   }
 
   if (!context.suppress_spell_modifiers) {
     ApplyTooltipIntSpellModifier(
         spell, SpellModOp::kDuration, clamped_duration);
+  }
+
+  if (openwow::diagnostics::IsLogEnabled(
+          openwow::diagnostics::LogLevel::kDebug)) {
+    openwow::diagnostics::Log(
+        openwow::diagnostics::LogLevel::kDebug,
+        "SpellDurationTrace: spell=" + std::to_string(spell.id) +
+            " index=" + std::to_string(spell.duration_index) +
+            " duration=" + std::to_string(entry->duration) +
+            " per_level=" + std::to_string(entry->duration_per_level) +
+            " max=" + std::to_string(entry->max_duration) +
+            " base_level=" + std::to_string(spell.base_level) +
+            " scaled_level=" + std::to_string(scaled_level) +
+            " clamped=" + std::to_string(clamped_duration));
   }
 
   return clamped_duration;

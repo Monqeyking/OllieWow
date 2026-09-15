@@ -54,7 +54,10 @@ namespace openwow::game {
 
 namespace {
 
-constexpr std::uint32_t kGuildRegistrarNpcFlagsMask = 0x000C0000u;
+// 1.12: PETITIONER (0x200) | TABARDDESIGNER (0x400)
+// (Source\src\game\Objects\UnitDefines.h). De oude 0xC0000 was de
+// 3.3.5-nummering van die twee bits.
+constexpr std::uint32_t kGuildRegistrarNpcFlagsMask = 0x00000600u;
 constexpr int kOfferPetitionErrorSystemMessageId = 523;
 
 void HandleOfferPetitionErrorNameLookup(WorldSession &session, const std::uint64_t guid) {

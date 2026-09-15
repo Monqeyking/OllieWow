@@ -61,3 +61,8 @@ Testing/
 /logs/
 /artifacts/
 /.codex-remote-attachments/
+
+# Diagnose-output van de dev-lus (devctl.ps1 / hovertest.ps1 / crop.ps1):
+# screenshots en crops zijn bewijs voor een sessie, geen bronartefact.
+/*.png
+/vfsdump/

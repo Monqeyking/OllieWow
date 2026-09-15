@@ -1,0 +1,1 @@
+for i=1,16 do local b=getglobal("ContainerFrame1Item"..i); if b then b:SetScript("OnUpdate",nil) end end DEFAULT_CHAT_FRAME:AddMessage("ONUPDATE-CLEARED")

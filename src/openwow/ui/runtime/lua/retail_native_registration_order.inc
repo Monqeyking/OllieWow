@@ -849,6 +849,7 @@
     {"autocomplete", "GetAutoCompletePresenceID"},
     {"spell", "GetNumSpellTabs"},
     {"spell", "GetSpellTabInfo"},
+    {"spell", "PlayerHasSpells"},
     {"spell", "GetSpellName"},
     {"spell", "GetSpellLink"},
     {"spell", "GetSpellInfo"},

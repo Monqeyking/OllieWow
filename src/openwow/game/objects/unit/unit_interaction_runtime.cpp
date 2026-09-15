@@ -57,13 +57,15 @@ namespace openwow::game {
 namespace {
 
 constexpr std::uint32_t kSpellAttrEx4ResumesAutoAttackOnCompletion = 0x4000u;
-constexpr std::uint32_t kNpcFlagSpiritHealer = 0x00004000u;
-constexpr std::uint32_t kNpcFlagSpiritGuide = 0x00008000u;
-constexpr std::uint32_t kNpcFlagStableMaster = 0x00400000u;
+// 1.12/Classic-nummering; zie Source\src\game\Objects\UnitDefines.h.
+constexpr std::uint32_t kNpcFlagSpiritHealer = 0x00000020u;
+constexpr std::uint32_t kNpcFlagSpiritGuide = 0x00000040u;
+constexpr std::uint32_t kNpcFlagPetitioner = 0x00000200u;
+constexpr std::uint32_t kNpcFlagTabardDesigner = 0x00000400u;
+constexpr std::uint32_t kNpcFlagBattlemaster = 0x00000800u;
+constexpr std::uint32_t kNpcFlagStableMaster = 0x00002000u;
+// Bestaat niet in 1.12; de bit is daar ongebruikt, dus deze tak vuurt nooit.
 constexpr std::uint32_t kNpcFlagGuildBanker = 0x00800000u;
-constexpr std::uint32_t kNpcFlagPetitioner = 0x00040000u;
-constexpr std::uint32_t kNpcFlagTabardDesigner = 0x00080000u;
-constexpr std::uint32_t kNpcFlagBattlemaster = 0x00100000u;
 
 constexpr int kAttackOutOfRangeSystemMessage = 134;
 

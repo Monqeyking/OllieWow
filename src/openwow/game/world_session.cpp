@@ -641,6 +641,33 @@ WorldSession::WorldSession(openwow::data::DBCacheRuntime& db_cache_runtime,
 
                     gossip_.MarkTrainerSpellKnown(
                         static_cast<std::int32_t>(spell_id));
+                     if (gossip_.has_trainer()) {
+                       constexpr std::uint32_t kLearnSpellEffect = 36u;
+                       constexpr std::uint32_t kLearnPetSpellEffect = 57u;
+                       const auto *dbc = GetDbcLoader();
+                       if (dbc != nullptr) {
+                         for (const auto &service : gossip_.trainer().spells) {
+                           const auto *service_spell =
+                               dbc->spell().LookupEntry(
+                                   static_cast<std::uint32_t>(service.spell_id));
+                           if (service_spell == nullptr) {
+                             continue;
+                           }
+                           for (std::size_t effect_index = 0;
+                                effect_index < service_spell->effect.size();
+                                ++effect_index) {
+                             const auto effect = service_spell->effect[effect_index];
+                             if ((effect == kLearnSpellEffect ||
+                                  effect == kLearnPetSpellEffect) &&
+                                 service_spell->effect_trigger_spell[effect_index] ==
+                                     spell_id) {
+                               gossip_.MarkTrainerSpellKnown(service.spell_id);
+                               break;
+                             }
+                           }
+                         }
+                       }
+                     }
                     SpellBookFrame::LearnSpell(
                         *this, spell_id, superseded, old_spell_id);
                   },
@@ -2451,7 +2478,7 @@ bool WorldSession::HandlePacket(const net::wotlk::WorldPacket &pkt) {
     return true;
 
   case Op::SMSG_TRAINER_BUY_SUCCEEDED:
-    HandleTrainerBuySucceededPacket(petition_, pkt);
+    HandleTrainerBuySucceededPacket(gossip_, petition_, pkt);
     return true;
   case Op::SMSG_TRAINER_BUY_FAILED:
     HandleTrainerBuyFailedPacket(petition_, pkt);

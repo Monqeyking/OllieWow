@@ -44,6 +44,17 @@ int LuaHasPetSpells(lua_State* L) {
   return 2;
 }
 
+int LuaPlayerHasSpells(lua_State* L) {
+  // 1.12-global; de FrameXML gebruikt hem als pure boolean in
+  // MainMenuBarMicroButtons.xml -> SpellbookMicroButton/OnEnter:
+  //   if (PlayerHasSpells()) then "Spellbook & Abilities" else "Abilities"
+  // Daarom een echte boolean en niet het aantal: het getal 0 is in Lua truthy
+  // en zou de verkeerde tak kiezen.
+  const auto spell_count = openwow::game::SpellbookSystem::Get().GetNumSpells();
+  lua_pushboolean(L, spell_count > 0 ? 1 : 0);
+  return 1;
+}
+
 int LuaGetKnownSlotFromHighestRankSlot(lua_State* L) {
   const auto requested_slot = lua_tointeger(L, 1);
   std::uint32_t known_slot = 0;

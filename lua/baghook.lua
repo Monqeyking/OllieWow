@@ -1,0 +1,1 @@
+OWH={}; local o=GameTooltip.SetBagItem; GameTooltip.SetBagItem=function(self,a,b) local t="?"; if debug and debug.traceback then t=debug.traceback() end; local s=string.gsub(t,"[\r\n]+"," | "); DEFAULT_CHAT_FRAME:AddMessage("SETBAG "..tostring(a)..","..tostring(b).." >> "..string.sub(s,1,300)) return o(self,a,b) end; DEFAULT_CHAT_FRAME:AddMessage("BAGHOOK-OK")
