@@ -1,5 +1,6 @@
 #include "openwow/ui/game/runtime/frame_materializer.h"
 
+#include "openwow/foundation/diagnostics/logging.h"
 #include "openwow/foundation/text/ascii.h"
 #include "openwow/game/localization.h"
 #include "openwow/ui/animation/animation_lua.h"
@@ -316,6 +317,19 @@ int FrameMaterializer::CreateTrackedFrameBinding(
   detail::ScopedNeutralLuaTaint neutral_taint(lua_);
   UiFrame tracked = frame;
   const std::string key = dependencies_.frames.AllocateUniqueKey(frame.name);
+  // Diagnostiek: als de voorkeurssleutel al bezet is, maakt de store een
+  // TWEEDE instantie ("<naam>.__ow_instance_N") aan. Dat betekent dat dit
+  // XML-frame opnieuw wordt gematerialiseerd terwijl de Lua-global via
+  // PublishLuaGlobalValueIfNil op de eerste blijft wijzen: Lua-mutaties en
+  // het getekende frame lopen dan uit elkaar. Dit is het vermoeden achter het
+  // plus/min-resicoon dat na Hide/Show terugkomt (QuestLogFrame.lua:154 wist
+  // de template-textuur, maar de herbouw zet hem terug). Bij de eerste load
+  // is de sleutel vrij en logt dit niets, dus geen ruis.
+  if (key != frame.name) {
+    openwow::diagnostics::Log(
+        openwow::diagnostics::LogLevel::kDebug,
+        "rematerialize frame name=" + frame.name + " key=" + key);
+  }
   tracked.name = key;
   tracked.lua_name = lua_name;
   tracked.publish_to_lua = frame.publish_to_lua && named;

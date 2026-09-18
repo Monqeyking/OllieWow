@@ -387,7 +387,8 @@ private:
 
   bool RequestPlayback(std::uint16_t animation_id, bool looping,
                        bool restart = false,
-                       bool bypass_alias_resolution = false);
+                       bool bypass_alias_resolution = false,
+                       std::optional<bool> upper_body_override = std::nullopt);
 
   void SubmitRawPlayback(std::uint16_t animation_id, bool looping,
                          bool upper_body_only, bool zero_blend);

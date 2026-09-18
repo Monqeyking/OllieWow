@@ -160,9 +160,21 @@ QuestLogView BuildQuestLogView(::openwow::game::WorldSession &session) {
   discovered_sort_keys.reserve(log.size());
   const auto *player = session.objects().GetLocalPlayerTyped();
 
+  // Questen waarvan de template nog niet binnen is mogen NIET uit de lijst
+  // verdwijnen. Deed de oude code dat wel (continue), dan kromp de interleaved
+  // lijst en schoof alles op zodra een template later binnenkwam: een klik op
+  // een questregel kwam bij de native dan op een andere entry uit -- meestal
+  // een zone-header -- waarna de client die zone openklapte. In het log zag dat
+  // er zo uit: `hit=QuestLogTitle3` -> `questlog expand header index=3`.
+  // Ze gaan daarom achteraan de lijst in quest-log-volgorde, zodat de
+  // zonegroepen en hun indices stabiel blijven, en de template wordt meteen
+  // aangevraagd zodat de echte zone snel bekend is.
+  std::vector<std::size_t> pending_template_indices;
   for (std::size_t quest_log_index = 0; quest_log_index < log.size(); ++quest_log_index) {
     const auto *tmpl = session.quests().GetTemplate(log[quest_log_index].quest_id);
     if (tmpl == nullptr) {
+      pending_template_indices.push_back(quest_log_index);
+      (void)session.quests().GetOrRequestTemplate(log[quest_log_index].quest_id);
       continue;
     }
 
@@ -238,6 +250,19 @@ QuestLogView BuildQuestLogView(::openwow::game::WorldSession &session) {
   }
 
   view.entries.insert(view.entries.end(), hidden_entries.begin(), hidden_entries.end());
+
+  // Slot: questen zonder template (zie de toelichting hierboven). Ze blijven
+  // zichtbaar en selecteerbaar -- de Lua verbergt een rij zonder titel zelf --
+  // zodat het aantal entries en de nummering niet verspringen.
+  for (const auto quest_log_index : pending_template_indices) {
+    InterleavedQuestLogEntry entry;
+    entry.sort_key = 0;
+    entry.quest_log_index = quest_log_index;
+    view.entries.push_back(std::move(entry));
+    ++view.visible_count;
+    ++view.quest_count;
+  }
+
   return view;
 }
 

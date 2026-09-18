@@ -1,6 +1,11 @@
 #include "scenarios/offline_world_fixture.h"
 
 #include "openwow/game/actions/model/action_assignments.h"
+#include "openwow/game/aura_descriptor_sync.h"
+#include "openwow/game/unit_cursor_policy.h"
+#include "openwow/game/aura_lua_bridge.h"
+#include "openwow/game/aura_tracker.h"
+#include "openwow/game/world_session.h"
 #include "openwow/game/object_guid.h"
 #include "openwow/game/object_types.h"
 #include "openwow/game/skill_line_ability_lookup.h"
@@ -359,6 +364,314 @@ openwow::net::wotlk::WorldPacket BuildVisibleCreatureCreates(
       openwow::net::wotlk::Opcode::SMSG_UPDATE_OBJECT);
   packet.payload = std::move(payload);
   return packet;
+}
+
+namespace {
+
+void AppendFieldsFromVector(
+    std::vector<std::uint8_t>& bytes, const std::uint16_t field_count,
+    std::vector<std::pair<std::uint16_t, std::uint32_t>> fields) {
+  const auto block_count = openwow::game::BitmaskBlockCount(field_count);
+  std::vector<std::uint32_t> masks(block_count, 0u);
+  std::sort(fields.begin(), fields.end(),
+            [](const auto& lhs, const auto& rhs) { return lhs.first < rhs.first; });
+  for (const auto& [index, value] : fields) {
+    (void)value;
+    masks[index / 32u] |= 1u << (index % 32u);
+  }
+  AppendU8(bytes, block_count);
+  for (const auto mask : masks) {
+    AppendU32(bytes, mask);
+  }
+  for (const auto& [index, value] : fields) {
+    (void)index;
+    AppendU32(bytes, value);
+  }
+}
+
+void LogAuraFixtureFailure(const std::string& reason) {
+  openwow::diagnostics::Log(openwow::diagnostics::LogLevel::kError,
+                            "Offline aura fixture failed: " + reason);
+}
+
+}  // namespace
+
+openwow::net::wotlk::WorldPacket BuildPlayerAuras(
+    const openwow::game::ObjectGuid player_guid,
+    const std::vector<PlayerAuraFixture>& auras) {
+  using namespace openwow::game;
+
+  constexpr std::size_t kFlagWords = 6u;          // 48 auras / 8 per woord
+  constexpr std::size_t kApplicationWords = 12u;  // 48 auras / 4 per woord
+  std::array<std::uint32_t, kFlagWords> flag_words{};
+  std::array<std::uint32_t, kApplicationWords> application_words{};
+  std::vector<std::pair<std::uint16_t, std::uint32_t>> fields;
+
+  for (const auto& aura : auras) {
+    if (aura.spell_id == 0u || aura.descriptor_slot >= 48u) {
+      continue;
+    }
+    fields.emplace_back(
+        static_cast<std::uint16_t>(UNIT_FIELD_AURA + aura.descriptor_slot),
+        aura.spell_id);
+    flag_words[aura.descriptor_slot >> 3u] |=
+        (static_cast<std::uint32_t>(aura.flags) & 0x0Fu)
+        << ((aura.descriptor_slot & 7u) * 4u);
+    application_words[aura.descriptor_slot / 4u] |=
+        (static_cast<std::uint32_t>(aura.stacks) & 0xFFu)
+        << ((aura.descriptor_slot % 4u) * 8u);
+  }
+  for (std::size_t i = 0; i < kFlagWords; ++i) {
+    if (flag_words[i] != 0u) {
+      fields.emplace_back(static_cast<std::uint16_t>(UNIT_FIELD_AURAFLAGS + i),
+                          flag_words[i]);
+    }
+  }
+  for (std::size_t i = 0; i < kApplicationWords; ++i) {
+    if (application_words[i] != 0u) {
+      fields.emplace_back(
+          static_cast<std::uint16_t>(UNIT_FIELD_AURAAPPLICATIONS + i),
+          application_words[i]);
+    }
+  }
+
+  std::vector<std::uint8_t> bytes;
+  AppendU32(bytes, 1u);
+  AppendU8(bytes, 0u);
+  AppendU8(bytes, static_cast<std::uint8_t>(UpdateType::kValues));
+  AppendPackedGuid(bytes, player_guid);
+  AppendFieldsFromVector(bytes, PLAYER_END, std::move(fields));
+
+  openwow::net::wotlk::WorldPacket packet(
+      openwow::net::wotlk::Opcode::SMSG_UPDATE_OBJECT);
+  packet.payload = std::move(bytes);
+  return packet;
+}
+
+openwow::net::wotlk::WorldPacket BuildUpdateAuraDuration(
+    const std::uint8_t descriptor_slot, const std::uint32_t remaining_ms) {
+  // Onze 3.3.5-enum noemt 0x137 SMSG_EQUIPMENT_SET_SAVED; 1.12 gebruikt die
+  // waarde voor SMSG_UPDATE_AURA_DURATION.
+  openwow::net::wotlk::WorldPacket packet(
+      openwow::net::wotlk::Opcode::SMSG_EQUIPMENT_SET_SAVED);
+  packet.AppendU8(descriptor_slot);
+  packet.AppendU32(remaining_ms);
+  return packet;
+}
+
+bool ValidateOfflineAuraFixtures(openwow::game::WorldSession& session,
+                                const openwow::game::ObjectGuid player_guid) {
+  using namespace openwow::game;
+
+  constexpr std::uint32_t kBloodFurySpell = 20572u;
+  constexpr std::uint32_t kArcaneIntellectSpell = 1459u;
+  constexpr std::uint32_t kBloodFuryDurationMs = 15000u;
+
+  const std::vector<PlayerAuraFixture> auras{
+      {.descriptor_slot = 0u, .spell_id = kBloodFurySpell, .flags = 0x05u, .stacks = 1u},
+      {.descriptor_slot = 1u, .spell_id = kArcaneIntellectSpell, .flags = 0x05u, .stacks = 1u},
+  };
+  if (!session.HandlePacket(BuildPlayerAuras(player_guid, auras))) {
+    LogAuraFixtureFailure("aura-values-update werd geweigerd");
+    return false;
+  }
+
+  // Via dezelfde route als de Lua: dit triggert ook de lazy descriptor-sync.
+  const auto first =
+      AuraLuaBridge::Get().GetPlayerBuffByPosition(session, 0u, "HELPFUL");
+  if (!first.has_value() || first->spellId != kBloodFurySpell) {
+    LogAuraFixtureFailure(
+        "eerste positie gaf geen Blood Fury (spell=" +
+        std::to_string(first.has_value() ? first->spellId : 0u) + ")");
+    return false;
+  }
+  const auto second =
+      AuraLuaBridge::Get().GetPlayerBuffByPosition(session, 1u, "HELPFUL");
+  if (!second.has_value() || second->spellId != kArcaneIntellectSpell) {
+    LogAuraFixtureFailure(
+        "tweede positie gaf geen Arcane Intellect (spell=" +
+        std::to_string(second.has_value() ? second->spellId : 0u) + ")");
+    return false;
+  }
+
+  const auto& manager_auras = session.aura().GetAuras(player_guid.GetRawValue());
+  if (manager_auras.size() != auras.size()) {
+    LogAuraFixtureFailure("AuraManager heeft " +
+                          std::to_string(manager_auras.size()) + " auras, verwacht " +
+                          std::to_string(auras.size()));
+    return false;
+  }
+
+  if (!session.HandlePacket(BuildUpdateAuraDuration(0u, kBloodFuryDurationMs))) {
+    LogAuraFixtureFailure("aura-duration-packet werd geweigerd");
+    return false;
+  }
+  const auto timed = AuraLuaBridge::Get().GetPlayerAuraByTrackerSlot(
+      session, static_cast<std::uint32_t>(first->slot));
+  if (!timed.has_value() || timed->remainingTime <= 0.0f ||
+      timed->remainingTime > 15.0f) {
+    // Diagnose meteen meeleveren: dan vertelt de test zelf waar de keten
+    // breekt (packet niet aangekomen, verkeerde local-player-guid, of het
+    // aura-veld leeg).
+    const auto local_guid = session.objects().GetLocalPlayerGuid();
+    const auto* player = session.objects().GetUnit(local_guid);
+    const auto* aura =
+        AuraTracker::Get().FindAuraBySpell(player_guid, kBloodFurySpell);
+    LogAuraFixtureFailure(
+        "duur niet gezet (remaining=" +
+        std::to_string(timed.has_value() ? timed->remainingTime : -1.0f) +
+        "s local=" + std::to_string(local_guid.GetRawValue()) +
+        " arg=" + std::to_string(player_guid.GetRawValue()) +
+        " player_obj=" + (player != nullptr ? "1" : "0") +
+        " aura_field0=" +
+        std::to_string(player != nullptr ? player->GetUInt32(UNIT_FIELD_AURA) : 0u) +
+        " tracker_aura=" + (aura != nullptr ? "1" : "0") +
+        " tracker_duration=" +
+        std::to_string(aura != nullptr ? aura->duration : 0u) + ")");
+    return false;
+  }
+
+  // Fase 2: dezelfde keten maar in de volgorde waarin de server het kan sturen
+  // -- eerst de duur, dan de aura. In 1.12 zet de server de descriptorvelden en
+  // stuurt daarna SMSG_UPDATE_AURA_DURATION; arriveert dat pakket eerder dan de
+  // object-update, dan is er nog geen aura om de duur op te zetten en valt de
+  // timer weg. Dat is precies wat een speler ziet: buffs zonder aftelling.
+  constexpr std::uint32_t kLateSpell = 1126u;  // Mark of the Wild
+  constexpr std::uint32_t kLateDurationMs = 20000u;
+  if (!session.HandlePacket(BuildUpdateAuraDuration(5u, kLateDurationMs))) {
+    LogAuraFixtureFailure("aura-duration-packet (fase 2) werd geweigerd");
+    return false;
+  }
+  const std::vector<PlayerAuraFixture> late_aura{
+      {.descriptor_slot = 5u, .spell_id = kLateSpell, .flags = 0x05u, .stacks = 1u}};
+  if (!session.HandlePacket(BuildPlayerAuras(player_guid, late_aura))) {
+    LogAuraFixtureFailure("aura-values-update (fase 2) werd geweigerd");
+    return false;
+  }
+  const auto late =
+      AuraLuaBridge::Get().GetPlayerBuffByPosition(session, 2u, "HELPFUL");
+  if (!late.has_value() || late->spellId != kLateSpell) {
+    LogAuraFixtureFailure("fase 2: derde aura niet gevonden");
+    return false;
+  }
+  if (late->remainingTime <= 0.0f) {
+    LogAuraFixtureFailure(
+        "duur kwam VOOR de aura en ging verloren (remaining=" +
+        std::to_string(late->remainingTime) + "s)");
+    return false;
+  }
+
+  // Fase 3: login-pad. De server stuurt bij het toetreden tot de map de duur van
+  // alle bestaande auras (Source Objects/Map.cpp:548-550), en die burst kan de
+  // client bereiken voordat het spelerobject bestaat. De duur wordt dan
+  // slot-geïndexeerd bewaard en moet op de aura landen zodra die verschijnt --
+  // anders staan de timers na een relog uit.
+  constexpr std::uint32_t kLoginSpell = 8071u;
+  constexpr std::uint32_t kLoginDurationMs = 30000u;
+  SetLocalPlayerAuraDuration(11u, kLoginDurationMs);
+  const std::vector<PlayerAuraFixture> login_aura{
+      {.descriptor_slot = 11u, .spell_id = kLoginSpell, .flags = 0x05u, .stacks = 1u}};
+  if (!session.HandlePacket(BuildPlayerAuras(player_guid, login_aura))) {
+    LogAuraFixtureFailure("aura-values-update (fase 3) werd geweigerd");
+    return false;
+  }
+  const auto login =
+      AuraLuaBridge::Get().GetPlayerBuffByPosition(session, 3u, "HELPFUL");
+  if (!login.has_value() || login->spellId != kLoginSpell) {
+    LogAuraFixtureFailure("fase 3: vierde aura niet gevonden");
+    return false;
+  }
+  if (login->remainingTime <= 0.0f) {
+    LogAuraFixtureFailure(
+        "login-duur (slot-geïndexeerd) ging verloren (remaining=" +
+        std::to_string(login->remainingTime) + "s)");
+    return false;
+  }
+
+  // Op kWarn, niet kInfo: de scenario-runs laten alleen WARN en hoger door,
+  // en een test-verdict hoort zichtbaar te zijn.
+  openwow::diagnostics::Log(
+      openwow::diagnostics::LogLevel::kWarn,
+      "Offline aura fixture OK: auras=" + std::to_string(manager_auras.size()) +
+          " remaining=" + std::to_string(timed->remainingTime) +
+          "s late_remaining=" + std::to_string(late->remainingTime) +
+          "s login_remaining=" + std::to_string(login->remainingTime) + "s");
+  return true;
+}
+
+bool ValidateUnitCursorPolicyFixtures() {
+  using namespace openwow::game;
+
+  struct Case {
+    std::uint32_t flags;
+    std::uint32_t expected;
+    const char* what;
+  };
+  // De 1.12-service-ladder: laagste bit wint (Benilla target/cursor_mode.rs:647-682).
+  const std::array<Case, 14> cases{{
+      {kCursorNpcFlagGossip, kCursorTypeSpeak, "gossip"},
+      {kCursorNpcFlagVendor, kCursorTypePickup, "vendor"},
+      {kCursorNpcFlagFlightMaster, kCursorTypeTaxi, "flightmaster"},
+      {kCursorNpcFlagTrainer, kCursorTypeTrainer, "trainer"},
+      {kCursorNpcFlagSpiritHealer, kCursorTypeSpeak, "spirithealer"},
+      {kCursorNpcFlagSpiritGuide, kCursorTypeSpeak, "spiritguide"},
+      {kCursorNpcFlagInnkeeper, kCursorTypeInteract, "innkeeper"},
+      {kCursorNpcFlagBanker, kCursorTypeBuy, "banker"},
+      {kCursorNpcFlagAuctioneer, kCursorTypeBuy, "auctioneer"},
+      {kCursorNpcFlagStableMaster, kCursorTypeSpeak, "stablemaster"},
+      {kCursorNpcFlagPetitioner, kCursorTypeSpeak, "petitioner"},
+      {kCursorNpcFlagRepair, 0u, "repair-only"},
+      {kCursorNpcFlagGossip | kCursorNpcFlagVendor, kCursorTypeSpeak, "gossip+vendor"},
+      {kCursorNpcFlagVendor | kCursorNpcFlagInnkeeper, kCursorTypePickup,
+       "vendor+innkeeper"},
+  }};
+  for (const auto& c : cases) {
+    const std::uint32_t got = ResolveNpcServiceCursorType(c.flags, false);
+    if (got != c.expected) {
+      LogAuraFixtureFailure(std::string("cursor-ladder faalt voor ") + c.what +
+                            " (kreeg " + std::to_string(got) + ", verwacht " +
+                            std::to_string(c.expected) + ")");
+      return false;
+    }
+    const std::uint32_t greyed =
+        c.expected == 0u ? 0u : c.expected + kUnavailableCursorTypeOffset;
+    if (ResolveNpcServiceCursorType(c.flags, true) != greyed) {
+      LogAuraFixtureFailure(std::string("grijs-offset faalt voor ") + c.what);
+      return false;
+    }
+  }
+
+  // Questgiver-gate: NONE(0)/UNAVAILABLE(1) geven geen cursor, >= 2 wel.
+  if (ResolveQuestGiverCursorType(0u, false) != 0u ||
+      ResolveQuestGiverCursorType(1u, false) != 0u) {
+    LogAuraFixtureFailure("questgiver-gate: NONE/UNAVAILABLE gaf een cursor");
+    return false;
+  }
+  for (std::uint32_t status = 2u; status <= 7u; ++status) {
+    if (ResolveQuestGiverCursorType(status, false) != kCursorTypeSpeak) {
+      LogAuraFixtureFailure("questgiver status " + std::to_string(status) +
+                            " gaf geen praat-cursor");
+      return false;
+    }
+  }
+  if (ResolveQuestGiverCursorType(5u, true) !=
+      kCursorTypeSpeak + kUnavailableCursorTypeOffset) {
+    LogAuraFixtureFailure("questgiver out-of-range gaf geen grijze praat-cursor");
+    return false;
+  }
+
+  // Afstandsgate: 5.5556 yd = 30.864 gekwadrateerd, grens-inclusief.
+  if (NpcServiceCursorOutOfRange(30.864f) ||
+      !NpcServiceCursorOutOfRange(30.865f)) {
+    LogAuraFixtureFailure("NPC-dienst-afstandsgate klopt niet (30.864)");
+    return false;
+  }
+
+  openwow::diagnostics::Log(
+      openwow::diagnostics::LogLevel::kWarn,
+      "Offline unit cursor policy OK: " + std::to_string(cases.size()) +
+          " laddergevallen + grijs-offset + questgiver-gate + afstandsgate");
+  return true;
 }
 
 bool ValidateClassicUpdateObjectFixtures() {

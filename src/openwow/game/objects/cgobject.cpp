@@ -672,18 +672,13 @@ std::uint32_t CGObject_C::ResolveOverlayModelIndex() const {
     return overlay_model_index_override_;
   }
 
-  if (type >= 2 && type <= 4) {
-    if (TrackingSystem::Get().IsTrivialQuestTrackingActive()) {
-      return type < kOverlayTypeToModelIndexCount ? kOverlayTypeToModelIndex[type] : 0;
-    }
-    return overlay_model_index_override_;
-  }
-
-  if (type < kOverlayTypeToModelIndexCount) {
+  if (type < kOverlayTypeToModelIndexCount && kOverlayTypeToModelIndex[type] != 0) {
     return kOverlayTypeToModelIndex[type];
   }
 
-  return 0;
+  // Geen questmarker voor deze status (1.12: NONE en CHAT): alleen dan mag de
+  // override -- de groene "!" van een flight master -- doorkomen.
+  return overlay_model_index_override_;
 }
 
 std::uint32_t CGObject_C::UpdateOverlayModel() {

@@ -285,8 +285,13 @@ bool UnitStateRuntime::IsHunterPet() const {
 }
 
 bool UnitStateRuntime::HasQuestGiverWithActiveOverlay() const {
+  // 1.12: status 1 (UNAVAILABLE - grijs "!") heeft wel een marker, status 2
+  // (CHAT - laag niveau) niet. De oude drempel >= kQuestAvailable (2) sloeg
+  // dat precies om.
+  const auto overlay = owner_.GetOverlayDisplayType();
   return (GetNpcFlags() & kNpcFlagQuestGiver) != 0u &&
-         owner_.GetOverlayDisplayType() >= OverlayDisplayType::kQuestAvailable;
+         overlay != OverlayDisplayType::kNone &&
+         overlay != OverlayDisplayType::kChat;
 }
 
 bool UnitStateRuntime::IsPvPFlaggedRacialLeader() const {

@@ -528,6 +528,14 @@ int RunClientProcess(int argc, char** argv) {
 
   openwow::net::PacketLog::Get().Initialize(
       (game_root.parent_path() / "logs").string());
+  // De CVar 'packetLog' wordt binnen Initialize gelezen, dus voordat de config
+  // geladen is; een config- of --set-cvar-instelling komt daar te laat. Via de
+  // omgeving is de packetlog wel stuurbaar, zonder herbouw. Schrijft naar
+  // <game_root>/../logs/PacketLog.txt.
+  if (const char *packet_log_env = std::getenv("OPENWOW_PACKET_LOG");
+      packet_log_env != nullptr && packet_log_env[0] == '1') {
+    openwow::net::PacketLog::Get().SetEnabled(true);
+  }
   std::cerr << "OpenWoW log: " << openwow::diagnostics::CurrentLogFile().string() << '\n';
   openwow::diagnostics::Log(openwow::diagnostics::LogLevel::kInfo,
                      "Game root: " + game_root.string());

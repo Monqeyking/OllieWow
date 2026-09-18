@@ -1618,7 +1618,8 @@ std::uint16_t UnitAnimationRuntime::GetResolvedPlaybackAnimationId() const {
 bool UnitAnimationRuntime::RequestPlayback(const std::uint16_t animation_id,
                                            bool looping,
                                            const bool restart,
-                                           const bool bypass_alias_resolution) {
+                                           const bool bypass_alias_resolution,
+                                           const std::optional<bool> upper_body_override) {
 
   const std::uint32_t requested_behavior =
       ResolveAnimationBehaviorId(owner_, animation_id);
@@ -1703,7 +1704,8 @@ bool UnitAnimationRuntime::RequestPlayback(const std::uint16_t animation_id,
   }
 
   const bool upper_body_only =
-      IsUpperBodyOnlyAnimation(submit_row, playback_request_.base_animation_id);
+      upper_body_override.value_or(
+          IsUpperBodyOnlyAnimation(submit_row, playback_request_.base_animation_id));
   CommitPlaybackRequest(submit_row, looping, upper_body_only,
                         bypass_alias_resolution, false);
 
@@ -1987,13 +1989,19 @@ void UnitAnimationRuntime::PlayAttackAnimation(const std::uint32_t hit_info,
       break;
     }
   }
+  const bool moving =
+      (owner_.GetMovementInfo().flags & kDirectionalMovementMask) != 0u;
+  const bool accepted = RequestPlayback(
+      attack, false, true, false,
+      moving ? std::optional<bool>(true) : std::nullopt);
   openwow::diagnostics::Log(
       openwow::diagnostics::LogLevel::kInfo,
       "CombatTrace: swing_play guid=" +
           std::to_string(owner_.GetGuid().GetRawValue()) +
           " animation=" + std::to_string(attack) +
+          " upper=" + (moving ? "1" : "0") +
+          " accepted=" + (accepted ? "1" : "0") +
           " hit_info=0x" + std::to_string(hit_info));
-  RequestPlayback(attack, false, true);
 }
 
 void UnitAnimationRuntime::EnsureDeathPresentation(
@@ -3545,7 +3553,8 @@ bool UnitAnimationRuntime::HasMovementDrivenStandAnimationOverride(
     const WorldSession &session) const {
   const auto &movement_info = owner_.GetMovementInfo();
 
-  if ((movement_info.flags & kMoveFlagFallingFar) != 0u) {
+  if ((movement_info.flags & kMoveFlagFallingFar) != 0u ||
+      movement_info.HasFallingLaunchVelocity()) {
     return true;
   }
   static_cast<void>(session);
@@ -3681,11 +3690,19 @@ bool UnitAnimationRuntime::ResolveIdleStandAnimation(
 bool UnitAnimationRuntime::ApplyMovementDrivenStandAnimationOverride(
     const WorldSession &session) {
   if (!HasMovementDrivenStandAnimationOverride(session)) return false;
+  const auto &movement_info = owner_.GetMovementInfo();
+  const bool falling_far =
+      (movement_info.flags & kMoveFlagFallingFar) != 0u;
+  const bool launched_jump =
+      !falling_far && movement_info.HasFallingLaunchVelocity();
   const auto current = GetCurrentAnimationId();
   const bool preserve = current.has_value() && IsMovementStandPreservingBehaviorId(
                                                   ResolveAnimationBehaviorId(owner_, *current));
+  const std::uint16_t fallback_animation =
+      launched_jump ? render::AnimId::kJumpStart
+                    : static_cast<std::uint16_t>(kFallAnimationId);
   ApplySelectedStandAnimation(
-      preserve ? *current : static_cast<std::uint16_t>(kFallAnimationId), 0u);
+      preserve ? *current : fallback_animation, 0u);
   return true;
 }
 

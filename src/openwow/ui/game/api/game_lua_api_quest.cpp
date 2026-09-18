@@ -4,6 +4,7 @@
 #include "openwow/data/formats/dbc/dbc_loader.h"
 #include "openwow/data/formats/dbc/dbc_structures.h"
 #include "openwow/debug/diagnostics/debug_console.h"
+#include "openwow/foundation/diagnostics/logging.h"
 #include "openwow/game/gossip_manager.h"
 #include "openwow/game/actions/held_cursor/adapters/platform/cursor_surface.h"
 #include "openwow/game/group_system.h"
@@ -1693,7 +1694,7 @@ int LuaGetQuestLogTitle(lua_State *L) {
     lua_pushnil(L);
     lua_pushnumber(L, 0);
     lua_pushnil(L);
-    lua_pushnumber(L, 0);
+    lua_pushwowbool(L, false);
     lua_pushnil(L);
     lua_pushnil(L);
     lua_pushnil(L);
@@ -1707,7 +1708,7 @@ int LuaGetQuestLogTitle(lua_State *L) {
     lua_pushnil(L);
     lua_pushnumber(L, 0);
     lua_pushnil(L);
-    lua_pushnumber(L, 0);
+    lua_pushwowbool(L, false);
     lua_pushnil(L);
     lua_pushnil(L);
     lua_pushnil(L);
@@ -1718,6 +1719,20 @@ int LuaGetQuestLogTitle(lua_State *L) {
 
   const auto &ie = interleaved[static_cast<std::size_t>(index - 1)];
 
+  // Diagnostiek: laat per aanroep zien wat de native teruggeeft. Nodig omdat
+  // een klik op een questregel in het log `questlog expand header index=N`
+  // veroorzaakt -- de header-tak dus -- terwijl een losse /run-probe op
+  // dezelfde index isHeader=0 rapporteert.
+  if (openwow::diagnostics::IsLogEnabled(
+          openwow::diagnostics::LogLevel::kDebug)) {
+    openwow::diagnostics::Log(
+        openwow::diagnostics::LogLevel::kDebug,
+        "GetQuestLogTitle index=" + std::to_string(index) +
+            " is_header=" + (ie.is_header ? "1" : "0") +
+            " collapsed=" + (ie.collapsed ? "1" : "0") +
+            " visible=" + std::to_string(interleaved.size()));
+  }
+
   if (ie.is_header) {
 
     if (ie.header_name.empty()) {
@@ -1727,9 +1742,15 @@ int LuaGetQuestLogTitle(lua_State *L) {
     }
     lua_pushnumber(L, 0);
     lua_pushnil(L);
-    lua_pushnumber(L, 0);
+    // 1.12-contract (QuestLogFrame.lua:137 en :562-565):
+    //   title, level, questTag, isHeader, isCollapsed, isComplete.
+    // Hier stond 0 / 1.0 / collapsed, dus de client zag ELKE zone-header als
+    // gewone quest: geen plus/min-icoon, geen fold-gedrag, en een header die
+    // als quest te selecteren was. Gemeten met het debugkanaal:
+    // `GetQuestLogTitle(1)` gaf "Valley of Trials" met isHeader=0.
     lua_pushnumber(L, 1.0);
     lua_pushwowbool(L, ie.collapsed);
+    lua_pushnumber(L, 0);
     lua_pushnil(L);
     lua_pushnil(L);
     lua_pushnumber(L, 0);
@@ -1743,7 +1764,13 @@ int LuaGetQuestLogTitle(lua_State *L) {
   if (tmpl && !tmpl->title.empty()) {
     lua_pushstring(L, tmpl->title.c_str());
   } else {
-    lua_pushnil(L);
+    // Nooit nil: de client-Lua doet in de quest-tak onvoorwaardelijk
+    // `questLogTitle:SetText("  "..questLogTitleText)` (QuestLogFrame.lua:164)
+    // en `QuestLogDummyText:SetText("  "..questLogTitleText)` (:166). Met nil
+    // klapt dat met "attempt to concatenate local 'questLogTitleText'".
+    // Het template kan nog onderweg zijn (GetOrRequestQuestTemplate vraagt het
+    // juist async op), dus een lege titel is hier de juiste weergave.
+    lua_pushstring(L, "");
   }
 
   const auto *player = session->objects().GetLocalPlayerTyped();
@@ -1769,11 +1796,21 @@ int LuaGetQuestLogTitle(lua_State *L) {
       lua_pushnil(L);
   }
 
-  lua_pushnumber(L, tmpl ? static_cast<lua_Number>(tmpl->suggested_players) : 0);
+  // Zelfde contract: positie 4 is isHeader, 5 isCollapsed, 6 isComplete.
+  // suggested_players schuift naar positie 7 (extra, buiten het 1.12-contract).
+  //
+  // LET OP: hier moet nil/false staan, geen getal. In Lua 5.0 is het getal 0
+  // TRUTHY -- alleen nil en false zijn falsy. Met lua_pushnumber(L, 0) zag de
+  // Lua ELKE quest als zone-header: QuestLogFrame.lua:138 nam de header-tak,
+  // zette een plus/min-icoon op de questregel (i.p.v. SetNormalTexture("") op
+  // :154) en riep via QuestLog_SetSelection (:322-330) ExpandQuestHeader aan.
+  // Native viel daarna in de else van SetQuestHeaderCollapsed en deed
+  // SetAllQuestLogHeadersCollapsed. Gemeten in het debug-log:
+  //   GetQuestLogTitle index=2 is_header=0
+  //   questlog expand header index=2
+  lua_pushwowbool(L, false);
 
-  lua_pushnil(L);
-
-  lua_pushnil(L);
+  lua_pushwowbool(L, false);
 
   if (entry.status == ::openwow::game::QuestStatus::kFailed) {
     lua_pushnumber(L, -1.0);
@@ -1783,6 +1820,8 @@ int LuaGetQuestLogTitle(lua_State *L) {
   } else {
     lua_pushnil(L);
   }
+
+  lua_pushnumber(L, tmpl ? static_cast<lua_Number>(tmpl->suggested_players) : 0);
 
   if (tmpl && HasFlag(tmpl->flags, ::openwow::game::QuestFlags::kDaily))
     lua_pushnumber(L, 1.0);
@@ -1845,25 +1884,40 @@ int LuaSelectQuestLogEntry(lua_State *L) {
   }
 
   const int index = TruncateLuaNumberToSseI32(lua_tonumber(L, 1));
-  s_selected_quest_log_index = 0;
-  s_selected_quest_id = 0;
-  ::openwow::game::QuestLog::Get().SelectQuest(0);
+  auto *session = GetWorldSession(L);
   auto *minimap = MinimapStateOrNull(L);
-  if (minimap != nullptr) {
-    ClearSelectedQuestGuidePointOfInterest(*minimap);
+
+  const auto clear_selection = [&]() {
+    s_selected_quest_log_index = 0;
+    s_selected_quest_id = 0;
+    ::openwow::game::QuestLog::Get().SelectQuest(0);
+    if (minimap != nullptr) {
+      ClearSelectedQuestGuidePointOfInterest(*minimap);
+    }
+  };
+
+  if (session == nullptr || index < 1) {
+    clear_selection();
+    return 0;
   }
 
-  auto *session = GetWorldSession(L);
-  if (session) {
-    const auto quest_id = ResolveQuestIdFromInterleavedIndex(*session, index);
-    if (quest_id != 0) {
-      s_selected_quest_log_index = index;
-      s_selected_quest_id = quest_id;
-      ::openwow::game::QuestLog::Get().SelectQuest(quest_id);
-      if (minimap != nullptr) {
-        RefreshSelectedQuestGuidePointOfInterest(*session, *minimap);
-      }
-    }
+  // 1.12: een zone-header is geen selecteerbare regel. QuestLog_SetSelection
+  // (:311-330) roept SelectQuestLogEntry(index) aan voor ELKE aangeklikte regel
+  // en kijkt pas daarna of het een header is; die tak doet alleen
+  // Expand/CollapseQuestHeader en laat het detailpaneel met rust. Wissen we hier
+  // de selectie, dan wordt GetQuestLogSelection() 0, vuurt de re-couple in
+  // QuestLog_Update (:289-299) en zet die de header als selectie -- precies het
+  // gedrag dat de echte 1.12-client niet heeft. Laat de selectie dus staan.
+  const auto quest_id = ResolveQuestIdFromInterleavedIndex(*session, index);
+  if (quest_id == 0) {
+    return 0;
+  }
+
+  s_selected_quest_log_index = index;
+  s_selected_quest_id = quest_id;
+  ::openwow::game::QuestLog::Get().SelectQuest(quest_id);
+  if (minimap != nullptr) {
+    RefreshSelectedQuestGuidePointOfInterest(*session, *minimap);
   }
   return 0;
 }
@@ -3470,6 +3524,16 @@ int LuaExpandQuestHeader(lua_State *L) {
   }
 
   const int index = static_cast<int>(lua_tointeger(L, 1));
+  // Diagnostiek: laat zien welke tak de klik op een zone-header kiest.
+  // QuestLog_SetSelection (QuestLogFrame.lua:311-330) kiest Expand als de
+  // client de header als ingeklapt ziet en Collapse anders; een klik die
+  // niets doet betekent dus dat hier Expand langskomt terwijl de lijst open is.
+  if (openwow::diagnostics::IsLogEnabled(
+          openwow::diagnostics::LogLevel::kDebug)) {
+    openwow::diagnostics::Log(openwow::diagnostics::LogLevel::kDebug,
+                              "questlog expand header index=" +
+                                  std::to_string(index));
+  }
   if (SetQuestHeaderCollapsed(GetWorldSession(L), index, false)) {
     ScriptEventDispatch::Get().FireQuestLogUpdate();
   }
@@ -3482,6 +3546,12 @@ int LuaCollapseQuestHeader(lua_State *L) {
   }
 
   const int index = static_cast<int>(lua_tointeger(L, 1));
+  if (openwow::diagnostics::IsLogEnabled(
+          openwow::diagnostics::LogLevel::kDebug)) {
+    openwow::diagnostics::Log(openwow::diagnostics::LogLevel::kDebug,
+                              "questlog collapse header index=" +
+                                  std::to_string(index));
+  }
   if (SetQuestHeaderCollapsed(GetWorldSession(L), index, true)) {
     ScriptEventDispatch::Get().FireQuestLogUpdate();
   }
@@ -3823,9 +3893,24 @@ int LuaGetQuestLogSpecialItemInfo(lua_State *L) {
 
 int LuaGetQuestLogSelection(lua_State *L) {
   auto *session = GetWorldSession(L);
+  // 1.12 geeft de OPEGESLAGEN selectie-index terug, ook als die regel door een
+  // ingeklapte zone buiten de zichtbare lijst valt. Die index mag NIET herleid
+  // worden uit de zichtbare regels en niet geclamped worden: dan wordt de waarde
+  // 0 en vuurt de vanilla re-couple
+  //   if ( GetQuestLogSelection() == 0 ) then QuestLog_SetFirstValidSelection() end
+  // (QuestLogFrame.lua:297-298). Die komt via QuestLog_GetFirstSelectableQuest
+  // (:568-580) op de ENIGE zichtbare regel uit -- de zone-header -- waarna
+  // QuestLog_SetSelection (:325-332) die als ingeklapt ziet en ExpandQuestHeader
+  // aanroept: het inklappen wordt binnen 1 ms weer teruggedraaid. Gemeten in het
+  // log:
+  //   questlog collapse header index=1
+  //   questlog expand header index=1
+  // Bij een waarde > 0 slaat de re-couple over en blijft het detailpaneel via
+  // QuestLog_OnEvent (:64-65) de geselecteerde quest tonen.
   const int selected =
-      session ? FindSelectedInterleavedQuestIndex(*session, s_selected_quest_id) : -1;
-  lua_pushnumber(L, selected >= 0 ? selected + 1 : 0);
+      session ? FindInterleavedQuestIndexById(*session, s_selected_quest_id) : 0;
+
+  lua_pushnumber(L, static_cast<lua_Number>(selected));
   return 1;
 }
 

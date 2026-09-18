@@ -24,6 +24,7 @@
 #include "openwow/game/achievements/application/tracked_achievement_state.h"
 #include "openwow/game/arena_system.h"
 #include "openwow/game/arena_team.h"
+#include "openwow/game/aura_descriptor_sync.h"
 #include "openwow/game/aura_tracker.h"
 #include "openwow/game/barber_shop.h"
 #include "openwow/game/battlefield_info.h"
@@ -51,6 +52,7 @@
 #include "openwow/game/objects/cgdynamicobject.h"
 #include "openwow/game/objects/cggameobject.h"
 #include "openwow/game/objects/cgunit.h"
+#include "openwow/game/update_fields.h"
 #include "openwow/game/unit_vehicle.h"
 #include "openwow/game/vehicle_passenger.h"
 #include "openwow/game/player_control_runtime.h"
@@ -924,6 +926,13 @@ WorldSession::WorldSession(openwow::data::DBCacheRuntime& db_cache_runtime,
     RetryPendingTextEmotesForGuid(obj.GetGuid(), false);
     TryBindGameObjectTemplateInfo(obj);
     RefreshCreatedGameObjectQuestgiverStatus(obj);
+    // Create-pad van de referentie (0x607380): een unit met de QUESTGIVER- of
+    // FLIGHTMASTER-bit krijgt zijn dialogstatus meteen gevraagd, ook als er geen
+    // sessie-event langskomt. Zonder dit blijft een NPC die pas later in beeld
+    // komt zonder !/? staan, en doet rechtsklikken op een pure questgiver niets.
+    if (obj.IsUnit()) {
+      RequestQuestgiverStatusFor(obj.GetGuid(), false);
+    }
     TryRegisterCapturePointObject(obj);
     BattlefieldInfo::Get().ObserveBattlefieldVehicle(obj, dbc_);
 
@@ -1790,6 +1799,61 @@ void WorldSession::TickBotDetected(
   Send(packet);
 }
 
+namespace {
+
+// 1.12 `SMSG_UPDATE_AURA_DURATION` (0x137): u8 descriptor-slot + u32 resterende
+// duur in ms (Source Spells/SpellAuras.cpp:7596-7607). De descriptor-slot wordt
+// via UNIT_FIELD_AURA naar de spell vertaald en daarmee naar de tracker-aura
+// (buffs 0..55, debuffs 56..119).
+void HandleUpdateAuraDurationPacket(WorldSession &session,
+                                    const net::wotlk::WorldPacket &pkt) {
+  PacketReader aura_reader(pkt.payload.data(), pkt.payload.size());
+  std::uint8_t aura_slot = 0;
+  std::uint32_t aura_duration_ms = 0;
+  if (!aura_reader.ReadU8(aura_slot) || !aura_reader.ReadU32(aura_duration_ms)) {
+    return;
+  }
+
+  // Eerst slot-geïndexeerd vastleggen: bij het toetreden tot de map stuurt de
+  // server de duur van alle bestaande auras (Source Objects/Map.cpp:548-550) en
+  // die burst kan aankomen voordat het spelerobject bestaat. Zonder deze stap
+  // staan de timers na een relog uit en pas weer aan na een refresh.
+  SetLocalPlayerAuraDuration(aura_slot, aura_duration_ms);
+
+  const ObjectGuid player_guid = session.objects().GetLocalPlayerGuid();
+  auto *player = session.objects().GetUnit(player_guid);
+  if (player == nullptr) {
+    return;
+  }
+
+  const std::uint32_t aura_spell_id =
+      player->GetUInt32(UNIT_FIELD_AURA + aura_slot);
+  auto &tracker = AuraTracker::Get();
+  const auto *aura = aura_spell_id != 0
+                         ? tracker.FindAuraBySpell(player_guid, aura_spell_id)
+                         : nullptr;
+  if (openwow::diagnostics::IsLogEnabled(
+          openwow::diagnostics::LogLevel::kDebug)) {
+    openwow::diagnostics::Log(
+        openwow::diagnostics::LogLevel::kDebug,
+        "aura duration pkt slot=" + std::to_string(aura_slot) +
+            " ms=" + std::to_string(aura_duration_ms) +
+            " spell=" + std::to_string(aura_spell_id) +
+            " tracker_found=" + (aura != nullptr ? "1" : "0"));
+  }
+  if (aura != nullptr) {
+    AuraData updated = *aura;
+    updated.duration = aura_duration_ms;
+    updated.expiration = core::GameClock::GetTickCount32() + aura_duration_ms;
+    tracker.SetAura(player_guid, updated.slot, updated);
+  }
+
+  SetDescriptorAuraDuration(player_guid.GetRawValue(), aura_slot,
+                            aura_duration_ms);
+}
+
+}  // namespace
+
 bool WorldSession::HandlePacket(const net::wotlk::WorldPacket &pkt) {
 
   if (net::PacketLog::Get().IsEnabled()) {
@@ -1800,6 +1864,16 @@ bool WorldSession::HandlePacket(const net::wotlk::WorldPacket &pkt) {
 
   using Op = net::wotlk::Opcode;
   const auto op = pkt.GetOpcode();
+
+  // 1.12 hergebruikt 0x137 voor SMSG_UPDATE_AURA_DURATION. Onze 3.3.5-enum
+  // noemt die waarde SMSG_EQUIPMENT_SET_SAVED; WotLK-only en 1.12 stuurt het
+  // nooit. Dit moet VÓÓR de packet_dispatcher_: die blijkt een handler op deze
+  // waarde te hebben die het pakket anders opeet -- offline gemeten:
+  // HandlePacket gaf true, geen "unhandled opcode", en de aura-duur bleef 0.
+  if (op == Op::SMSG_EQUIPMENT_SET_SAVED) {
+    HandleUpdateAuraDurationPacket(*this, pkt);
+    return true;
+  }
 
   const bool world_session_owns_map_lifecycle =
       op == Op::SMSG_UPDATE_OBJECT ||
@@ -2629,8 +2703,10 @@ bool WorldSession::HandlePacket(const net::wotlk::WorldPacket &pkt) {
     HandleBuyBankSlotResultPacket(pkt);
     return true;
 
+  // 1.12: 0x137 is SMSG_UPDATE_AURA_DURATION. Wordt hierboven al afgehandeld,
+  // vóór de packet_dispatcher_; deze tak houdt de enum-waarde consistent.
   case Op::SMSG_EQUIPMENT_SET_SAVED:
-    HandleEquipmentSetSavedPacket(equipment_, pkt);
+    HandleUpdateAuraDurationPacket(*this, pkt);
     return true;
   case Op::SMSG_READ_ITEM_OK:
     if (const auto item = decode_read_ok(pkt.payload)) {

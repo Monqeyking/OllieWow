@@ -6,6 +6,7 @@
 #include "openwow/game/pvp_info.h"
 #include "openwow/game/reputation_info.h"
 #include "openwow/game/spellbook_system.h"
+#include "openwow/game/unit_cursor_policy.h"
 
 #include "openwow/audio/playback/sound_runtime.h"
 #include "openwow/audio/playback/sound_settings.h"
@@ -859,56 +860,13 @@ void RefreshCombatBindingState(openwow::game::BindingProfiles &key_bindings,
   key_bindings.SetCurrentBindingStateBit(1, use_combat_binding_slot);
 }
 
-constexpr std::uint32_t kUnavailableCursorTypeOffset = 26u;
-constexpr std::uint32_t kCursorTypeBuy = 3u;
-constexpr std::uint32_t kCursorTypeAttack = 4u;
-constexpr std::uint32_t kCursorTypeInteract = 5u;
-constexpr std::uint32_t kCursorTypeSpeak = 6u;
-constexpr std::uint32_t kCursorTypePickup = 8u;
-constexpr std::uint32_t kCursorTypeTaxi = 9u;
-constexpr std::uint32_t kCursorTypeTrainer = 10u;
-constexpr std::uint32_t kCursorTypeMine = 11u;
-constexpr std::uint32_t kCursorTypeSkin = 12u;
-constexpr std::uint32_t kCursorTypeGatherHerbs = 13u;
-constexpr std::uint32_t kCursorTypeLootAll = 16u;
-constexpr std::uint32_t kCursorTypeRepairNpc = 18u;
-constexpr std::uint32_t kCursorTypeSkinHorde = 20u;
-constexpr std::uint32_t kCursorTypeSkinAlliance = 21u;
-constexpr std::uint32_t kCursorTypeInnkeeper = 22u;
-constexpr std::uint32_t kCursorTypeVehicle = 26u;
-
-// 1.12/Classic-nummering; zie Source\src\game\Objects\UnitDefines.h.
-constexpr std::uint32_t kCursorNpcFlagGossip = 0x00000001u;
-constexpr std::uint32_t kCursorNpcFlagVendor = 0x00000004u;
-constexpr std::uint32_t kCursorNpcFlagFlightMaster = 0x00000008u;
-constexpr std::uint32_t kCursorNpcFlagTrainer = 0x00000010u;
-constexpr std::uint32_t kCursorNpcFlagSpiritHealer = 0x00000020u;
-constexpr std::uint32_t kCursorNpcFlagSpiritGuide = 0x00000040u;
-constexpr std::uint32_t kCursorNpcFlagInnkeeper = 0x00000080u;
-constexpr std::uint32_t kCursorNpcFlagBanker = 0x00000100u;
-constexpr std::uint32_t kCursorNpcFlagPetitioner = 0x00000200u;
-constexpr std::uint32_t kCursorNpcFlagTabardDesigner = 0x00000400u;
-constexpr std::uint32_t kCursorNpcFlagBattlemaster = 0x00000800u;
-constexpr std::uint32_t kCursorNpcFlagAuctioneer = 0x00001000u;
-constexpr std::uint32_t kCursorNpcFlagStableMaster = 0x00002000u;
-constexpr std::uint32_t kCursorNpcFlagRepair = 0x00004000u;
-// Bestaat niet in 1.12; beide bits zijn daar ongebruikt, dus deze twee checks
-// vuren nooit. Laten staan zodat de bedoeling leesbaar blijft.
-constexpr std::uint32_t kCursorNpcFlagGuildBanker = 0x00800000u;
-constexpr std::uint32_t kCursorNpcFlagSpellClick = 0x01000000u;
-
-constexpr float kNpcServiceCursorReachPadding = 4.0f;
-
-[[nodiscard]] std::uint32_t ApplyUnavailableCursorOffset(const std::uint32_t base_type,
-                                                         const bool unavailable) {
-  return unavailable ? base_type + kUnavailableCursorTypeOffset : base_type;
-}
-
 [[nodiscard]] bool IsMouseoverNpcServiceOutOfRange(const CGPlayer_C &active_player,
                                                    const CGUnit_C &unit) {
-  const float reach = unit.State().GetCombatReach() + kNpcServiceCursorReachPadding;
+  // Vaste 5.5556 yd (30.864 gekwadrateerd), niet de combat-reach: de client
+  // vergelijkt met die constante (`0x482320`, grens-inclusief). Benilla
+  // target/cursor_mode.rs:169-173.
   const float distance = active_player.GetDistance(unit);
-  return distance * distance > reach * reach;
+  return NpcServiceCursorOutOfRange(distance * distance);
 }
 
 constexpr std::uint32_t kFactionGroupBitAlliance = 0x2u;
@@ -957,54 +915,18 @@ enum class RetailTeamIndex : int { kUnknown = -1, kHorde = 0, kAlliance = 1 };
   if (!status.has_value()) {
     return 0u;
   }
-  return ResolveQuestGiverRetailCursorType(*status, out_of_range);
+  // De opgeslagen waarde is de ruwe 1.12-status (0..7). De 1.12-client toont
+  // hier de gewone praat-cursor; de 3.3.5 Quest/QuestTurnIn-cursors bestaan in
+  // 1.12 niet en leverden dus helemaal geen cursor op.
+  return ResolveQuestGiverCursorType(static_cast<std::uint32_t>(*status),
+                                     out_of_range);
 }
 
 [[nodiscard]] std::uint32_t ResolveMouseoverNpcServiceCursorType(const std::uint32_t npc_flags,
                                                                  const bool out_of_range) {
-  const auto with_offset = [out_of_range](const std::uint32_t base_type) {
-    return ApplyUnavailableCursorOffset(base_type, out_of_range);
-  };
-
-  if ((npc_flags & kCursorNpcFlagRepair) != 0u) {
-    return with_offset(kCursorTypeRepairNpc);
-  }
-  if ((npc_flags & kCursorNpcFlagInnkeeper) != 0u) {
-    return with_offset(kCursorTypeInnkeeper);
-  }
-  if ((npc_flags & kCursorNpcFlagFlightMaster) != 0u) {
-    return with_offset(kCursorTypeTaxi);
-  }
-  if ((npc_flags & kCursorNpcFlagTrainer) != 0u) {
-    return with_offset(kCursorTypeTrainer);
-  }
-  if ((npc_flags & (kCursorNpcFlagSpiritHealer | kCursorNpcFlagSpiritGuide)) != 0u) {
-    return with_offset(kCursorTypeSpeak);
-  }
-  if ((npc_flags & (kCursorNpcFlagBanker | kCursorNpcFlagGuildBanker)) != 0u) {
-    return with_offset(kCursorTypeBuy);
-  }
-  if ((npc_flags & (kCursorNpcFlagPetitioner | kCursorNpcFlagTabardDesigner |
-                    kCursorNpcFlagBattlemaster)) != 0u) {
-    return with_offset(kCursorTypeSpeak);
-  }
-  if ((npc_flags & kCursorNpcFlagAuctioneer) != 0u) {
-    return with_offset(kCursorTypeBuy);
-  }
-  if ((npc_flags & kCursorNpcFlagStableMaster) != 0u) {
-    return with_offset(kCursorTypeSpeak);
-  }
-
-  if ((npc_flags & kCursorNpcFlagVendor) != 0u) {
-    return with_offset(kCursorTypePickup);
-  }
-  if ((npc_flags & kCursorNpcFlagGossip) != 0u) {
-    return with_offset(kCursorTypeSpeak);
-  }
-  if ((npc_flags & kCursorNpcFlagSpellClick) != 0u) {
-    return with_offset(kCursorTypeInteract);
-  }
-  return 0u;
+  // De 1.12-service-ladder uit unit_cursor_policy.h: laagste bit wint, GOSSIP
+  // eerst, en REPAIR wordt nooit geconsulteerd.
+  return ResolveNpcServiceCursorType(npc_flags, out_of_range);
 }
 
 [[nodiscard]] bool CanInteractWithMouseoverLootTarget(const CGPlayer_C &active_player,

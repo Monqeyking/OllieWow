@@ -61,6 +61,16 @@ if (-not $All -and $changed.Count -eq 0) {
 Write-Host ("Gewijzigd: " + $changed.Count + " bestand(en)") -ForegroundColor Cyan
 $changed | ForEach-Object { Write-Host ('  ' + $_.Substring($repo.Length + 1)) }
 
+# Nieuwste wijzigingstijd van de gewijzigde bronnen. Objecten die daarna al
+# gebouwd zijn, hoeven niet opnieuw -- zie stap 2.
+$newestSourceUtc = $null
+foreach ($src in $changed) {
+  if (Test-Path -LiteralPath $src) {
+    $t = (Get-Item -LiteralPath $src).LastWriteTimeUtc
+    if ($null -eq $newestSourceUtc -or $t -gt $newestSourceUtc) { $newestSourceUtc = $t }
+  }
+}
+
 # --- 2. Geraakte objecten bepalen via ninja's depfiles -----------------------
 Push-Location $build
 try {
@@ -101,12 +111,41 @@ try {
     Write-Host 'Geen geraakte objecten gevonden. Niets te doen.' -ForegroundColor Green
     exit 0
   }
-  Write-Host ("Objecten: " + $objs.Count) -ForegroundColor Cyan
+
+  # Sla objecten over die al nieuwer zijn dan elk gewijzigd bronbestand. Zonder
+  # deze filter herbouwt elke run alles wat van een gewijzigde header afhangt:
+  # cgobject.h raakt ~400 objecten, dus vijf minuten voor een wijziging van één
+  # regel. De LIBS leiden we uit de volledige set af, zodat een eerdere run die
+  # na het compileren afbrak (bijvoorbeeld omdat de client de exe vasthield)
+  # alsnog linkt zonder alles opnieuw te compileren.
+  $compileObjs = $objs
+  if ($null -ne $newestSourceUtc -and -not $All) {
+    $compileObjs = @($objs | Where-Object {
+      $objPath = Join-Path $build $_
+      if (-not (Test-Path -LiteralPath $objPath)) { return $true }
+      return (Get-Item -LiteralPath $objPath).LastWriteTimeUtc -lt $newestSourceUtc
+    })
+    if ($compileObjs.Count -lt $objs.Count) {
+      Write-Host ("Al actueel, overgeslagen: " + ($objs.Count - $compileObjs.Count) + " object(en)") -ForegroundColor DarkGray
+    }
+  }
+  Write-Host ("Objecten: " + $compileObjs.Count + " te compileren van " + $objs.Count) -ForegroundColor Cyan
 
   # --- 3. Compileer- en linkcommando's ophalen -------------------------------
-  $cmds = & $ninja -t commands @objs 2>$null
+  # De objecten gaan als argumenten mee naar 'ninja -t commands'. Raakt een
+  # breed geincludeerde header (cgobject.h zit in ~400 objecten), dan liep die
+  # argumentenlijst tegen de Windows-limiet aan: "Program 'ninja.exe' failed to
+  # run: De bestandsnaam of -extensie is te lang". Daarom in brokken.
+  $cmds = @()
+  if ($compileObjs.Count -gt 0) {
+    $batchSize = 40
+    for ($offset = 0; $offset -lt $compileObjs.Count; $offset += $batchSize) {
+      $last = [Math]::Min($offset + $batchSize - 1, $compileObjs.Count - 1)
+      $cmds += & $ninja -t commands @($compileObjs[$offset..$last]) 2>$null
+    }
+  }
   $compile = @($cmds | Where-Object { $_ -match 'cl\.exe' -and $_ -match '\s-c\s' } | Sort-Object -Unique)
-  if ($compile.Count -eq 0) { throw "Geen compileercommando's gevonden." }
+  if ($compileObjs.Count -gt 0 -and $compile.Count -eq 0) { throw "Geen compileercommando's gevonden." }
 
   $libs = New-Object System.Collections.Generic.HashSet[string]
   foreach ($o in $objs) {
@@ -136,36 +175,87 @@ try {
   }
   Write-Host ("Compiles: " + $compile.Count + "   Links: " + $links.Count) -ForegroundColor Cyan
 
-  # --- 4. Uitvoeren via een .bat met de MSVC-omgeving ------------------------
-  $batLines = New-Object System.Collections.Generic.List[string]
-  $batLines.Add('@echo off')
-  $batLines.Add('call "' + $vcvars + '" >nul 2>&1')
-  $logFile = Join-Path $build 'dev-build.log'
-  $i = 0
-  foreach ($c in $compile) {
-    $i++
-    $batLines.Add('echo compile ' + $i + '/' + $compile.Count)
-    $batLines.Add($c + ' > "' + $logFile + '" 2>&1')
-    $batLines.Add('if errorlevel 1 (echo COMPILE_FAILED_' + $i + ' & powershell -NoProfile -Command "Get-Content ''' + $logFile + ''' -Tail 30" & exit /b 1)')
-    # De link/compile kan via een CMake-wrapper lopen die ondanks een fout toch 0
-    # teruggeeft; daarom ook de log zelf nakijken op foutmarkers.
-    $batLines.Add('findstr /I /C:"fatal error" /C:"error LNK" /C:"error C2" /C:"error C3" "' + $logFile + '" >nul 2>&1')
-    $batLines.Add('if not errorlevel 1 (echo COMPILE_LOG_ERROR_' + $i + ' & powershell -NoProfile -Command "Get-Content ''' + $logFile + ''' -Tail 30" & exit /b 1)')
+  # --- 4. Uitvoeren via .bat-bestanden met de MSVC-omgeving ----------------
+  # De compilatie gaat in N parallelle bats. Sequentieel kostte een brede
+  # header (cgobject.h raakt ~400 objecten) bijna een uur; met N workers is
+  # dat een paar minuten. De LINKS blijven sequentieel -- die schrijven
+  # gedeelde uitvoerbestanden.
+  $logDir = $build
+  $workers = [Math]::Min(16, [Math]::Max(1, [int]([Environment]::ProcessorCount / 2)))
+  if ($compile.Count -lt 8) { $workers = 1 }
+
+  $chunks = @()
+  for ($w = 0; $w -lt $workers; $w++) { $chunks += ,(New-Object System.Collections.Generic.List[string]) }
+  $idx = 0
+  foreach ($c in $compile) { $chunks[$idx % $workers].Add($c); $idx++ }
+
+  $procs = @()
+  for ($w = 0; $w -lt $workers; $w++) {
+    if ($chunks[$w].Count -eq 0) { continue }
+    $logFile = Join-Path $logDir ('dev-build-' + $w + '.log')
+    $batLines = New-Object System.Collections.Generic.List[string]
+    $batLines.Add('@echo off')
+    $batLines.Add('call "' + $vcvars + '" >nul 2>&1')
+    $i = 0
+    foreach ($c in $chunks[$w]) {
+      $i++
+      $batLines.Add('echo compile ' + $i + '/' + $chunks[$w].Count)
+      $batLines.Add($c + ' > "' + $logFile + '" 2>&1')
+      $batLines.Add('if errorlevel 1 (echo COMPILE_FAILED & powershell -NoProfile -Command "Get-Content ''' + $logFile + ''' -Tail 30" & exit /b 1)')
+      # Een CMake-wrapper kan ondanks een fout toch 0 teruggeven; kijk de log na.
+      $batLines.Add('findstr /I /C:"fatal error" /C:"error LNK" /C:"error C2" /C:"error C3" "' + $logFile + '" >nul 2>&1')
+      $batLines.Add('if not errorlevel 1 (echo COMPILE_LOG_ERROR & powershell -NoProfile -Command "Get-Content ''' + $logFile + ''' -Tail 30" & exit /b 1)')
+    }
+    # Sentinelbestand in plaats van de exitcode van het Process-object:
+    # Start-Process -PassThru met -RedirectStandardOutput laat ExitCode null, en
+    # $null -ne 0 is waar -- dan geldt elk geslaagd werk als mislukt. De bat
+    # schrijft dit bestand alleen als alle compiles van deze worker slaagden.
+    $sentinel = Join-Path $build ('dev-ok-' + $w + '.txt')
+    if (Test-Path $sentinel) { Remove-Item $sentinel -Force }
+    $batLines.Add('echo ok> "' + $sentinel + '"')
+    # Zonder expliciete exit erft de bat het errorlevel van de laatste
+    # findstr-controle, en die geeft 1 terug als hij niets vindt -- het goede geval.
+    $batLines.Add('exit /b 0')
+    $batPath = Join-Path $build ('dev-compile-' + $w + '.bat')
+    $batLines | Set-Content -Path $batPath -Encoding ASCII
+    $outFile = Join-Path $logDir ('dev-compile-' + $w + '.out')
+    $procs += Start-Process -FilePath 'cmd.exe' -ArgumentList '/D','/S','/C', $batPath -NoNewWindow -PassThru -RedirectStandardOutput $outFile -RedirectStandardError ($outFile + '.err')
   }
+
+  Write-Host ('Compileren met ' + $procs.Count + ' workers...') -ForegroundColor Cyan
+  foreach ($p in $procs) { $p.WaitForExit() }
+  $failed = @()
+  for ($w = 0; $w -lt $workers; $w++) {
+    if ($chunks[$w].Count -eq 0) { continue }
+    if (-not (Test-Path (Join-Path $build ('dev-ok-' + $w + '.txt')))) { $failed += $w }
+  }
+  if ($failed.Count -gt 0) {
+    foreach ($w in 0..($workers - 1)) {
+      $o = Join-Path $logDir ('dev-compile-' + $w + '.out')
+      if (Test-Path $o) { Write-Host ('--- worker ' + $w + ' ---') -ForegroundColor Yellow; Get-Content $o -Tail 20 }
+    }
+    throw 'Compilatie mislukt.'
+  }
+
+  # --- 5. Linken (sequentieel) ---------------------------------------------
+  $linkLog = Join-Path $logDir 'dev-link.log'
+  $linkLines = New-Object System.Collections.Generic.List[string]
+  $linkLines.Add('@echo off')
+  $linkLines.Add('call "' + $vcvars + '" >nul 2>&1')
   foreach ($c in $links) {
     $out = ([regex]::Match($c, '(?i)/out:(\S+)')).Groups[1].Value
-    $batLines.Add('echo link ' + $out)
-    $batLines.Add($c + ' > "' + $logFile + '" 2>&1')
-    $batLines.Add('if errorlevel 1 (echo LINK_FAILED ' + $out + ' & powershell -NoProfile -Command "Get-Content ''' + $logFile + ''' -Tail 30" & exit /b 1)')
-    $batLines.Add('findstr /I /C:"fatal error" /C:"error LNK" "' + $logFile + '" >nul 2>&1')
-    $batLines.Add('if not errorlevel 1 (echo LINK_LOG_ERROR ' + $out + ' & powershell -NoProfile -Command "Get-Content ''' + $logFile + ''' -Tail 30" & exit /b 1)')
+    $linkLines.Add('echo link ' + $out)
+    $linkLines.Add($c + ' > "' + $linkLog + '" 2>&1')
+    $linkLines.Add('if errorlevel 1 (echo LINK_FAILED ' + $out + ' & powershell -NoProfile -Command "Get-Content ''' + $linkLog + ''' -Tail 30" & exit /b 1)')
+    $linkLines.Add('findstr /I /C:"fatal error" /C:"error LNK" "' + $linkLog + '" >nul 2>&1')
+    $linkLines.Add('if not errorlevel 1 (echo LINK_LOG_ERROR ' + $out + ' & powershell -NoProfile -Command "Get-Content ''' + $linkLog + ''' -Tail 30" & exit /b 1)')
   }
-  $batLines.Add('echo DEV_BUILD_OK')
-  $batPath = Join-Path $build 'dev-build.bat'
-  $batLines | Set-Content -Path $batPath -Encoding ASCII
+  $linkLines.Add('echo DEV_BUILD_OK')
+  $linkPath = Join-Path $build 'dev-link.bat'
+  $linkLines | Set-Content -Path $linkPath -Encoding ASCII
 
-  & cmd.exe /D /S /C $batPath
-  if ($LASTEXITCODE -ne 0) { throw ('Build mislukt (exit ' + $LASTEXITCODE + '). Zie ' + $logFile) }
+  & cmd.exe /D /S /C $linkPath
+  if ($LASTEXITCODE -ne 0) { throw ('Linken mislukt (exit ' + $LASTEXITCODE + '). Zie ' + $linkLog) }
 } finally { Pop-Location }
 
 $elapsed = [int]((Get-Date) - $started).TotalSeconds

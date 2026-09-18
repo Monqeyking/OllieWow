@@ -1344,6 +1344,18 @@ void TooltipSystem::ClearLines() {
   status_bar_value_ = 0.0f;
   pending_money_script_.reset();
 
+  // De client-FrameXML ruimt het geld-frame op in OnTooltipCleared
+  // (GameTooltipTemplate.xml:624 -> GameTooltip_ClearMoney, GameTooltip.lua:94).
+  // Onze C++ ClearLines() vuurt die handler niet, waardoor een bedrag uit een
+  // eerdere item-hover in de tooltip bleef staan -- zichtbaar op buff-tooltips.
+  if (auto *const manager =
+          openwow::ui::game::runtime::WorldUiRuntimeContext::FromActiveLua();
+      manager != nullptr && manager->is_initialized()) {
+    if (lua_State *const lua = manager->lua_state(); lua != nullptr) {
+      (void)CallLuaFrameMethod(lua, "GameTooltipMoneyFrame", "Hide", nullptr);
+    }
+  }
+
   if (!force_min_width_) {
     min_width_ = 0.0f;
   }

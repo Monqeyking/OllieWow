@@ -673,49 +673,40 @@ bool QuestManager::HandleQuestQueryResponse(const std::uint8_t *data, std::size_
     return false;
   if (!r.ReadI32(t.quest_level))
     return false;
-  std::uint32_t min_level;
-  if (!r.ReadU32(min_level))
-    return false;
-  t.min_level = min_level;
-
-  std::uint32_t zone_or_sort, type_, suggested, rep_fac, rep_val, rep_fac2, rep_val2, next_quest,
-      xp_id, rew_money, rew_money_max_level, rew_spell;
-  std::int32_t rew_spell_cast;
-  std::uint32_t rew_honor;
-  float rew_honor_mult;
-  std::uint32_t src_item, flags_raw, char_title, players_slain, bonus_talents, rew_arena, unk0;
-
-  if (!r.ReadU32(zone_or_sort) || !r.ReadU32(type_) || !r.ReadU32(suggested) ||
-      !r.ReadU32(rep_fac) || !r.ReadU32(rep_val) || !r.ReadU32(rep_fac2) || !r.ReadU32(rep_val2) ||
-      !r.ReadU32(next_quest) || !r.ReadU32(xp_id) || !r.ReadU32(rew_money) ||
-      !r.ReadU32(rew_money_max_level) || !r.ReadU32(rew_spell) || !r.ReadI32(rew_spell_cast) ||
-      !r.ReadU32(rew_honor) || !r.ReadFloat(rew_honor_mult) || !r.ReadU32(src_item) ||
-      !r.ReadU32(flags_raw) || !r.ReadU32(char_title) || !r.ReadU32(players_slain) ||
-      !r.ReadU32(bonus_talents) || !r.ReadU32(rew_arena) || !r.ReadU32(unk0))
+  // 1.12-body (Source Handlers/QuestHandler.cpp:300-398): questId, questMethod,
+  // questLevel, zoneOrSort, type, repObjectiveFaction, repObjectiveValue, 0, 0,
+  // nextQuestInChain, money, moneyMaxLevel, rewSpell, srcItemId, questFlags.
+  // De 3.3.5-vorm die hier stond las minLevel/suggestedPlayers/xpId/honor/
+  // charTitle/playerKills/talents/arena en de 5x3 faction-arrays; daardoor
+  // schoof alles na de eerste paar velden op en werd de Title-cstring midden in
+  // de echte titel gelezen ("ng Blade Medallion" i.p.v. "Encroaching Blade
+  // Medallion"). Dit pakket heeft geen Remaining()-check, dus dat faalde stil.
+  std::uint32_t zone_or_sort = 0, type_ = 0, rep_fac = 0, rep_val = 0, rep_zero_a = 0,
+                rep_zero_b = 0, next_quest = 0, rew_money = 0,
+                rew_money_max_level = 0, rew_spell = 0, src_item = 0, flags_raw = 0;
+  if (!r.ReadU32(zone_or_sort) || !r.ReadU32(type_) || !r.ReadU32(rep_fac) ||
+      !r.ReadU32(rep_val) || !r.ReadU32(rep_zero_a) || !r.ReadU32(rep_zero_b) ||
+      !r.ReadU32(next_quest) || !r.ReadU32(rew_money) ||
+      !r.ReadU32(rew_money_max_level) || !r.ReadU32(rew_spell) ||
+      !r.ReadU32(src_item) || !r.ReadU32(flags_raw))
     return false;
 
+  // 1.12 stuurt hier geen minLevel/suggestedPlayers/xpId/rewSpellCast/honor/
+  // charTitle/playerKills/talents/arena en geen faction-arrays; die velden
+  // blijven op hun default staan.
+  t.min_level = 0;
   t.zone_or_sort = zone_or_sort;
   t.type = type_;
-  t.suggested_players = suggested;
   t.required_reputation_faction = rep_fac;
   t.required_reputation_value = static_cast<std::int32_t>(rep_val);
-  t.required_reputation_faction_max = rep_fac2;
-  t.required_reputation_value_max = static_cast<std::int32_t>(rep_val2);
+  t.required_reputation_faction_max = rep_zero_a;
+  t.required_reputation_value_max = static_cast<std::int32_t>(rep_zero_b);
   t.next_quest_in_chain = next_quest;
-  t.xp_id = xp_id;
   t.reward_money = rew_money;
   t.rew_money_max_level = rew_money_max_level;
   t.rew_spell = rew_spell;
-  t.rew_spell_cast = rew_spell_cast;
-  t.rew_honor_addition = rew_honor;
-  t.rew_honor_multiplier = rew_honor_mult;
   t.src_item_id = src_item;
   t.flags = static_cast<QuestFlags>(flags_raw);
-  t.char_title_id = char_title;
-  t.required_player_kills = players_slain;
-  t.bonus_talents = bonus_talents;
-  t.rew_arena_points = rew_arena;
-  t.reward_faction_control = unk0;
 
   for (int i = 0; i < kQuestRewardsCount; ++i)
     if (!r.ReadU32(t.reward_items[i].item_id) || !r.ReadU32(t.reward_items[i].count))
@@ -725,23 +716,16 @@ bool QuestManager::HandleQuestQueryResponse(const std::uint8_t *data, std::size_
     if (!r.ReadU32(t.reward_choice_items[i].item_id) || !r.ReadU32(t.reward_choice_items[i].count))
       return false;
 
-  for (int i = 0; i < kQuestReputationsCount; ++i)
-    if (!r.ReadU32(t.reward_faction_id[i]))
-      return false;
-  for (int i = 0; i < kQuestReputationsCount; ++i)
-    if (!r.ReadI32(t.reward_faction_value[i]))
-      return false;
-  for (int i = 0; i < kQuestReputationsCount; ++i)
-    if (!r.ReadI32(t.reward_faction_value_override[i]))
-      return false;
-
+  // 1.12 heeft hier geen 5x3 faction-arrays en geen aparte
+  // required-item-lijst; de vier strings zijn Title, Objectives, Details en
+  // EndText, in die volgorde (QuestHandler.cpp:373-381).
   if (!r.ReadU32(t.poi_continent) || !r.ReadFloat(t.poi_x) || !r.ReadFloat(t.poi_y))
     return false;
   if (!r.ReadU32(t.poi_option))
     return false;
 
   if (!r.ReadCString(t.title) || !r.ReadCString(t.objectives) || !r.ReadCString(t.details) ||
-      !r.ReadCString(t.area_description) || !r.ReadCString(t.completed_text))
+      !r.ReadCString(t.completed_text))
     return false;
 
   for (int i = 0; i < kQuestObjectivesCount; ++i) {
@@ -755,10 +739,6 @@ bool QuestManager::HandleQuestQueryResponse(const std::uint8_t *data, std::size_
     t.item_drop_objectives[i].item_id = item_drop;
     t.item_drop_objectives[i].required_count = item_drop_count;
   }
-
-  for (int i = 0; i < kQuestItemObjectivesCount; ++i)
-    if (!r.ReadU32(t.item_objectives[i].item_id) || !r.ReadU32(t.item_objectives[i].required_count))
-      return false;
 
   for (int i = 0; i < kQuestObjectivesCount; ++i)
     if (!r.ReadCString(t.npc_or_go_objectives[i].text))
@@ -776,7 +756,11 @@ bool QuestManager::HandleQuestQueryResponse(const std::uint8_t *data, std::size_
 bool QuestManager::HandleQuestGiverQuestDetails(const std::uint8_t *data, std::size_t len) {
   PacketReader r(data, len);
   QuestDetailsDialog d;
-  if (!r.ReadGuid(d.npc_guid) || !r.ReadGuid(d.sharer_guid))
+  // 1.12-body (Source GossipDef.cpp:561-626): één guid, géén sharer_guid, géén
+  // flags/suggested_players en géén accept-byte. De 3.3.5-vorm die hier stond
+  // las een tweede guid en een extra u8/u32/u32, liep daardoor uit de pas en
+  // werd op de Remaining()-check afgewezen -- elk questvenster bleef leeg.
+  if (!r.ReadGuid(d.npc_guid))
     return false;
   if (!r.ReadU32(d.quest_id))
     return false;
@@ -785,17 +769,12 @@ bool QuestManager::HandleQuestGiverQuestDetails(const std::uint8_t *data, std::s
       !r.ReadCString(d.objectives, kQuestTemplateObjectivesSize))
     return false;
 
-  std::uint8_t auto_accept;
-  std::uint32_t flags_raw, suggested;
-  std::uint8_t accept_packet_value = 0;
-  if (!r.ReadU8(auto_accept) || !r.ReadU32(flags_raw) || !r.ReadU32(suggested) ||
-      !r.ReadU8(accept_packet_value))
+  std::uint32_t auto_finish = 0;
+  if (!r.ReadU32(auto_finish))
     return false;
 
-  d.auto_accept = auto_accept != 0;
-  d.quest_flags = static_cast<QuestFlags>(flags_raw);
-  d.suggested_players = suggested;
-  d.accept_packet_value = accept_packet_value;
+  d.auto_accept = auto_finish != 0;
+  d.accept_packet_value = 0;
 
   std::uint32_t choice_count;
   if (!r.ReadU32(choice_count))
@@ -827,37 +806,19 @@ bool QuestManager::HandleQuestGiverQuestDetails(const std::uint8_t *data, std::s
       return false;
   }
 
-  if (!r.ReadU32(d.reward_money))
+  std::int32_t money_or_required = 0;
+  if (!r.ReadI32(money_or_required))
     return false;
-
-  std::uint32_t xp, honor;
-  float honor_mult;
-  std::uint32_t rew_spell;
-  std::int32_t rew_spell_cast;
-  std::uint32_t char_title, bonus_talents, rew_arena, reward_faction_control;
-  if (!r.ReadU32(xp) || !r.ReadU32(honor) || !r.ReadFloat(honor_mult) || !r.ReadU32(rew_spell) ||
-      !r.ReadI32(rew_spell_cast) || !r.ReadU32(char_title) || !r.ReadU32(bonus_talents) ||
-      !r.ReadU32(rew_arena) || !r.ReadU32(reward_faction_control))
+  // 1.12 schrijft hier GetRewOrReqMoney(); negatief betekent "de speler moet
+  // betalen". QuestDetailsDialog heeft geen required_money-veld, dus dan tonen
+  // we geen geldbeloning in plaats van een omgeklapt groot getal.
+  d.reward_money =
+      money_or_required > 0 ? static_cast<std::uint32_t>(money_or_required) : 0;
+  if (!r.ReadU32(d.rew_spell))
     return false;
-
-  d.reward_xp = xp;
-  d.reward_honor = honor;
-  d.rew_spell = rew_spell;
-  d.rew_spell_cast = rew_spell_cast;
-  d.char_title_id = char_title;
-  d.bonus_talents = bonus_talents;
-  d.rew_arena_points = rew_arena;
-  d.reward_faction_control = reward_faction_control;
-
-  for (int i = 0; i < kQuestReputationsCount; ++i)
-    if (!r.ReadU32(d.reward_faction_id[i]))
-      return false;
-  for (int i = 0; i < kQuestReputationsCount; ++i)
-    if (!r.ReadI32(d.reward_faction_value[i]))
-      return false;
-  for (int i = 0; i < kQuestReputationsCount; ++i)
-    if (!r.ReadI32(d.reward_faction_value_override[i]))
-      return false;
+  // 1.12 stuurt hier geen xp/honor/honor-multiplier/faction-arrays; die staan in
+  // SMSG_QUEST_QUERY_RESPONSE (quest-template). De bijbehorende velden blijven
+  // daarom op hun default staan.
 
   std::uint32_t emote_count;
   if (!r.ReadU32(emote_count))
@@ -905,13 +866,16 @@ bool QuestManager::HandleQuestGiverRequestItems(const std::uint8_t *data, std::s
 
   std::uint32_t emote_delay = 0;
   std::uint32_t emote_id = 0;
-  std::uint32_t progress_state = 0;
-  std::uint32_t flags_raw = 0;
-  if (!r.ReadU32(emote_delay) || !r.ReadU32(emote_id) || !r.ReadU32(progress_state) ||
-      !r.ReadU32(flags_raw) || !r.ReadU32(d.suggested_players) || !r.ReadU32(d.required_money))
+  std::uint32_t close_on_cancel = 0;
+  // 1.12-body (Source GossipDef.cpp:789-858): emote delay, emote id,
+  // close-on-cancel, required money, itemcount, items en dan de vier
+  // gates 0x02/flags1/0x04/0x08. Geen flags- of suggested_players-veld; die
+  // 3.3.5-velden schoven alles vanaf required_money een plek op.
+  if (!r.ReadU32(emote_delay) || !r.ReadU32(emote_id) || !r.ReadU32(close_on_cancel) ||
+      !r.ReadU32(d.required_money))
     return false;
-  d.quest_flags = static_cast<QuestFlags>(flags_raw);
-  d.close_on_decline = progress_state != 0;
+  d.quest_flags = QuestFlags::kNone;
+  d.close_on_decline = close_on_cancel != 0;
 
   if (emote_delay != 0 || emote_id != 0) {
     d.emotes.push_back({.delay = emote_delay, .emote_id = emote_id});
@@ -968,12 +932,15 @@ bool QuestManager::HandleQuestGiverOfferReward(const std::uint8_t *data, std::si
   if (!r.ReadCString(d.title) || !r.ReadCString(d.reward_text))
     return false;
 
-  std::uint8_t dialog_state = 0;
-  std::uint32_t flags_raw = 0;
-  if (!r.ReadU8(dialog_state) || !r.ReadU32(flags_raw) || !r.ReadU32(d.suggested_players))
+  // 1.12-body (Source GossipDef.cpp:697-748): na de twee strings volgt direct
+  // een u32 "auto finish"/EnableNext; geen u8-dialog-state, flags of
+  // suggested_players zoals in 3.3.5.
+  std::uint32_t enable_next = 0;
+  if (!r.ReadU32(enable_next))
     return false;
-  d.quest_flags = static_cast<QuestFlags>(flags_raw);
-  d.close_on_decline = dialog_state != 0;
+  d.quest_flags = QuestFlags::kNone;
+  d.enable_next = enable_next != 0;
+  d.close_on_decline = d.enable_next;
 
   std::uint32_t emote_count = 0;
   if (!r.ReadU32(emote_count))
@@ -1019,40 +986,17 @@ bool QuestManager::HandleQuestGiverOfferReward(const std::uint8_t *data, std::si
       return false;
   }
 
-  std::int32_t reward_money_or_required_money = 0;
-  std::uint32_t reward_faction_control = 0;
-  std::uint32_t reward_honor = 0;
-  float reward_honor_multiplier = 0.0f;
-  std::uint32_t reward_display_unknown = 0;
-  if (!r.ReadI32(reward_money_or_required_money) || !r.ReadU32(d.reward_xp) ||
-      !r.ReadU32(reward_honor) || !r.ReadFloat(reward_honor_multiplier) ||
-      !r.ReadU32(reward_display_unknown) || !r.ReadU32(d.rew_spell) ||
-      !r.ReadI32(d.rew_spell_cast) || !r.ReadU32(d.char_title_id) ||
-      !r.ReadU32(d.bonus_talents) || !r.ReadU32(d.rew_arena_points) ||
-      !r.ReadU32(reward_faction_control))
+  // 1.12 eindigt met money, een ongebruikte u32 en rew_spell
+  // (Source GossipDef.cpp:744-747). Geen xp/honor/honor-multiplier,
+  // char-title, talents, arena of faction-arrays; die komen uit
+  // SMSG_QUEST_QUERY_RESPONSE (quest-template).
+  std::uint32_t reward_money = 0;
+  std::uint32_t reward_unused = 0;
+  if (!r.ReadU32(reward_money) || !r.ReadU32(reward_unused) || !r.ReadU32(d.rew_spell))
     return false;
-  d.reward_honor = reward_honor;
-  d.reward_faction_control = reward_faction_control;
-  (void)reward_honor_multiplier;
-  (void)reward_display_unknown;
-
-  if (reward_money_or_required_money < 0) {
-    d.required_money = static_cast<std::uint32_t>(-reward_money_or_required_money);
-    d.reward_money = 0;
-  } else {
-    d.reward_money = static_cast<std::uint32_t>(reward_money_or_required_money);
-    d.required_money = 0;
-  }
-
-  for (int i = 0; i < kQuestReputationsCount; ++i)
-    if (!r.ReadU32(d.reward_faction_id[i]))
-      return false;
-  for (int i = 0; i < kQuestReputationsCount; ++i)
-    if (!r.ReadI32(d.reward_faction_value[i]))
-      return false;
-  for (int i = 0; i < kQuestReputationsCount; ++i)
-    if (!r.ReadI32(d.reward_faction_value_override[i]))
-      return false;
+  (void)reward_unused;
+  d.reward_money = reward_money;
+  d.required_money = 0;
 
   if (r.Remaining() != 0) {
     return false;
@@ -1073,8 +1017,18 @@ bool QuestManager::HandleQuestGiverOfferReward(const std::uint8_t *data, std::si
 bool QuestManager::HandleQuestGiverStatus(const std::uint8_t *data, std::size_t len) {
   PacketReader r(data, len);
   QuestGiverStatusEntry e;
-  std::uint8_t status;
-  if (!r.ReadGuid(e.guid) || !r.ReadU8(status) || r.Remaining() != 0)
+  std::uint32_t status = 0;
+  // De 1.12-server schrijft de status als uint32, niet als uint8:
+  //   WorldPacket data(SMSG_QUESTGIVER_STATUS, 12);
+  //   data << ObjectGuid(npcGUID) << uint32(questStatus);
+  // (Source GossipDef.cpp:494-498 -- de 12 is 8 + 4.)
+  //
+  // Met ReadU8 bleven er na de guid drie bytes over, en de Remaining()==0-check
+  // hieronder verwierp het pakket dan in zijn geheel. Daardoor werd er nooit een
+  // queststatus opgeslagen: geen !/? boven de NPC, en rechtsklikken op een pure
+  // questgiver deed niets omdat DispatchFriendlyUnitInteraction op de
+  // overlay-status poort (unit_interaction_runtime.cpp:119-123).
+  if (!r.ReadGuid(e.guid) || !r.ReadU32(status) || r.Remaining() != 0)
     return false;
   e.status = static_cast<QuestGiverStatus>(status);
 

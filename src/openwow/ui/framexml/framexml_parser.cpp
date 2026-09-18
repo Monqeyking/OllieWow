@@ -1305,16 +1305,39 @@ void FinalizeWidget(ParserContext* ctx, const XmlNode& node, std::size_t index) 
   if ((frame_kind_lower == "button" || frame_kind_lower == "checkbutton") && !frame.name.empty()) {
     if (const auto* normal_font = FirstDirectChild(node, "NormalFont"); normal_font != nullptr) {
       const std::string style = frame.button_normal_font_style;
-      if (!style.empty()) {
-        if (auto* text_frame = FindOwnedTextRegion(
-                ctx, frame.name, UiFrame::RegionRole::ButtonText);
-            text_frame != nullptr) {
+      if (auto* text_frame = FindOwnedTextRegion(
+              ctx, frame.name, UiFrame::RegionRole::ButtonText);
+          text_frame != nullptr) {
+        if (!style.empty()) {
           text_frame->font_style = style;
           if (frame.button_normal_color.has_value()) {
             text_frame->color_r = frame.button_normal_color->r;
             text_frame->color_g = frame.button_normal_color->g;
             text_frame->color_b = frame.button_normal_color->b;
             text_frame->color_a = frame.button_normal_color->a;
+          }
+        }
+
+        // De lokale 1.12-FrameXML zet de uitlijning van een knoplabel op het
+        // font-element zelf, niet op het tekstvlak:
+        //   GossipFrame.xml:124 (patch.MPQ)
+        //     <NormalFont inherits="QuestFont" justifyH="LEFT"/>
+        //   QuestFrameTemplates.xml:212 (patch-9.mpq) idem, voor
+        //     QuestTitleButtonTemplate; beide met <ButtonText> Size 275 en
+        //     Anchor LEFT +20.
+        // Alleen het tekstvlak lezen liet justifyH leeg, waarna het label op de
+        // runtime-default CENTER viel: de tekst stond dan ingesprongen in zijn
+        // 275-brede vlak (gossip-opties en de questlijst in QuestFrame).
+        if (text_frame->justify_h.empty()) {
+          if (const std::string justify_h = Trim(Attr(*normal_font, "justifyH"));
+              !justify_h.empty()) {
+            text_frame->justify_h = justify_h;
+          }
+        }
+        if (text_frame->justify_v.empty()) {
+          if (const std::string justify_v = Trim(Attr(*normal_font, "justifyV"));
+              !justify_v.empty()) {
+            text_frame->justify_v = justify_v;
           }
         }
       }

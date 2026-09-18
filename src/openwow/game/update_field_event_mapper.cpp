@@ -24,6 +24,7 @@ static constexpr const char* UNIT_MAXHAPPINESS       = "UNIT_MAXHAPPINESS";
 static constexpr const char* UNIT_MAXRUNIC_POWER     = "UNIT_MAXRUNIC_POWER";
 static constexpr const char* UNIT_LEVEL              = "UNIT_LEVEL";
 static constexpr const char* UNIT_FLAGS              = "UNIT_FLAGS";
+static constexpr const char* UNIT_AURA               = "UNIT_AURA";
 static constexpr const char* UNIT_DYNAMIC_FLAGS      = "UNIT_DYNAMIC_FLAGS";
 static constexpr const char* UNIT_TARGET             = "UNIT_TARGET";
 static constexpr const char* UNIT_MODEL_CHANGED      = "UNIT_MODEL_CHANGED";
@@ -164,6 +165,16 @@ std::vector<FieldEvent> MapChangedFieldsToEvents(
       }
 
       if (f == UNIT_FIELD_AURASTATE) {
+        continue;
+      }
+
+      if (f >= UNIT_FIELD_AURA && f <= UNIT_FIELD_AURAAPPLICATIONS_LAST) {
+        // Het aura-blok (48 spell-id's + flags + applications). Zonder deze tak
+        // vuurde UNIT_AURA nooit op een aura-wijziging: de descriptor-callback
+        // doet dat wel, maar die dispatcht alleen als er value_changes zijn en
+        // niet bij een create (descriptor_callback_registry.cpp:373). Gevolg was
+        // dat een tijdens de sessie gecaste buff nergens opdook.
+        emit(evt::UNIT_AURA, true);
         continue;
       }
 

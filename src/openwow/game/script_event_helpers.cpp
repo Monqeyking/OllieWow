@@ -778,13 +778,6 @@ void InitWorldEventNames() {
         return;
     }
 
-    for (std::uint32_t event_id = 0; event_id < kUnitFieldEventSlotCount; ++event_id) {
-        if (const char* event_name = GetUnitFieldEventName(event_id); event_name != nullptr) {
-            ui::frame_script_events::FrameScript_RegisterEventName(
-                static_cast<int>(event_id), event_name);
-        }
-    }
-
     ui::frame_script_events::FrameScript_RegisterEventName(
         static_cast<int>(kEventInventoryChanged), "UNIT_INVENTORY_CHANGED");
     ui::frame_script_events::FrameScript_RegisterEventName(
@@ -897,10 +890,6 @@ int ScriptEvents_GetGuildBankTabIcon(void* lua_state) {
 }
 
 const char *ResolveScriptEventName(const std::uint32_t event_id) {
-  if (event_id < kUnitFieldEventSlotCount) {
-    return GetUnitFieldEventName(event_id);
-  }
-
   switch (event_id) {
     case 0x143:
       return ui::game::events::UNIT_SPELLCAST_SENT;

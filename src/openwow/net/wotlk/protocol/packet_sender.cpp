@@ -657,10 +657,14 @@ WorldPacket PacketSender::BuildQuestgiverHello(std::uint64_t npc_guid) {
 
 WorldPacket PacketSender::BuildQuestgiverAcceptQuest(std::uint64_t npc_guid, std::uint32_t quest_id,
                                                      std::uint32_t accept_packet_value) {
+  // 1.12-body: alleen guid + questId (Source Handlers/QuestHandler.cpp:116-120:
+  // `recv_data >> guid >> quest`). De extra u32 kwam uit de 3.3.5-vorm van het
+  // details-pakket, dat in 1.12 geen accept-byte heeft; de server negeert hem,
+  // maar hij hoort niet op de wire.
+  (void)accept_packet_value;
   WorldPacket pkt(Opcode::CMSG_QUESTGIVER_ACCEPT_QUEST);
   pkt.AppendU64(npc_guid);
   pkt.AppendU32(quest_id);
-  pkt.AppendU32(accept_packet_value);
   return pkt;
 }
 

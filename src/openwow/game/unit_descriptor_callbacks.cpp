@@ -1,6 +1,8 @@
 
 #include "openwow/game/unit_descriptor_callbacks.h"
 
+#include "openwow/game/aura_descriptor_sync.h"
+#include "openwow/game/aura_tracker.h"
 #include "openwow/game/character_component_backend.h"
 #include "openwow/game/descriptor_callback_registry.h"
 #include "openwow/game/c_input_control.h"
@@ -46,6 +48,173 @@ constexpr std::uint16_t PlayerSectionOffset(const std::uint16_t field) {
        static_cast<std::uint32_t>(UNIT_END)) * sizeof(std::uint32_t));
 }
 
+// 1.12 stuurt de aura-lijst van een unit in het descriptor, niet als los
+// pakket. UNIT_FIELD_AURA is 48 spell-id's; UNIT_FIELD_AURAFLAGS pakt 8 auras
+// per woord met 4 bits elk en UNIT_FIELD_AURAAPPLICATIONS houdt per aura 1
+// byte stacks (Source SpellAuras.cpp:7546-7575, UpdateFields.h:98-109).
+//
+// Onze AuraTracker is op de 3.3.5-vorm gebouwd: buffs in slot 0..55, debuffs
+// in 56..119. De 48 descriptorslots zijn gemengd, dus we verdelen ze op het
+// negatief-bit en bewaren de volgorde van de server zodat de balk hetzelfde
+// sorteert. Zonder deze stap blijft de tracker leeg en is er niets om te
+// tonen: het enige andere voedingspad is AuraManager::ReadAuraBlock, dat een
+// 3.3.5-pakket leest dat 1.12 nooit stuurt.
+void SyncAurasFromUnitDescriptorObject(const WorldSession& session,
+                                       const CGObject_C& object,
+                                       const ObjectGuid& guid) {
+  constexpr std::uint32_t kDescriptorAuraSlots = 48;
+  constexpr std::uint8_t kVanillaAflagCancelable = 0x01u;
+  constexpr std::uint8_t kVanillaAflagNegative = 0x08u;  // AFLAG_UNK4
+
+  auto& tracker = AuraTracker::Get();
+  const ObjectGuid local_player = session.objects().GetLocalPlayerGuid();
+
+  // Duur en vervaltijd komen uit SMSG_UPDATE_AURA_DURATION (0x137). Houd ze
+  // over een rebuild heen vast zolang dezelfde aura op dezelfde descriptorslot
+  // staat, anders reset elke aura-wijziging alle timers.
+  std::array<std::uint32_t, kDescriptorAuraSlots> previous_spell{};
+  std::array<std::uint32_t, kDescriptorAuraSlots> previous_remaining{};
+  std::array<std::uint32_t, kDescriptorAuraSlots> previous_max{};
+  {
+    const auto& previous = session.aura().GetAuras(guid.GetRawValue());
+    for (const auto& aura : previous) {
+      if (aura.slot < kDescriptorAuraSlots) {
+        previous_spell[aura.slot] = aura.spell_id;
+        previous_remaining[aura.slot] = aura.remaining_duration;
+        previous_max[aura.slot] = aura.max_duration;
+      }
+    }
+  }
+
+  // Dezelfde auras ook in AuraManager zetten: daar lezen CancelUnitBuff en de
+  // pet-/pvp-/quest-Lua op, en die store wordt door 1.12 nooit via een pakket
+  // gevuld.
+  std::vector<AuraSlotInfo> descriptor_auras;
+  descriptor_auras.reserve(kDescriptorAuraSlots);
+
+  std::uint8_t next_buff_slot = 0;
+  std::uint8_t next_debuff_slot =
+      static_cast<std::uint8_t>(AuraTracker::kFirstDebuffSlot);
+
+  for (std::uint32_t descriptor_slot = 0; descriptor_slot < kDescriptorAuraSlots;
+       ++descriptor_slot) {
+    const std::uint32_t spell_id =
+        object.GetUInt32(UNIT_FIELD_AURA + descriptor_slot);
+    if (spell_id == 0) {
+      if (guid == local_player) {
+        SetLocalPlayerAuraDuration(
+            static_cast<std::uint8_t>(descriptor_slot), 0u);
+      }
+      continue;
+    }
+
+    const std::uint32_t flags_word =
+        object.GetUInt32(UNIT_FIELD_AURAFLAGS + (descriptor_slot >> 3));
+    const std::uint8_t vanilla_flags = static_cast<std::uint8_t>(
+        (flags_word >> ((descriptor_slot & 7u) * 4u)) & 0x0Fu);
+    const bool negative = (vanilla_flags & kVanillaAflagNegative) != 0;
+
+    const std::uint32_t stacks_word =
+        object.GetUInt32(UNIT_FIELD_AURAAPPLICATIONS + (descriptor_slot / 4u));
+    const std::uint8_t stacks = static_cast<std::uint8_t>(
+        (stacks_word >> ((descriptor_slot % 4u) * 8u)) & 0xFFu);
+
+    std::uint8_t tracker_slot = 0;
+    if (negative) {
+      if (next_debuff_slot >= AuraTracker::kFirstPassiveSlot) {
+        continue;
+      }
+      tracker_slot = next_debuff_slot++;
+    } else {
+      if (next_buff_slot >= AuraTracker::kFirstDebuffSlot) {
+        continue;
+      }
+      tracker_slot = next_buff_slot++;
+    }
+
+    // Duur en vervaltijd komen uit SMSG_UPDATE_AURA_DURATION (0x137) en niet uit
+    // het descriptor. Houd ze vast zolang dezelfde aura op dezelfde plek staat,
+    // en pak anders een duur die al binnenkwam vóórdat de aura bekend was -- dat
+    // is de normale volgorde op de wire, en zonder deze stap valt de timer weg
+    // (offline gemeten: alleen de weapon-enchant hield zijn timer).
+    std::uint32_t remaining_ms = 0u;
+    if (previous_spell[descriptor_slot] == spell_id) {
+      remaining_ms = previous_remaining[descriptor_slot];
+    }
+    if (remaining_ms == 0u) {
+      remaining_ms = TakeDescriptorAuraDuration(
+          guid.GetRawValue(), static_cast<std::uint8_t>(descriptor_slot));
+    }
+    if (remaining_ms == 0u && guid == local_player) {
+      // Login-pad: de duur kwam binnen voordat het spelerobject bestond.
+      remaining_ms =
+          GetLocalPlayerAuraDuration(static_cast<std::uint8_t>(descriptor_slot));
+    }
+
+    AuraData aura;
+    if (const auto* previous = tracker.GetAura(guid, tracker_slot);
+        previous != nullptr && previous->spell_id == spell_id) {
+      aura = *previous;
+    }
+
+    aura.spell_id = spell_id;
+    aura.slot = tracker_slot;
+    aura.stacks = stacks;
+    aura.charges = static_cast<std::int32_t>(stacks);
+    aura.caster_guid = guid;
+    aura.is_mine = (guid == local_player);
+    aura.duration = remaining_ms;
+    aura.expiration = remaining_ms != 0u
+                          ? core::GameClock::GetTickCount32() + remaining_ms
+                          : 0u;
+    // Geen 3.3.5-flagbits verzinnen: met has_raw_flags=false valt AuraData
+    // terug op de slotrange voor buff/debuff en op is_cancellable hieronder.
+    aura.has_raw_flags = false;
+    aura.is_cancellable = (vanilla_flags & kVanillaAflagCancelable) != 0;
+
+    tracker.SetAura(guid, tracker_slot, aura);
+
+    AuraSlotInfo slot_info;
+    slot_info.slot = static_cast<std::uint8_t>(descriptor_slot);
+    slot_info.spell_id = spell_id;
+    slot_info.flags = negative ? AuraFlag::kNegative : AuraFlag::kPositive;
+    slot_info.stack_or_charges = stacks;
+    slot_info.caster_guid = guid;
+    slot_info.remaining_duration = remaining_ms;
+    slot_info.max_duration = previous_max[descriptor_slot] > remaining_ms
+                                 ? previous_max[descriptor_slot]
+                                 : remaining_ms;
+    descriptor_auras.push_back(slot_info);
+  }
+
+  // Slots voorbij de tellers zijn niet meer bezet.
+  for (std::uint8_t slot = next_buff_slot; slot < AuraTracker::kFirstDebuffSlot;
+       ++slot) {
+    tracker.RemoveAura(guid, slot);
+  }
+  for (std::uint8_t slot = next_debuff_slot;
+       slot < AuraTracker::kFirstPassiveSlot; ++slot) {
+    tracker.RemoveAura(guid, slot);
+  }
+
+  SetDescriptorAurasForUnit(guid.GetRawValue(), std::move(descriptor_auras));
+}
+
+}  // namespace
+
+void SyncAurasFromUnitDescriptor(const WorldSession& session,
+                                 const ObjectGuid& guid) {
+  const auto* object = session.objects().GetUnit(guid);
+  if (object == nullptr) {
+    return;
+  }
+  SyncAurasFromUnitDescriptorObject(session, *object, guid);
+}
+
+void SyncAurasFromUnitDescriptor(const WorldSession& session,
+                                 const CGObject_C& object,
+                                 const ObjectGuid& guid) {
+  SyncAurasFromUnitDescriptorObject(session, object, guid);
 }
 
 void CGUnit_C::OnLevelChanged(const WorldSession& session) {
@@ -661,7 +830,11 @@ void RegisterUnitDescriptorCallbacks(WorldSession& session) {
       static_cast<std::uint16_t>(
           UnitSectionOffset(UNIT_FIELD_AURAAPPLICATIONS_LAST) -
           UnitSectionOffset(UNIT_FIELD_AURA) + sizeof(std::uint32_t)),
-      [](const DescriptorFieldChangeView& v) {
+      [&session](const DescriptorFieldChangeView& v) {
+        // 1.12: eerst de tracker uit het descriptor vullen, dan pas het
+        // event sturen -- de Lua-lezers van UNIT_AURA verwachten dat de
+        // auras er op dat moment al staan.
+        SyncAurasFromUnitDescriptorObject(session, v.object, v.guid);
         const auto guid_raw = v.guid.GetRawValue();
         openwow::ui::game::ScriptEventDispatch::Get().FireUnitAura(guid_raw);
       }));

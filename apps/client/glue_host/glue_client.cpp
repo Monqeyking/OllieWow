@@ -1323,6 +1323,25 @@ bool GlueClient::EnterOfflineScenarioWorld() {
     return false;
   }
 
+  // Snelle offline controle van de hele aura-keten: descriptor -> tracker +
+  // AuraManager -> SMSG_UPDATE_AURA_DURATION. Dit vervangt "in-game een buff
+  // casten en in het log kijken" door een assertie met een duidelijke reden.
+  if (!offline_world_fixture::ValidateUnitCursorPolicyFixtures()) {
+    game_loop_.LeaveWorld();
+    game_loop_.SetCharacterWorldRuntime(nullptr);
+    character_world_runtime_.Destroy();
+    openwow::net::SetClientServicesPacketSendFn({});
+    return false;
+  }
+
+  if (!offline_world_fixture::ValidateOfflineAuraFixtures(world_session, player_guid)) {
+    game_loop_.LeaveWorld();
+    game_loop_.SetCharacterWorldRuntime(nullptr);
+    character_world_runtime_.Destroy();
+    openwow::net::SetClientServicesPacketSendFn({});
+    return false;
+  }
+
   offline_scenario_world_active_ = true;
   SetMode(UiMode::kLoading);
   openwow::diagnostics::Log(openwow::diagnostics::LogLevel::kInfo,

@@ -721,6 +721,62 @@ static int LuaSetNativeTextureSlot(lua_State *L) {
   }
   lua_pop(L, 1);
 
+  // Benilla-model: de XML-tekstuur IS de textuur van de knop. Benilla zet hem
+  // eenmalig via deze zelfde setter (benilla-ui/src/loader/widgets.rs:210-213)
+  // en houdt hem daarna als widget-state (widget/kinds/mod.rs:401-426).
+  //
+  // Wij maakten hier een TWEEDE regio wanneer de XML-regio niet aan de slot
+  // gebonden was: het frame publiceert die regio onder de conventienaam
+  // (<naam><Rol>, bv. QuestLogTitle2NormalTexture) maar de slot bleef leeg.
+  // Dan raakt SetNormalTexture("") een andere regio dan het frame tekent --
+  // zichtbaar als het plus/min-resicoon dat op gewone questregels blijft staan
+  // (QuestLogFrame.lua:154 wist het; de template zet het in
+  // QuestLogFrame.xml:68). Adopteer daarom de bestaande regio.
+  // De XML-tekstuur heet conventioneel <naam><Rol> (QuestLogTitle2NormalTexture)
+  // en zit als regio van de knop zelf in __ow_regions -- er is GEEN Lua-global
+  // met die naam, dus zoeken we hem tussen de regio's.
+  if (const char *owner_name = openwow::ui::BorrowRawLuaStringField(L, 1, "__ow_name");
+      owner_name != nullptr && owner_name[0] != '\0' && method != nullptr &&
+      std::strncmp(method, "Set", 3) == 0) {
+    const std::string conventional = std::string(owner_name) + (method + 3);
+    lua_getfield(L, 1, "__ow_regions");
+    if (lua_istable(L, -1) != 0) {
+      const int regions = lua_absindex(L, -1);
+      const int count = static_cast<int>(lua_objlen(L, regions));
+      for (int i = 1; i <= count; ++i) {
+        lua_rawgeti(L, regions, i);
+        const bool is_texture =
+            lua_istable(L, -1) != 0 &&
+            lua_adapter::IsScriptObjectKindOf(
+                L, -1, openwow::ui::widgets::ScriptObjectType::Texture);
+        const char *region_name =
+            is_texture
+                ? openwow::ui::BorrowRawLuaStringField(L, -1, "__ow_name")
+                : nullptr;
+        if (is_texture && region_name != nullptr &&
+            conventional == region_name) {
+          const int existing = lua_absindex(L, -1);
+          BindTextureOwnership(L, existing, 1, role);
+          if (draw_layer != nullptr && draw_layer[0] != '\0') {
+            lua_pushstring(L, draw_layer);
+            lua_setfield(L, existing, "__ow_draw_layer");
+            SyncRegionDrawLayerEnabled(L, existing);
+          }
+          if (CallTextureSetPath(L, existing, 2)) {
+            ApplyNativeTextureBlendMode(L, existing,
+                                        lua_gettop(L) >= 3 ? 3 : 0);
+          }
+          lua_pushvalue(L, existing);
+          lua_setfield(L, 1, slot);
+          lua_pop(L, 2);
+          return 0;
+        }
+        lua_pop(L, 1);
+      }
+    }
+    lua_pop(L, 1);
+  }
+
   CreateTextureTable(L, 1);
   const int texture = lua_absindex(L, -1);
   lua_pushboolean(L, 1);

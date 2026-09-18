@@ -7,6 +7,7 @@
 #include "openwow/ui/game/framescript/xml/frame_xml_region_materializer.h"
 
 #include "openwow/foundation/text/ascii.h"
+#include "openwow/game/aura_lua_bridge.h"
 #include "openwow/game/commerce/merchants/adapters/lua/merchant_lua_api.h"
 #include "openwow/game/localization.h"
 #include "openwow/game/tracking_system.h"
@@ -1286,6 +1287,51 @@ void ApplyGameTooltipMethods(lua_State *L) {
       },
       0);
   lua_setfield(L, f, "SetSpellByID");
+
+  // 1.12 `GameTooltip:SetPlayerBuff(buffIndex)`: buffIndex is de handle uit
+  // GetPlayerBuff (onze tracker-slot). De default BuffFrame (BuffFrame.lua:101)
+  // en addons (BetterCharacterStats helper.lua:279) roepen hem aan bij hover;
+  // zonder deze methode klapt de Lua eruit met "attempt to call method
+  // SetPlayerBuff (a nil value)". We bouwen de tooltip uit het spell-id van de
+  // aura; lukt dat niet, dan geven we nil terug in plaats van een fout.
+  lua_pushcclosure(
+      L,
+      [](lua_State *Ls) -> int {
+        const int tooltip_index = ValidateFrameObjectSelf(Ls, "GameTooltip");
+        if (lua_isnumber(Ls, 2) == 0) {
+          lua_pushnil(Ls);
+          return 1;
+        }
+
+        const auto handle = openwow::ui::game::detail::TruncateLuaNumberToSseI32(
+            lua_tonumber(Ls, 2));
+        if (handle < 0) {
+          lua_pushnil(Ls);
+          return 1;
+        }
+
+        auto *session = openwow::ui::game::TooltipSystem::Get().GetWorldSession();
+        if (session == nullptr) {
+          lua_pushnil(Ls);
+          return 1;
+        }
+
+        const auto aura =
+            openwow::game::AuraLuaBridge::Get().GetPlayerAuraByTrackerSlot(
+                *session, static_cast<std::uint32_t>(handle));
+        if (!aura.has_value() || aura->spellId == 0 ||
+            !openwow::ui::game::TooltipSystem::Get().SetSpellById(aura->spellId,
+                                                                  true, false)) {
+          lua_pushnil(Ls);
+          return 1;
+        }
+
+        SyncTooltipRegisteredLinesFromSystem(Ls, tooltip_index);
+        lua_pushnumber(Ls, 1.0);
+        return 1;
+      },
+      0);
+  lua_setfield(L, f, "SetPlayerBuff");
 
   openwow::ui::game::frame_api::RegisterTooltipContentSetter<detail::kSetTooltipHyperlink.trampoline>(
       L, f, "SetHyperlink");

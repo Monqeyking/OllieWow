@@ -1,5 +1,6 @@
 
 #include "openwow/game/combat_manager.h"
+#include "openwow/game/objects/cgobject.h"
 #include "openwow/game/threat_system.h"
 #include "openwow/foundation/diagnostics/logging.h"
 
@@ -10,6 +11,23 @@ namespace openwow::game {
 using openwow::diagnostics::Log;
 using openwow::diagnostics::LogLevel;
 
+namespace {
+
+// 1.12 stuurt SMSG_ATTACKSTART/STOP voor elke unit die melee begint of stopt,
+// niet alleen voor de speler -- twee NPC's die elkaar aanvalsen komen hier dus
+// ook langs (Source Player.cpp: SendAttackStart/SendAttackStop gaan naar de
+// omgeving). De combatstate van de speler mag daar niet van meelopen: alleen
+// een aanval van de actieve speler zelf zet PLAYER_ENTER_COMBAT/
+// PLAYER_LEAVE_COMBAT via SessionEventBridge::PollCombatState. Zonder deze
+// poort wisselde het statusicoon naast het portrait (zzz <-> zwaarden) telkens
+// als er ergens in de buurt een gevecht begon of eindigde, ook zonder dat de
+// speler erbij betrokken was.
+bool IsActivePlayerAttack(const ObjectGuid &attacker) {
+  return !attacker.IsEmpty() && attacker == CGObject_C::GetActivePlayerGuid();
+}
+
+}  // namespace
+
 bool CombatManager::HandleAttackStart(const std::uint8_t* data,
                                        std::size_t len) {
   PacketReader r(data, len);
@@ -18,7 +36,7 @@ bool CombatManager::HandleAttackStart(const std::uint8_t* data,
   if (!r.ReadGuid(info.victim)) return false;
   attack_start_ = info;
   attack_stop_.reset();
-  in_combat_ = true;
+  in_combat_ = IsActivePlayerAttack(info.attacker);
   return true;
 }
 
@@ -34,8 +52,12 @@ bool CombatManager::HandleAttackStop(const std::uint8_t* data,
 
   attack_stop_ = AttackStartInfo{.attacker = attacker, .victim = victim};
 
-  in_combat_ = false;
-  attack_start_.reset();
+  // Alleen het einde van een aanval van de speler zelf beëindigt zijn
+  // client-side combatstate; die van een willekeurige NPC niet.
+  if (IsActivePlayerAttack(attacker)) {
+    in_combat_ = false;
+    attack_start_.reset();
+  }
   return true;
 }
 

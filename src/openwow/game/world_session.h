@@ -1163,6 +1163,14 @@ public:
 
   void FlushDeferredWorldTransfer();
   void RequestVisibleQuestgiverStatusRefresh();
+
+  // Vraag de dialogstatus (!/?) van één NPC. De 1.12-server pusht niets
+  // (Source Handlers/QuestHandler.cpp:39-84 antwoordt alleen op de query), dus
+  // elke NPC moet hem zelf een keer vragen. De referentie doet dat in het
+  // create-pad (0x607380) en bij het zetten van de QUESTGIVER- (0x60b490) of
+  // FLIGHTMASTER-bit (0x60b4c5) -- zie benilla quest_markers/query.rs:36-46.
+  void RequestQuestgiverStatusFor(const ObjectGuid &guid,
+                                  bool require_friendly = true);
   void HandleActivePlayerDeadTransition(bool force_event_dispatch = false);
 
   void RefreshActivePlayerReleaseTimerMode();

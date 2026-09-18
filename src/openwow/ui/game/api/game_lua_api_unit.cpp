@@ -2023,49 +2023,118 @@ int LuaUnitAura(lua_State *L) {
       0u);
 }
 
+namespace {
+
+// 1.12 `GetPlayerBuff(slot, buffFilter)`. `slot` is 0-based: BuffFrame.xml
+// declareert BuffButton0 met id="0" (BuffFrame.lua:55 gebruikt this:GetID()) en
+// pfUI zet PLAYER_BUFF_START_ID = -1 met buttons vanaf 1 (compat/vanilla.lua:30).
+// De handle die we teruggeven is de tracker-slot van de aura, zodat de
+// companionfuncties hem zonder filter kunnen terugvinden.
+const char *PlayerBuffFilterArg(lua_State *L, const int arg) {
+  if (lua_gettop(L) >= arg && lua_type(L, arg) == LUA_TSTRING) {
+    const char *filter = lua_tostring(L, arg);
+    if (filter != nullptr && filter[0] != '\0') {
+      return filter;
+    }
+  }
+  return "HELPFUL";
+}
+
+std::optional<::openwow::game::AuraQueryResult> ResolvePlayerBuffHandle(
+    lua_State *L, ::openwow::game::WorldSession **out_session) {
+  *out_session = GetWorldSession(L);
+  if (*out_session == nullptr || lua_gettop(L) < 1) {
+    return std::nullopt;
+  }
+
+  const lua_Number handle = lua_tonumber(L, 1);
+  if (handle < 0.0) {
+    return std::nullopt;
+  }
+
+  return ::openwow::game::AuraLuaBridge::Get().GetPlayerAuraByTrackerSlot(
+      **out_session, static_cast<std::uint32_t>(handle));
+}
+
+}  // namespace
+
 int LuaGetPlayerBuff(lua_State *L) {
-  // The Classic API returns a negative index for an empty slot.  Returning
-  // the two documented values keeps BuffFrame.lua on its no-buff path while
-  // avoiding a fabricated aura query against the modern UnitAura surface.
-  (void)L;
-  lua_pushnumber(L, -1);
-  lua_pushboolean(L, 1);
+  auto *session = GetWorldSession(L);
+  const lua_Number slot_number = lua_gettop(L) >= 1 ? lua_tonumber(L, 1) : 0.0;
+  if (session == nullptr || slot_number < 0.0) {
+    lua_pushnumber(L, -1);
+    lua_pushnumber(L, 1);
+    return 2;
+  }
+
+  const auto result =
+      ::openwow::game::AuraLuaBridge::Get().GetPlayerBuffByPosition(
+          *session, static_cast<std::uint32_t>(slot_number),
+          PlayerBuffFilterArg(L, 2));
+
+  if (!result.has_value()) {
+    // 1.12: een lege positie geeft een negatieve index; BuffFrame.lua:60 en pfUI
+    // verbergen de knop daarop. `untilCancelled` moet een GETAL zijn --
+    // BuffFrame.lua:120 vergelijkt met `== 1` en true == 1 is in Lua onwaar.
+    lua_pushnumber(L, -1);
+    lua_pushnumber(L, 1);
+    return 2;
+  }
+
+  lua_pushnumber(L, static_cast<lua_Number>(result->slot));
+  lua_pushnumber(L, result->duration <= 0.0f ? 1.0 : 0.0);
   return 2;
 }
 
 int LuaGetPlayerBuffTexture(lua_State *L) {
-  // ponytail: the current MVP has no player-aura cache; nil is Vanilla's
-  // no-texture result for an empty buff position.
-  (void)L;
-  lua_pushnil(L);
+  ::openwow::game::WorldSession *session = nullptr;
+  const auto result = ResolvePlayerBuffHandle(L, &session);
+  if (!result.has_value() || result->icon.empty()) {
+    lua_pushnil(L);
+    return 1;
+  }
+  lua_pushlstring(L, result->icon.c_str(), result->icon.size());
   return 1;
 }
 
 int LuaGetPlayerBuffDispelType(lua_State *L) {
-  // ponytail: no aura cache yet; an empty position has no dispel type.
-  (void)L;
-  lua_pushnil(L);
+  ::openwow::game::WorldSession *session = nullptr;
+  const auto result = ResolvePlayerBuffHandle(L, &session);
+  if (!result.has_value() || result->debuffType.empty()) {
+    lua_pushnil(L);
+    return 1;
+  }
+  lua_pushlstring(L, result->debuffType.c_str(), result->debuffType.size());
   return 1;
 }
 
 int LuaGetPlayerBuffApplications(lua_State *L) {
-  // Vanilla returns numeric 1 for an empty position, never nil.
-  (void)L;
-  lua_pushnumber(L, 1);
+  ::openwow::game::WorldSession *session = nullptr;
+  const auto result = ResolvePlayerBuffHandle(L, &session);
+  // Vanilla geeft numeriek 1 voor een lege positie, nooit nil.
+  lua_pushnumber(L,
+                 result.has_value() ? static_cast<lua_Number>(result->count) : 1);
   return 1;
 }
 
 int LuaGetPlayerBuffTimeLeft(lua_State *L) {
-  // No aura timing data is exposed by the current offline MVP object model.
-  // Classic callers treat zero as expired and continue safely.
-  (void)L;
-  lua_pushnumber(L, 0);
+  ::openwow::game::WorldSession *session = nullptr;
+  const auto result = ResolvePlayerBuffHandle(L, &session);
+  lua_pushnumber(L, result.has_value()
+                        ? static_cast<lua_Number>(result->remainingTime)
+                        : 0);
   return 1;
 }
 
 int LuaCancelPlayerBuff(lua_State *L) {
-  // ponytail: there is no player-aura cache to mutate in the current MVP.
-  (void)L;
+  ::openwow::game::WorldSession *session = nullptr;
+  const auto result = ResolvePlayerBuffHandle(L, &session);
+  if (!result.has_value() || session == nullptr) {
+    return 0;
+  }
+
+  ::openwow::game::AuraLuaBridge::Get().CancelPlayerBuff(
+      *session, static_cast<std::uint32_t>(result->slot));
   return 0;
 }
 

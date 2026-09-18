@@ -2,7 +2,10 @@
 #include "openwow/game/aura_lua_bridge.h"
 
 #include "openwow/data/formats/dbc/dbc_loader.h"
+#include "openwow/game/aura_descriptor_sync.h"
 #include "openwow/game/aura_tracker.h"
+#include "openwow/game/update_fields.h"
+#include "openwow/game/interaction_sender.h"
 #include "openwow/game/script_event_helpers.h"
 #include "openwow/game/spell_query_bridge.h"
 #include "openwow/game/world_session.h"
@@ -24,6 +27,7 @@ static AuraQueryResult BuildResult(const WorldSession& session,
                                    const ObjectGuid& unit_guid) {
   AuraQueryResult r;
   r.spellId = aura.spell_id;
+  r.slot = aura.slot;
 
   r.name = SpellQueryBridge::Get().GetSpellName(aura.spell_id);
   if (r.name.empty()) {
@@ -120,6 +124,53 @@ static bool IsVisibleToScriptAuraQueries(const WorldSession& session,
       session, aura.spell_id, caster_guid, false);
 }
 
+// 1.12 stuurt de aura-lijst in het create-blok, en daar dispatcht de
+// descriptor-registry geen section-callbacks (descriptor_callback_registry.cpp:373).
+// Zonder deze lazy sync blijft de tracker leeg tot de eerste aura-wijziging en
+// toont de buffbalk niets -- precies wat er gebeurde met buffs die al op het
+// character stonden bij het inloggen.
+static void EnsureDescriptorAuras(const WorldSession& session,
+                                  const ObjectGuid& unit_guid) {
+  if (unit_guid.IsEmpty()) {
+    return;
+  }
+
+  const auto* object = session.objects().GetUnit(unit_guid);
+  if (object == nullptr) {
+    return;
+  }
+
+  // Vergelijk het descriptor-blok met wat de tracker heeft. Alleen "is de tracker
+  // leeg" is niet genoeg: bij een buff die tijdens de sessie bijkomt (bv. een
+  // racial) bleef de tracker gevuld maar onvolledig, waardoor de nieuwe aura
+  // nooit verscheen.
+  std::uint32_t descriptor_count = 0;
+  for (std::uint32_t slot = 0; slot < 48u; ++slot) {
+    if (object->GetUInt32(UNIT_FIELD_AURA + slot) != 0u) {
+      ++descriptor_count;
+    }
+  }
+
+  std::uint32_t tracker_count = 0;
+  AuraTracker::Get().ForEachAura(
+      unit_guid, [&tracker_count](std::uint8_t, const AuraData&) {
+        ++tracker_count;
+      });
+  if (descriptor_count == tracker_count) {
+    return;
+  }
+
+  SyncAurasFromUnitDescriptor(session, unit_guid);
+
+  // Zelfde reden als in world_session_object.cpp: de 1.12-BuffFrame ververst
+  // alleen op PLAYER_AURAS_CHANGED. Via de queue, zodat een GetPlayerBuff-
+  // aanroep vanuit BuffButton_Update niet re-entrant wordt.
+  if (unit_guid == session.objects().GetLocalPlayerGuid()) {
+    ui::game::ScriptEventDispatch::Get().QueueGlobalEvent(
+        "PLAYER_AURAS_CHANGED");
+  }
+}
+
 std::optional<AuraQueryResult> AuraLuaBridge::GetUnitBuff(
     const WorldSession& session, const ObjectGuid& unitGuid,
     std::uint32_t index) const {
@@ -137,6 +188,8 @@ std::optional<AuraQueryResult> AuraLuaBridge::GetUnitAura(
     std::uint32_t index,
     const std::string& filter) const {
   if (index == 0) return std::nullopt;
+
+  EnsureDescriptorAuras(session, unitGuid);
 
   std::vector<const AuraData*> matching;
   AuraTracker::Get().ForEachAura(
@@ -156,6 +209,8 @@ std::optional<AuraQueryResult> AuraLuaBridge::FindUnitAura(
     const WorldSession& session, const ObjectGuid& unitGuid,
     const std::string& name,
     const std::string& rank, const std::string& filter) const {
+  EnsureDescriptorAuras(session, unitGuid);
+
   std::optional<AuraQueryResult> result;
   AuraTracker::Get().ForEachAura(
       unitGuid,
@@ -213,6 +268,59 @@ void AuraLuaBridge::CancelUnitBuff(const WorldSession& session,
 
     AuraTracker::Get().RemoveAura(unitGuid, target_slot);
   }
+}
+
+std::optional<AuraQueryResult> AuraLuaBridge::GetPlayerBuffByPosition(
+    WorldSession& session, std::uint32_t position,
+    const std::string& filter) const {
+  const ObjectGuid player = session.objects().GetLocalPlayerGuid();
+  if (player.IsEmpty()) return std::nullopt;
+
+  EnsureDescriptorAuras(session, player);
+
+  std::vector<const AuraData*> matching;
+  AuraTracker::Get().ForEachAura(
+      player, [&](std::uint8_t, const AuraData& aura) {
+        // Alleen het 1.12 buffFilter (HELPFUL/HARMFUL/CANCELABLE/...), bewust
+        // niet de 3.3.5-zichtbaarheidsregel: de 1.12-buffbalk toont elke aura
+        // die in de slot staat.
+        if (MatchesFilter(aura, filter)) {
+          matching.push_back(&aura);
+        }
+      });
+
+  if (position >= matching.size()) return std::nullopt;
+  return BuildResult(session, *matching[position], player);
+}
+
+std::optional<AuraQueryResult> AuraLuaBridge::GetPlayerAuraByTrackerSlot(
+    WorldSession& session, std::uint32_t slot) const {
+  if (slot > 0xFFu) return std::nullopt;
+  const ObjectGuid player = session.objects().GetLocalPlayerGuid();
+  if (player.IsEmpty()) return std::nullopt;
+
+  EnsureDescriptorAuras(session, player);
+
+  const auto* aura =
+      AuraTracker::Get().GetAura(player, static_cast<std::uint8_t>(slot));
+  if (aura == nullptr) return std::nullopt;
+  return BuildResult(session, *aura, player);
+}
+
+void AuraLuaBridge::CancelPlayerBuff(WorldSession& session,
+                                     std::uint32_t slot) const {
+  if (slot > 0xFFu) return;
+  const ObjectGuid player = session.objects().GetLocalPlayerGuid();
+  if (player.IsEmpty()) return;
+
+  const auto* aura =
+      AuraTracker::Get().GetAura(player, static_cast<std::uint8_t>(slot));
+  if (aura == nullptr || !aura->IsHelpfulByOriginalFlags()) {
+    return;
+  }
+
+  session.interaction().SendCancelAura(aura->spell_id);
+  AuraTracker::Get().RemoveAura(player, static_cast<std::uint8_t>(slot));
 }
 
 WeaponEnchantResult AuraLuaBridge::GetWeaponEnchantInfo() const {

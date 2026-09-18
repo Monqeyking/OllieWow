@@ -122,7 +122,14 @@ void RequestGmTicketSnapshot(WorldSession &session) {
 }
 
 void FireGmTicketUpdateEvent() {
-  ui::game::ScriptEventDispatch::Get().FireEvent(ui::game::events::UPDATE_TICKET);
+  // Expliciet arg1 = 0 ("geen ticket"), niet zonder argumenten. De client-Lua
+  // leest arg1 als ticket-categorie en doet `if (arg1 ~= 0) then this:Show()`
+  // (TicketStatusFrame_OnEvent, HelpFrame.lua:492-505); zonder argument is arg1
+  // nil en is `nil ~= 0` in Lua waar, waardoor het ticket-icoon ook verscheen
+  // zonder ingediend ticket. De server stuurt bij geen ticket
+  // GMTICKET_STATUS_DEFAULT (0x0A) en nooit een categorie.
+  ui::game::ScriptEventDispatch::Get().FireEventArgs(
+      ui::game::events::UPDATE_TICKET, {0});
 }
 
 void FireGmTicketUpdateEvent(const GMTicketData &ticket) {

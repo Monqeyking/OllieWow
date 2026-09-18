@@ -22,6 +22,7 @@
 #include "openwow/game/commerce/mail/mail_compose_state.h"
 #include "openwow/game/object_types.h"
 #include "openwow/game/objects/cgitem.h"
+#include "openwow/game/aura_descriptor_sync.h"
 #include "openwow/game/objects/cgunit.h"
 #include "openwow/game/player_control_runtime.h"
 #include "openwow/game/guild_system.h"
@@ -1950,15 +1951,53 @@ void WorldSession::HandleCapturePointObjectDestroyed(const ObjectGuid &guid) {
                                              guid.GetRawValue(), &world_states_);
 }
 
+void WorldSession::RequestQuestgiverStatusFor(const ObjectGuid &guid,
+                                             const bool require_friendly) {
+  constexpr std::uint32_t kNpcFlagQuestgiver = 0x00000002u;
+  constexpr std::uint32_t kNpcFlagFlightmaster = 0x00000008u;
+
+  const auto *active_player = objects().GetActivePlayer();
+  auto *unit = objects().GetMutableUnit(guid);
+  if (active_player == nullptr || unit == nullptr) {
+    return;
+  }
+
+  const auto npc_flags = unit->State().GetNpcFlags();
+  if ((npc_flags & (kNpcFlagQuestgiver | kNpcFlagFlightmaster)) == 0u) {
+    return;
+  }
+
+  // Alleen voor een neutrale/vriendschappelijke NPC: voor een vijandige
+  // questgiver laat de server de status bewust op NONE (QuestHandler.cpp:60).
+  // In het create-pad slaan we deze poort over: daar is de reactie van de NPC
+  // soms nog niet bekend, en de server filtert zelf al.
+  if (require_friendly) {
+    const bool friendly =
+        active_player->Interaction().GetReaction(*unit) >= ReactionType::kNeutral &&
+        unit->Interaction().GetReaction(*active_player) >= ReactionType::kNeutral;
+    if (!friendly) {
+      return;
+    }
+  }
+
+  // De server antwoordt alleen op deze query (QuestHandler.cpp:39-84), dus
+  // zonder deze regel blijft overlay_display_type_ op kNone: geen !/? boven de
+  // NPC én rechtsklikken op een pure questgiver doet niets
+  // (unit_interaction_runtime.cpp:119-123).
+  Send(net::wotlk::PacketSender::BuildQuestgiverStatusQuery(guid.GetRawValue()));
+  if ((npc_flags & kNpcFlagFlightmaster) != 0u) {
+    interaction().SendTaxiNodeStatusQuery(guid.GetRawValue());
+  }
+}
+
 void WorldSession::RequestVisibleQuestgiverStatusRefresh() {
   const auto *active_player = objects().GetActivePlayer();
   if (active_player == nullptr) {
     return;
   }
 
-  // 1.12: FLIGHTMASTER = 0x8 (Source\src\game\Objects\UnitDefines.h).
-  constexpr std::uint32_t kNpcFlagFlightmaster = 0x00000008u;
-
+  // 1.12: QUESTGIVER = 0x2 en FLIGHTMASTER = 0x8
+  // (Source\src\game\Objects\UnitDefines.h:445-460).
   objects().EnumVisibleObjectsMutable([&](WorldObject &obj) {
     if (obj.IsUnit() && !obj.IsPlayer()) {
       auto &unit = static_cast<CGUnit_C &>(obj);
@@ -1970,11 +2009,8 @@ void WorldSession::RequestVisibleQuestgiverStatusRefresh() {
         quests_.EraseQuestGiverStatus(unit.GetGuid());
 
         unit.ClearOverlayModelImmediate();
-      } else if ((unit.State().GetNpcFlags() & kNpcFlagFlightmaster) != 0) {
-        Send(net::wotlk::PacketSender::BuildQuestgiverStatusQuery(
-            unit.GetGuid().GetRawValue()));
-
-        interaction().SendTaxiNodeStatusQuery(unit.GetGuid().GetRawValue());
+      } else {
+        RequestQuestgiverStatusFor(unit.GetGuid());
       }
     } else if (obj.IsGameObject()) {
       auto &go = static_cast<CGGameObject_C &>(obj);
@@ -2301,6 +2337,17 @@ void WorldSession::OnFieldsChanged(const WorldObject &obj, const FieldUpdateBatc
 
   DescriptorCallbackRegistry::Get().Dispatch(obj, updates, is_create);
 
+  // Bij een create dispatcht de registry geen section-callbacks
+  // (descriptor_callback_registry.cpp:373) en levert de veld->event-mapper niets
+  // (update_field_event_mapper.cpp:114). Voor de lokale speler betekent dat: de
+  // aura-lijst staat er wel, maar niets ververst de buffbalk -- die hangt aan
+  // PLAYER_AURAS_CHANGED (BuffFrame.lua:112-116). Doe dat hier expliciet, en vul
+  // meteen de aura-stores, want die callback heeft hier niet gedraaid.
+  if (is_create && obj.GetGuid() == objects().GetLocalPlayerGuid()) {
+    SyncAurasFromUnitDescriptor(*this, obj, obj.GetGuid());
+    dispatch.QueueGlobalEvent("PLAYER_AURAS_CHANGED");
+  }
+
   if (!is_create) {
     DispatchLocalPlayerVisibleItemCombatEvents(obj, updates, objects().GetLocalPlayerGuid(),
                                                dispatch);
@@ -2529,6 +2576,19 @@ void WorldSession::OnFieldsChanged(const WorldObject &obj, const FieldUpdateBatc
       }
 
       else if (std::strcmp(evt.event_name, "UNIT_AURA") == 0) {
+        // Voor de speler eerst de aura-stores verversen: de descriptor-callback
+        // is hier niet betrouwbaar (geen dispatch bij create en niet zonder
+        // value_changes), dus dit is het pad waarlangs een tijdens de sessie
+        // gecaste buff -- bv. een racial -- in de tracker belandt. Daarna pas
+        // het event, zodat de Lua-lezers verse data zien. Alleen voor de speler;
+        // andere units gaan via de lazy sync in AuraLuaBridge.
+        if (guid == objects().GetLocalPlayerGuid().GetRawValue()) {
+          SyncAurasFromUnitDescriptor(*this, obj, obj.GetGuid());
+          // De 1.12-BuffFrame ververst zijn knoppen op PLAYER_AURAS_CHANGED
+          // (BuffFrame.lua:112-116) en dat event vuurde niemand. Via de queue,
+          // zodat we niet in de Lua-call re-enteren.
+          dispatch.QueueGlobalEvent("PLAYER_AURAS_CHANGED");
+        }
         dispatch.FireUnitAura(guid);
       }
 

@@ -542,6 +542,10 @@ constexpr std::uint32_t kNpcFlagQuestGiver = 0x00000002u;
 
 bool WorldSession::HandleQuestGiverStatus(const net::wotlk::WorldPacket &pkt) {
   if (!quests_.HandleQuestGiverStatus(pkt.payload.data(), pkt.payload.size())) {
+    openwow::diagnostics::Log(
+        openwow::diagnostics::LogLevel::kWarn,
+        "interaction reject malformed SMSG_QUESTGIVER_STATUS bytes=" +
+            std::to_string(pkt.payload.size()));
     return false;
   }
 
@@ -554,8 +558,23 @@ bool WorldSession::HandleQuestGiverStatus(const net::wotlk::WorldPacket &pkt) {
       if (auto *obj = map_runtime_.objects().GetMutable(guid)) {
 
         if (IsQuestGiverStatusEligible(*obj)) {
-          obj->SetQuestGiverIconStatus(static_cast<OverlayDisplayType>(
-              static_cast<std::uint8_t>(*status)));
+          const auto overlay =
+              static_cast<OverlayDisplayType>(static_cast<std::uint8_t>(*status));
+          const auto overlay_raw = static_cast<std::uint32_t>(overlay);
+          // Diagnostiek (DEBUG, net als de interactiedispatch): welke 1.12-
+          // dialogstatus stuurde de server en welk markerslot hoort daarbij.
+          // Zonder deze regel is "geen ! of ?" niet te onderscheiden van
+          // "de server meldt geen quest" (status 0/2 -> slot 0).
+          const auto marker_slot =
+              overlay_raw < kOverlayTypeToModelIndexCount
+                  ? kOverlayTypeToModelIndex[overlay_raw]
+                  : 0u;
+          openwow::diagnostics::Log(
+              openwow::diagnostics::LogLevel::kDebug,
+              "questgiver status guid=" + std::to_string(guid.GetRawValue()) +
+                  " status=" + std::to_string(static_cast<unsigned>(*status)) +
+                  " marker_slot=" + std::to_string(marker_slot));
+          obj->SetQuestGiverIconStatus(overlay);
         }
       }
     }
@@ -646,14 +665,18 @@ bool WorldSession::HandleQuestGiverQuestList(const net::wotlk::WorldPacket &pkt)
       bool parsed = true;
       for (std::uint8_t i = 0; i < count; ++i) {
         QuestListEntry entry{};
-        std::uint8_t repeatable = 0;
+        // 1.12-body per quest (Source GossipDef.cpp:483-486): questID,
+        // questIcon, questLevel, title. De 3.3.5-vorm die hier stond las nog
+        // een u32 questFlags + u8 isRepeatable en schoof daarmee 5 bytes op:
+        // de title-cstring begon 5 tekens te laat ("ng Blade Medallion" in
+        // de questgreeting, terwijl de questlog de volledige titel had). De
+        // Remaining()-check hieronder zag dat niet, want de cstring eindigt
+        // op dezelfde NUL -- alleen de titel was verminkt.
         if (!reader.ReadU32(entry.quest_id) || !reader.ReadU32(entry.quest_icon) ||
-            !reader.ReadI32(entry.quest_level) || !reader.ReadU32(entry.quest_flags) ||
-            !reader.ReadU8(repeatable) || !reader.ReadCString(entry.title)) {
+            !reader.ReadI32(entry.quest_level) || !reader.ReadCString(entry.title)) {
           parsed = false;
           break;
         }
-        entry.is_repeatable = repeatable != 0;
         quest_list.quests.push_back(std::move(entry));
       }
       if (parsed && reader.Remaining() == 0) {

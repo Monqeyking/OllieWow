@@ -56,23 +56,30 @@ struct Position {
   float facing = 0.0f;
 };
 
+// De waarden zijn de 1.12-wire DIALOG_STATUS_*-waarden die de server in
+// SMSG_QUESTGIVER_STATUS stuurt (Source QuestDef.h:119-131); SetQuestGiverIconStatus
+// caste die byte 1-op-1. Dit was de 3.3.5-indeling (LOW_LEVEL_*/AVAILABLE=8), en
+// daardoor kreeg status 5 (beschikbaar, geel "!") hier het model van een grijs
+// vraagteken en verdwenen status 3/4 achter de 3.3.5-trivial-tracking-poort.
 enum class OverlayDisplayType : std::uint8_t {
-  kNone = 0,
-  kType1 = 1,
-  kQuestAvailable = 2,
-  kQuestAvailableRepeatable = 3,
-  kQuestAvailableTrivial = 4,
-  kType5 = 5,
-  kType6 = 6,
-  kType7 = 7,
-  kType8 = 8,
-  kType9 = 9,
-  kType10 = 10,
-  kMaxOverlayType = 11
+  kNone = 0,         // DIALOG_STATUS_NONE        - geen marker
+  kUnavailable = 1,  // DIALOG_STATUS_UNAVAILABLE - grijs "!"
+  kChat = 2,         // DIALOG_STATUS_CHAT        - geen marker (laag niveau)
+  kIncomplete = 3,   // DIALOG_STATUS_INCOMPLETE  - grijs "?"
+  kRewardRep = 4,    // DIALOG_STATUS_REWARD_REP  - lichtblauw "?"
+  kAvailable = 5,    // DIALOG_STATUS_AVAILABLE   - geel "!"
+  kRewardOld = 6,    // DIALOG_STATUS_REWARD_OLD  - geel "?"
+  kReward2 = 7,      // DIALOG_STATUS_REWARD2     - geel "?"
+  kMaxOverlayType = 8
 };
 
+// Status -> modelcache-slot. De clientdispatch is byte-verified
+// {0,3,0,2,7,1,6,6} op de bestandstabel (benilla quest_markers/mod.rs:115-132:
+// UNAVAILABLE->grijs !, INCOMPLETE->grijs ?, REWARD_REP->lichtblauw ?,
+// AVAILABLE->goud !, REWARD_OLD/REWARD2->goud ?), hier omgerekend naar de
+// slots van ResolveQuestOverlayModelPath.
 inline constexpr std::uint32_t kOverlayTypeToModelIndex[] = {
-    0, 6, 1, 2, 3, 5, 10, 11, 4, 9, 9};
+    0, 6, 0, 5, 2, 1, 9, 9};
 
 inline constexpr std::size_t kOverlayTypeToModelIndexCount =
     sizeof(kOverlayTypeToModelIndex) / sizeof(kOverlayTypeToModelIndex[0]);
@@ -227,8 +234,24 @@ class CGObject_C {
     return GetUInt32(OBJECT_FIELD_ENTRY);
   }
 
+  // OBJECT_FIELD_SCALE_X is de VOLLEDIGE rendermaat: de server vouwt de
+  // DBC-schalen (CreatureDisplayInfo.scale x CreatureModelData.scale) er al in.
+  // Benilla zegt dat op vier plekken expliciet -- "the unit/object's complete
+  // render scale: the server already folds" (benilla-app/src/net.rs:190),
+  // "the server folds it into OBJECT_FIELD_SCALE_X"
+  // (benilla-formats/src/creatures.rs:211). De client moet die DBC-schalen dus
+  // niet nog eens toepassen. Dat gebeurde hier wel: native_scale_ bevat voor
+  // units de DBC-schaal (gezet door
+  // UnitPresentationRuntime::RefreshDisplayInfoScale) en de renderer
+  // vermenigvuldigde daar nog een keer mee, waardoor units twee factoren te
+  // groot renden en het model buiten zijn eigen botsings- en
+  // nameplate-footprint stak.
+  //
+  // native_scale_ blijft bestaan als de eigen aanpassing van het object
+  // (dynamic objects schalen er hun visuele maat mee, en de bounding-box-offsets
+  // gebruiken hem); hij hoort alleen niet in de rendermaat.
   [[nodiscard]] float GetScale() const {
-    return native_scale_ * GetFloat(OBJECT_FIELD_SCALE_X);
+    return GetFloat(OBJECT_FIELD_SCALE_X);
   }
 
   void SetNativeScale(float s) { native_scale_ = s; }

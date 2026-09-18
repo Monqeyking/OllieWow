@@ -93,7 +93,7 @@ bool DispatchFriendlyUnitInteraction(WorldSession &session, const CGUnit_C &unit
     }
     const auto taxi_gate_overlay_status = unit.GetOverlayDisplayType();
     if (taxi_gate_overlay_status == OverlayDisplayType::kNone ||
-        taxi_gate_overlay_status == OverlayDisplayType::kType1) {
+        taxi_gate_overlay_status == OverlayDisplayType::kUnavailable) {
       return true;
     }
   }
@@ -112,12 +112,12 @@ bool DispatchFriendlyUnitInteraction(WorldSession &session, const CGUnit_C &unit
   }
 
   const auto quest_overlay_status = unit.GetOverlayDisplayType();
-  if (quest_overlay_status == OverlayDisplayType::kType1) {
+  if (quest_overlay_status == OverlayDisplayType::kUnavailable) {
     constexpr std::uint32_t kTutorialQuestgiverTooLowLevel = 0x2au;
     TutorialSystem::Instance().TriggerTutorial(kTutorialQuestgiverTooLowLevel);
   }
   if (quest_overlay_status != OverlayDisplayType::kNone &&
-      quest_overlay_status != OverlayDisplayType::kType1) {
+      quest_overlay_status != OverlayDisplayType::kUnavailable) {
     session.interaction().SendQuestGiverHello(guid);
     return true;
   }
@@ -1072,6 +1072,13 @@ void UnitInteractionRuntime::OnNPCInteractionFlagsChanged(
     if (session.gossip().interaction_guid().GetRawValue() == my_guid) {
       ui::game::CloseGossipInteraction(session);
     }
+  }
+
+  // De QUESTGIVER- (0x2) of FLIGHTMASTER-bit (0x8) verscheen: vraag de
+  // dialogstatus opnieuw. Dit is het per-NPC-pad van de referentie (bit gezet
+  // 0x60b490/0x60b4c5 -- benilla quest_markers/query.rs:36-46).
+  if ((changed & 0xA) != 0 && (new_flags & 0xA) != 0) {
+    session.RequestQuestgiverStatusFor(owner_.GetGuid());
   }
 
   if ((changed & 0x2) != 0) {

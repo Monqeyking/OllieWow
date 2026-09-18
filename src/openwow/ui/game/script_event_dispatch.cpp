@@ -804,28 +804,75 @@ std::size_t ScriptEventDispatch::queued_event_count() const {
   return queued_events_.size();
 }
 
+namespace {
+
+// Namen van events die op dit moment in de dispatch zitten. Een handler die
+// hetzelfde event opnieuw vuurt laat de C-stack anders overlopen: de lokale
+// QuestLogFrame.lua doet dat via QuestLog_OnEvent -> QuestLog_Update ->
+// Expand/CollapseQuestHeader -> FireQuestLogUpdate (log: "Lua error: C stack
+// overflow" + "Lua handler failed: frame=QuestLogFrame handler=OnEvent").
+// De buitenste dispatch doet het werk al, dus een geneste fire van hetzelfde
+// event is een no-op. Bewust een functie-lokale static: geen nieuw lid op de
+// class, dus geen layout/ABI-wijziging voor andere TUs.
+std::vector<std::string> &DispatchingEventNames() {
+  static std::vector<std::string> names;
+  return names;
+}
+
+bool IsEventDispatching(const char *event_name) {
+  if (event_name == nullptr) {
+    return false;
+  }
+  for (const auto &active : DispatchingEventNames()) {
+    if (active == event_name) {
+      return true;
+    }
+  }
+  return false;
+}
+
+void PushDispatchingEvent(const char *event_name) {
+  if (event_name != nullptr) {
+    DispatchingEventNames().emplace_back(event_name);
+  }
+}
+
+void PopDispatchingEvent() {
+  if (!DispatchingEventNames().empty()) {
+    DispatchingEventNames().pop_back();
+  }
+}
+
+}  // namespace
+
 void ScriptEventDispatch::FireGlobalEvent(const char *event_name) {
-  if (!dispatcher_)
+  if (!dispatcher_ || IsEventDispatching(event_name))
     return;
+  PushDispatchingEvent(event_name);
   dispatcher_->FireEvent(event_name);
+  PopDispatchingEvent();
 }
 
 void ScriptEventDispatch::FireGlobalEventArgs(const char *event_name,
                                               const std::vector<EventArg> &args) {
-  if (!dispatcher_)
+  if (!dispatcher_ || IsEventDispatching(event_name))
     return;
+  PushDispatchingEvent(event_name);
   dispatcher_->FireEventV(event_name, args);
+  PopDispatchingEvent();
 }
 
 void ScriptEventDispatch::FireGlobalEventWithArgs(const char *event_name,
                                                   const std::vector<std::string> &args) {
-  if (!dispatcher_)
+  if (!dispatcher_ || IsEventDispatching(event_name))
     return;
   std::vector<EventArg> event_args;
   for (const auto &a : args) {
     event_args.push_back(a);
   }
+  PushDispatchingEvent(event_name);
   dispatcher_->FireEventV(event_name, event_args);
+  PopDispatchingEvent();
 }
 
 void ScriptEventDispatch::FireUnitHealth(std::uint64_t guid) {

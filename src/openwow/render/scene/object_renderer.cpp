@@ -2248,18 +2248,23 @@ void ObjectRenderer::ResolveDisplayId(RenderInstance &inst) {
   case game::TypeID::kPlayer:
     inst.creature_render_state_key = {};
     path = display_info_.ResolveCreatureModel(inst.display_id);
-    // GetCreatureModelScale is data-driven (CDI x CMD); 1.0 when the row is
-    // missing, so unknown displays keep today's size instead of vanishing.
-    if (display_info_.IsReady()) {
-      inst.display_scale = display_info_.GetCreatureModelScale(inst.display_id);
-      if (M2DiagEnabled()) {
-        openwow::diagnostics::Log(
-            openwow::diagnostics::LogLevel::kInfo,
-            "M2Diag: display scale display=" +
-                std::to_string(inst.display_id) +
-                " display_scale=" + std::to_string(inst.display_scale) +
-                " object_scale=" + std::to_string(inst.scale));
-      }
+    // inst.display_scale blijft hier 1.0. De DBC-schaal
+    // (CreatureDisplayInfo.scale x CreatureModelData.scale, plus de
+    // familiecurve) zit al in CGObject_C::native_scale_, gezet door
+    // UnitPresentationRuntime::RefreshDisplayInfoScale, en GetScale() vouwt die
+    // in inst.scale. Hier nog eens GetCreatureModelScale() toepassen
+    // vermenigvuldigde die factor dus dubbel: het gerenderde model werd groter
+    // dan zijn eigen botsings- en nameplate-footprint -- precies waarom totems
+    // en Tauren te groot renden en units lastig te targeten waren. Gameplay
+    // (collision, missiles, nameplates) gebruikt GetScale() en rekende al met
+    // de juiste maat, dus de renderer moet daarbij aansluiten, niet erbovenop.
+    if (M2DiagEnabled()) {
+      openwow::diagnostics::Log(
+          openwow::diagnostics::LogLevel::kInfo,
+          "M2Diag: display scale display=" +
+              std::to_string(inst.display_id) +
+              " display_scale=" + std::to_string(inst.display_scale) +
+              " object_scale=" + std::to_string(inst.scale));
     }
     break;
   case game::TypeID::kGameObject:

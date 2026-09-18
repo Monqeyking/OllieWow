@@ -65,4 +65,9 @@ Testing/
 # Diagnose-output van de dev-lus (devctl.ps1 / hovertest.ps1 / crop.ps1):
 # screenshots en crops zijn bewijs voor een sessie, geen bronartefact.
 /*.png
-/vfsdump/
+# Extractiedumps van de MPQ/VFS (vfsdump, vfsdump2 ... vfsdump8):
+# sessiebewijs, geen bronartefact.
+/vfsdump*/
+
+# Losse /run-probe-scripts voor het debugkanaal.
+/lua/

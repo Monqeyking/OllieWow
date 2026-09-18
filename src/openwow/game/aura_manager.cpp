@@ -1,8 +1,10 @@
 
 #include "openwow/game/aura_manager.h"
 
+#include "openwow/game/aura_descriptor_sync.h"
 #include "openwow/data/formats/dbc/dbc_structures.h"
 #include "openwow/foundation/diagnostics/logging.h"
+#include "openwow/runtime/time/game_clock.h"
 
 #include <algorithm>
 #include <bit>
@@ -31,6 +33,42 @@ namespace {
 [[nodiscard]] std::int32_t MultiplyWrappedI32(const std::int32_t lhs,
                                               const std::int32_t rhs) {
   return BitCastSigned(BitCastUnsigned(lhs) * BitCastUnsigned(rhs));
+}
+
+// 1.12-auras komen uit het unit-descriptor; die leven hier naast de
+// pakket-store (auras_), want de pakketlezer bestaat alleen in de
+// 3.3.5-vorm en 1.12 stuurt die pakketten nooit. GetAuras en
+// FindAuraBySpellId kijken in beide stores.
+[[nodiscard]] std::unordered_map<std::uint64_t, std::vector<AuraSlotInfo>>&
+DescriptorAuras() {
+  static std::unordered_map<std::uint64_t, std::vector<AuraSlotInfo>> map;
+  return map;
+}
+
+// Duur die aankwam voordat de aura in de descriptor-store stond. Zonder deze
+// buffer valt de timer weg: 1.12 stuurt SMSG_UPDATE_AURA_DURATION direct na het
+// zetten van de descriptorvelden, en dat pakket kan de client eerder bereiken
+// dan de object-update met de aura zelf (offline gemeten).
+[[nodiscard]] std::unordered_map<
+    std::uint64_t, std::unordered_map<std::uint8_t, std::uint32_t>>&
+PendingDescriptorDurations() {
+  static std::unordered_map<std::uint64_t,
+                            std::unordered_map<std::uint8_t, std::uint32_t>>
+      map;
+  return map;
+}
+
+// Resterende duur per descriptor-slot voor de lokale speler, met het tijdstip
+// waarop hij gezet is zodat de waarde meeloopt met de klok.
+struct LocalPlayerAuraDuration {
+  std::uint32_t remaining_ms{0};
+  std::uint32_t set_tick{0};
+};
+
+[[nodiscard]] std::unordered_map<std::uint8_t, LocalPlayerAuraDuration>&
+LocalPlayerAuraDurations() {
+  static std::unordered_map<std::uint8_t, LocalPlayerAuraDuration> map;
+  return map;
 }
 
 [[nodiscard]] AuraSlotInfo MakeEmptyAuraSlot(const std::uint8_t slot) {
@@ -445,6 +483,11 @@ const std::vector<AuraSlotInfo>& AuraManager::GetAuras(
     std::uint64_t guid) const {
   auto it = auras_.find(guid);
   if (it != auras_.end()) return it->second;
+
+  // 1.12: de descriptor-sync is dan de bron (zie DescriptorAuras()).
+  const auto descriptor = DescriptorAuras().find(guid);
+  if (descriptor != DescriptorAuras().end()) return descriptor->second;
+
   return kEmptyAuras;
 }
 
@@ -454,26 +497,40 @@ const AuraSlotInfo* AuraManager::FindAuraBySpellId(
     return nullptr;
   }
 
-  const auto it = auras_.find(guid);
-  if (it == auras_.end()) {
-    return nullptr;
+  const auto search = [spell_id](const std::vector<AuraSlotInfo>& slots)
+      -> const AuraSlotInfo* {
+    const AuraSlotInfo* match = nullptr;
+    for (const auto& aura : slots) {
+      if (aura.spell_id != spell_id) {
+        continue;
+      }
+      if (match == nullptr || aura.slot < match->slot) {
+        match = &aura;
+      }
+    }
+    return match;
+  };
+
+  if (const auto it = auras_.find(guid); it != auras_.end()) {
+    if (const auto* found = search(it->second); found != nullptr) {
+      return found;
+    }
   }
 
-  const AuraSlotInfo* match = nullptr;
-  for (const auto& aura : it->second) {
-    if (aura.spell_id != spell_id) {
-      continue;
-    }
-    if (match == nullptr || aura.slot < match->slot) {
-      match = &aura;
-    }
+  // 1.12: descriptor-auras (zie DescriptorAuras()).
+  if (const auto it = DescriptorAuras().find(guid);
+      it != DescriptorAuras().end()) {
+    return search(it->second);
   }
 
-  return match;
+  return nullptr;
 }
 
 void AuraManager::Clear() {
   auras_.clear();
+  DescriptorAuras().clear();
+  PendingDescriptorDurations().clear();
+  LocalPlayerAuraDurations().clear();
   last_update_diff_ = {};
   modifiers_.clear();
   cast_failed_.reset();
@@ -482,6 +539,87 @@ void AuraManager::Clear() {
   channel_info_.reset();
   cooldown_event_.reset();
   clear_cooldown_spell_ = 0;
+}
+
+void SetDescriptorAurasForUnit(const std::uint64_t guid,
+                               std::vector<AuraSlotInfo> auras) {
+  if (auras.empty()) {
+    DescriptorAuras().erase(guid);
+    return;
+  }
+  DescriptorAuras().insert_or_assign(guid, std::move(auras));
+}
+
+void SetDescriptorAuraDuration(const std::uint64_t guid,
+                               const std::uint8_t descriptor_slot,
+                               const std::uint32_t remaining_ms) {
+  if (const auto it = DescriptorAuras().find(guid);
+      it != DescriptorAuras().end()) {
+    for (auto& aura : it->second) {
+      if (aura.slot != descriptor_slot || aura.spell_id == 0) {
+        continue;
+      }
+      aura.remaining_duration = remaining_ms;
+      if (aura.max_duration < remaining_ms) {
+        aura.max_duration = remaining_ms;
+      }
+      return;
+    }
+  }
+
+  // Nog geen aura op deze plek (ook niet als de guid al andere auras heeft):
+  // bewaren zodat de sync hem toepast zodra het descriptor-veld binnenkomt.
+  PendingDescriptorDurations()[guid][descriptor_slot] = remaining_ms;
+}
+
+void SetLocalPlayerAuraDuration(const std::uint8_t descriptor_slot,
+                                 const std::uint32_t remaining_ms) {
+  if (descriptor_slot >= 48u) {
+    return;
+  }
+  if (remaining_ms == 0u) {
+    LocalPlayerAuraDurations().erase(descriptor_slot);
+    return;
+  }
+  LocalPlayerAuraDurations()[descriptor_slot] =
+      LocalPlayerAuraDuration{remaining_ms, core::GameClock::GetTickCount32()};
+}
+
+std::uint32_t GetLocalPlayerAuraDuration(const std::uint8_t descriptor_slot) {
+  const auto it = LocalPlayerAuraDurations().find(descriptor_slot);
+  if (it == LocalPlayerAuraDurations().end()) {
+    return 0u;
+  }
+  const std::uint32_t elapsed =
+      core::GameClock::GetTickCount32() - it->second.set_tick;
+  if (elapsed >= it->second.remaining_ms) {
+    LocalPlayerAuraDurations().erase(it);
+    return 0u;
+  }
+  return it->second.remaining_ms - elapsed;
+}
+
+std::uint32_t TakeDescriptorAuraDuration(const std::uint64_t guid,
+                                         const std::uint8_t descriptor_slot) {
+  const auto unit = PendingDescriptorDurations().find(guid);
+  if (unit == PendingDescriptorDurations().end()) {
+    return 0u;
+  }
+  const auto slot = unit->second.find(descriptor_slot);
+  if (slot == unit->second.end()) {
+    return 0u;
+  }
+  const std::uint32_t remaining_ms = slot->second;
+  unit->second.erase(slot);
+  if (unit->second.empty()) {
+    PendingDescriptorDurations().erase(unit);
+  }
+  return remaining_ms;
+}
+
+void ClearDescriptorAurasForUnit(const std::uint64_t guid) {
+  DescriptorAuras().erase(guid);
+  PendingDescriptorDurations().erase(guid);
 }
 
 }

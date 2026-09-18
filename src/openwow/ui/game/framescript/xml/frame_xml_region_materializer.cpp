@@ -229,13 +229,40 @@ void ApplyTextureTemplate(lua_State *L, int texture_index,
 
   using runtime::TextureRenderStateField;
   if (!frame.file.empty()) {
-    runtime::SetTextureRenderStateString(
-        L, texture_index, TextureRenderStateField::kTexture,
-        std::string_view(frame.file));
-    runtime::SetTextureRenderStateBoolean(
-        L, texture_index, TextureRenderStateField::kTextureCleared, false);
+    // De XML-file is een BEGINwaarde, net als in de referentie: benilla's
+    // loader roept eenmalig SetNormalTexture/SetTexture aan
+    // (benilla-ui/src/loader/widgets.rs:210-213) en daarna is de widget-state
+    // leidend -- de XML wordt nooit opnieuw over een runtime-waarde heen
+    // gezet. Zonder deze guard zette elke her-materialisatie de template-
+    // textuur terug en ging de clear van de Lua verloren; dat is precies het
+    // plus/min-resicoon dat op gewone questregels bleef staan
+    // (QuestLogFrame.lua:154 doet daar SetNormalTexture("") op de
+    // NormalTexture die QuestLogFrame.xml:68 in de template zet).
+    //
+    // De markering onthoudt ALLE al toegepaste XML-files ("|a|b|"), zodat een
+    // template-keten waarin basis én afgeleide een eigen file= declareren na
+    // een her-materialisatie nog steeds niets overschrijft.
+    const char *const applied_xml_textures =
+        openwow::ui::BorrowRawLuaStringField(L, texture_index,
+                                             "__ow_xml_textures");
+    const std::string marker = "|" + frame.file + "|";
+    const bool xml_texture_already_applied =
+        applied_xml_textures != nullptr &&
+        std::string(applied_xml_textures).find(marker) != std::string::npos;
+    if (!xml_texture_already_applied) {
+      runtime::SetTextureRenderStateString(
+          L, texture_index, TextureRenderStateField::kTexture,
+          std::string_view(frame.file));
+      runtime::SetTextureRenderStateBoolean(
+          L, texture_index, TextureRenderStateField::kTextureCleared, false);
+      SetLuaStringField(L, texture_index, "__ow_xml_textures",
+                        (applied_xml_textures != nullptr
+                             ? std::string(applied_xml_textures)
+                             : std::string()) +
+                            marker);
 
-    QueueRegionTextureLoad(L, frame.file);
+      QueueRegionTextureLoad(L, frame.file);
+    }
   }
   if (!frame.alpha_mode.empty()) {
     const std::string blend_mode =

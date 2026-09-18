@@ -457,14 +457,28 @@ bool BuildSpellTooltip(const SpellTooltipRequest &request) {
       const float range_val = spell.range;
       if (range_val > 0.0f) {
         if (range_val >= 50000.0f) {
-          range_text = GetTooltipString("SPELL_RANGE_UNLIMITED");
+          // De lokale 1.12-client heeft geen SPELL_RANGE_UNLIMITED in
+          // GlobalStrings (alleen SPELL_RANGE en SPELL_RANGE_AREA), dus de
+          // lookup geeft de token zelf terug. Laat de regel dan weg in plaats
+          // van een rauwe token in de tooltip te tonen.
+          const std::string unlimited = GetTooltipString("SPELL_RANGE_UNLIMITED");
+          if (unlimited != "SPELL_RANGE_UNLIMITED") {
+            range_text = unlimited;
+          }
         } else {
           std::array<char, 32> range_num{};
           std::snprintf(range_num.data(), range_num.size(), "%d", static_cast<int>(range_val));
           range_text = FormatTooltipLine("SPELL_RANGE", range_num.data());
         }
       } else if (spell.range == 0.0f && (spell.attributes & 0x404) == 0) {
-        range_text = GetTooltipString("MELEE_RANGE");
+        // Zelfde reden als hierboven: de lokale client heeft geen MELEE_RANGE
+        // in GlobalStrings (nagezocht in de hele clientdata), dus
+        // GetTooltipString geeft de token zelf terug. Liever geen regel dan
+        // een rauwe token.
+        const std::string melee_range = GetTooltipString("MELEE_RANGE");
+        if (melee_range != "MELEE_RANGE") {
+          range_text = melee_range;
+        }
       }
     }
 
