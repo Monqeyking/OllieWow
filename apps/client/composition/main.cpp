@@ -2,6 +2,7 @@
 #include "composition/client_helpers.h"
 
 #include <cstdio>
+#include <fstream>
 #include <cstdlib>
 #include <exception>
 
@@ -630,18 +631,56 @@ int main(int argc, char** argv) {
   // (dat op dat moment nog gebufferd is). Schrijf de reden naar stderr zodat
   // een start-crash te diagnostiseren is.
   std::set_terminate([]() {
+    std::string reason;
     if (const auto exception = std::current_exception()) {
       try {
         std::rethrow_exception(exception);
       } catch (const std::exception& error) {
-        std::fprintf(stderr, "terminate: %s\n", error.what());
+        reason = std::string("terminate: ") + error.what();
       } catch (...) {
-        std::fprintf(stderr, "terminate: unknown exception\n");
+        reason = "terminate: unknown exception";
       }
     } else {
-      std::fprintf(stderr, "terminate: no active exception\n");
+      reason = "terminate: no active exception";
     }
+    std::fprintf(stderr, "%s\n", reason.c_str());
     std::fflush(stderr);
+
+    // Schrijf ook een crashrapport MET stack. De terminate-route (abort ->
+    // 0xC0000409) is met afstand de meest voorkomende crash (318 van 333
+    // WER-rapporten) en zonder stack is niet te zien wie std::terminate aanriep.
+    // De klassieke oorzaak van "no active exception" is een joinable std::thread
+    // die tijdens het afsluiten wordt vernietigd. De offsets zijn met
+    // OllieWoW.map te resolven.
+    try {
+      const auto stack = openwow::platform::CrashHandler::CaptureStackTrace(64);
+      // Ook naar stderr: een terminate mag nooit spoorloos zijn, ook niet als
+      // geen enkele map beschrijfbaar blijkt.
+      std::fprintf(stderr, "terminate stack (%zu frames):\n", stack.size());
+      for (std::size_t i = 0; i < stack.size(); ++i) {
+        std::fprintf(stderr, "  #%zu %s\n", i, stack[i].c_str());
+      }
+      auto& handler = openwow::platform::CrashHandler::Get();
+      const std::string path = handler.WriteCrashReport(reason, stack);
+      if (path.empty()) {
+        // De primaire map (de client-Logs) kan onbeschrijfbaar zijn. Schrijf het
+        // rapport dan naast het proces, zodat een terminate niet spoorloos is.
+        std::ofstream fallback("openwow-terminate-report.txt",
+                               std::ios::out | std::ios::trunc);
+        if (fallback) {
+          fallback << handler.FormatCrashReport(reason, stack);
+          fallback.flush();
+          std::fprintf(stderr, "terminate report: openwow-terminate-report.txt\n");
+        } else {
+          std::fprintf(stderr, "terminate report: kon niet schrijven\n");
+        }
+      } else {
+        std::fprintf(stderr, "terminate report: %s\n", path.c_str());
+      }
+    } catch (...) {
+      std::fprintf(stderr, "terminate report: exception tijdens schrijven\n");
+    }
+
     std::abort();
   });
 

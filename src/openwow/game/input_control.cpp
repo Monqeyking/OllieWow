@@ -22,7 +22,12 @@ namespace openwow::game::input {
 
 namespace {
 
-std::unique_ptr<CInputControl> g_owned_input_control_singleton;
+// Rauwe owner, opzettelijk zonder opruimen. Een unique_ptr hier zorgde voor een
+// access violation bij het afsluiten: de atexit-tabel vernietigde de singleton,
+// ~CInputControl -> ClearMouselookOverrideBindings -> BindingProfiles::
+// ClearOverrideBindings praat dan tegen een global die al weg is. Een
+// proces-exit-singleton hoort niet op te ruimen; de OS reclaimt het geheugen.
+CInputControl* g_owned_input_control_singleton = nullptr;
 std::uint32_t g_joystick_cvar_callback_handle = 0;
 JoystickConfigXmlTextProvider g_joystick_config_xml_text_provider = nullptr;
 ActiveJoystickNameProvider g_active_joystick_name_provider = nullptr;
@@ -195,11 +200,12 @@ void RegisterInputControlStartupCVars(openwow::ui::game::CVarSystem& cvars) {
 
 void ReleaseOwnedInputControlSingleton() {
     if (g_owned_input_control_singleton &&
-        g_owned_input_control_singleton.get() != GetInputControlSingleton()) {
+        g_owned_input_control_singleton != GetInputControlSingleton()) {
         g_owned_input_control_singleton->SetJoystickEnabled(false);
     }
 
-    g_owned_input_control_singleton.reset();
+    // Bewust niet verwijderen: zie de toelichting bij de declaratie.
+    g_owned_input_control_singleton = nullptr;
 }
 
 CInputControl* ResolveInputControlArgument(void* input_control) {
@@ -243,9 +249,9 @@ void InputControl_StartupInitialize() {
     ReleaseOwnedInputControlSingleton();
 
     SetCursorVisibilityCallback(PublishCursorVisibilityToActiveSurface);
-    g_owned_input_control_singleton = std::make_unique<CInputControl>(
-        KeybindSystem::Get().GetManager());
-    SetInputControlSingleton(g_owned_input_control_singleton.get());
+    g_owned_input_control_singleton =
+        new CInputControl(KeybindSystem::Get().GetManager());
+    SetInputControlSingleton(g_owned_input_control_singleton);
     g_owned_input_control_singleton->SetJoystickEnabled(
         cvars.GetCVarBool("enableWowMouse"));
     ApplyJoystickConfigForValue(cvars.GetCVar("Joystick"));

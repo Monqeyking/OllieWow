@@ -9,6 +9,7 @@
 #include <chrono>
 #include <cstring>
 #include <ctime>
+#include <cstdio>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
@@ -121,6 +122,12 @@ CrashHandler& CrashHandler::Get() {
 static LPTOP_LEVEL_EXCEPTION_FILTER s_prev_filter = nullptr;
 
 static LONG WINAPI CrashExceptionFilter(EXCEPTION_POINTERS* exception_info) {
+  // Een exception-filter mag NOOIT gooien. Een exception die hier ontsnapt laat de
+  // runtime std::terminate aanroepen (zonder actieve exception) en eindigt als
+  // 0xC0000409 in ucrtbase -- precies de dominante crashsignatuur in het archief
+  // (318 van 333 WER-rapporten). Daarom staat alles hieronder in een try/catch en
+  // gebruikt elke filesystem-aanroep de error_code-variant.
+  try {
   auto& handler = CrashHandler::Get();
 
   if (handler.IsInstalled()) {
@@ -133,11 +140,25 @@ static LONG WINAPI CrashExceptionFilter(EXCEPTION_POINTERS* exception_info) {
     }
 
     auto stack = CrashHandler::CaptureStackTrace(64);
+    // Ook naar stderr: een crashrapport mag niet afhankelijk zijn van een
+    // beschrijfbare map (en in een sandbox is die er vaak niet).
+    std::fprintf(stderr, "%s\n", sig_info.c_str());
+    for (std::size_t i = 0; i < stack.size(); ++i) {
+      std::fprintf(stderr, "  #%zu %s\n", i, stack[i].c_str());
+    }
+    std::fflush(stderr);
     (void)handler.WriteCrashReport(sig_info, stack);
 
     {
       auto ctx = handler.GetContext();
-      std::filesystem::create_directories(ctx.logs_directory);
+      std::error_code dir_ec;
+      std::filesystem::create_directories(ctx.logs_directory, dir_ec);
+      if (dir_ec) {
+        // Geen beschrijfbare map: het crashrapport is hierboven al geschreven, dus
+        // alleen de minidump overslaan. Nooit gooien -- zie de toelichting boven.
+        return s_prev_filter ? s_prev_filter(exception_info)
+                             : EXCEPTION_CONTINUE_SEARCH;
+      }
 
       auto now = std::chrono::system_clock::now();
       auto tt = std::chrono::system_clock::to_time_t(now);
@@ -182,6 +203,10 @@ static LONG WINAPI CrashExceptionFilter(EXCEPTION_POINTERS* exception_info) {
         }
       }
     }
+  }
+
+  } catch (...) {
+    // Een filter dat gooit is erger dan een filter dat niets doet.
   }
 
   if (s_prev_filter) {
