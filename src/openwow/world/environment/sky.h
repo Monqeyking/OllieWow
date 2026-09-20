@@ -37,7 +37,10 @@ enum class SkyColorSlot : std::uint8_t {
   case SkyColorSlot::kGlobalDiffuse:
     return 0u;
   case SkyColorSlot::kSunColor:
-    return 8u;
+    // Rij 9 is de zon; rij 8 is de shadow-opacity-slot (vlak grijs). Zie
+    // benilla-formats/src/light.rs:15-16 ("rows 2-6 = the 5 sky stops, 7 = fog,
+    // 9 = sun ... row 8 is flat gray = shadow-opacity slot, not a sun").
+    return 9u;
   case SkyColorSlot::kSkyTop:
     return 2u;
   case SkyColorSlot::kSkyMiddle:

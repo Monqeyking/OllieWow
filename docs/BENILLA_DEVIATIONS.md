@@ -595,6 +595,77 @@ Verificatie (herhaalbaar): `ui QuestLogTitle2NormalTexture` → leeg; screenshot
 de lijst → geen blokje op questregels; `devctl click` op een rij →
 `QuestLogFrame.selectedButtonID` verandert; daarna `HideUIPanel` + `ToggleQuestLog`
 → alles blijft.
+### Batch 6 — aura's, quest log, cursor, GM-ticket, crashhandler en WMO-licht (opgelost 2026-09-19/20)
+
+**Aura's.** Descriptor-auras worden nu in AuraTracker én AuraManager gezet
+(`unit_descriptor_callbacks.cpp`), `UNIT_AURA` vuurt bij een wijziging
+(`update_field_event_mapper.cpp`), `PLAYER_AURAS_CHANGED` wordt voor de speler
+gequeued, en `SMSG_UPDATE_AURA_DURATION` (0x137) wordt vóór de packet_dispatcher
+afgehandeld (`world_session.cpp`). De duur wordt slot-geïndexeerd bewaard
+(`aura_manager.cpp`), zodat een timer een relog overleeft én werkt als het
+duur-pakket vóór de aura aankomt. In-game bevestigd (timers op alle buffs).
+
+**Quest log.** `GetQuestLogTitle` geeft het 1.12-zeswaarden-contract
+(isHeader/isCollapsed = nil voor quests), de selectie blijft bij header-kliks,
+template-loze quests houden hun rij, en een onbekende titel is `""` in plaats van
+`nil` (`QuestLogFrame.lua:164` concateneert onvoorwaardelijk).
+
+**Wereldcursor.** `unit_cursor_policy.h` bevat de 1.12-service-ladder over
+UNIT_NPC_FLAGS (laagste bit wint, REPAIR nooit geconsulteerd), de vaste
+5,5556-yd-grijsgrens en de questgiver-gate. Quest givers gebruiken `Speak` in
+plaats van de 3.3.5 `Quest*`-cursors die in 1.12 niet bestaan. In-game bevestigd.
+
+**GM-ticket.** `UPDATE_TICKET` krijgt `arg1 = 0` zonder ticket, zodat het
+indicator-icoon alleen verschijnt bij een ingediend ticket.
+
+**Crashhandler.** `CrashExceptionFilter` gebruikte de throwing
+`create_directories`-overload; een falende aanroep liet een `filesystem_error`
+uit het filter ontsnappen → `std::terminate` (geen actieve exception) →
+`0xC0000409` — 318 van de 333 WER-rapporten. Nu `error_code` + try/catch, en de
+stack gaat ook naar stderr. Daarmee werd de echte fout zichtbaar: een
+static-destruction-order access violation in `~CInputControl` →
+`BindingProfiles::ClearOverrideBindings` op een al vernietigde global; de
+input-control-singleton wordt nu bewust niet opgeruimd bij exit. In-game
+bevestigd (schone exit, geen enkel crash-artifact).
+
+**WMO-licht.** De WMO gebruikte de *derived* dag/nacht-kleuren, terwijl terrein
+en M2 LightIntBand rij 0/1 gebruiken (`benilla-formats/src/light/atmosphere.rs:8-9`).
+Nu dezelfde bron. Bonus: `kSunColor` las rij 8 (shadow-opacity-slot) in plaats van
+rij 9 (de zon) — `light.rs:15-16`.
+
+## Werkvoorraad: pariteit met het origineel
+
+Open, in volgorde van impact:
+
+1. **Protocol-clusters uit de audit** (`docs/PROTOCOL_AUDIT_335_VS_112.md`, Batch 1b):
+   de resterende 3.3.5→1.12-pakketpaden.
+2. **`QuestGiverStatus`-enum**: wij gebruiken de 3.3.5-ordening terwijl de
+   1.12-server de 1.12-waarden stuurt (`Source QuestDef.h:121-130`). In het
+   cursorpad is dat omzeild door de ruwe wire-waarde te lezen; de enum zelf is nog
+   fout en andere consumenten lezen hem ook.
+3. **Cursor-follow-up**: de niet-NPC-potenen (attack/skin/loot). Onze attack-grens
+   (10,45 yd) en skin-reach wijken af van de referentie
+   (`target/cursor_mode.rs:174-182`).
+4. **UI-clipping**: `clip_rect` wordt nergens gevuld; het quest-detailpaneel clipt
+   daardoor niet (Batch 5, punt 4).
+5. **Harness-gate**: `world_offline_play_regression` faalt op zijn eigen asserties
+   (`ChatFrame1 message count did not advance`, render-ready-wait). Zolang die rood
+   staan betekent "groen" alleen "mijn regel is groen".
+
+## Toekomst: opt-in graphics-upgrades (ná pariteit)
+
+Alles achter één CVar (`gfx.enhanced`), standaard **uit**, zodat de 1.12-look het
+contract blijft. Volgorde op impact:
+
+1. **Schaduwen op WMO + M2.** De shadow map bestaat al
+   (`shadow_presentation_runtime.cpp`, `ShadowMap`-pass) maar **alleen
+   `fs_terrain.sc`** sampelt hem; gebouwen en modellen ontvangen dus geen schaduw.
+   Grootste sprong, additief.
+2. **Per-pixel lighting** voor WMO/M2 (nu per-vertex in `vs_wmo.sc`) — voorwaarde
+   voor normal maps.
+3. **Post**: SSAO, HDR/tonemapping en AA-opties (de post-keten bestaat al).
+4. **Optionele HD-asset-override** (alleen laden, geen MPQ-wijziging).
+
 ## Vervallen bevindingen
 
 - **`__benilla_now` (cooldown-klok)**: een subagent meldde dat

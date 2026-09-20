@@ -2715,10 +2715,13 @@ WorldPresentationSnapshot WorldMap::PublishPresentationSnapshot(
                               : Vec3{};
   environment_.ambient = environment_.model_ambient;
   environment_.diffuse = environment_.model_diffuse;
-  environment_.wmo_outdoor_diffuse = UnitRgb(light_env->dwords[
-      openwow::game::kDayNightDerivedColorCurrentDiffuseIndex]);
-  environment_.wmo_outdoor_ambient = UnitRgb(light_env->dwords[
-      openwow::game::kDayNightDerivedColorCurrentAmbientIndex]);
+  // WMO-oppervlakken gebruiken dezelfde atmosfeerlichtrijen als het terrein:
+  // LightIntBand 0 = diffuse, 1 = ambient (benilla-formats/src/light/atmosphere.rs:8-9).
+  // Hier stonden de derived-kleuren; die zijn een andere, door de client
+  // afgeleide set, waardoor een gebouw zichtbaar anders belicht werd dan de
+  // wereld eromheen.
+  environment_.wmo_outdoor_diffuse = environment_.model_diffuse;
+  environment_.wmo_outdoor_ambient = environment_.model_ambient;
   environment_.window_diffuse = UnitRgb(light_env->dwords[
       openwow::game::kDayNightDerivedColorCurrentMidpointIndex]);
   environment_.window_ambient = UnitRgb(light_env->dwords[
