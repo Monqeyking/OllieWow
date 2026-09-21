@@ -13,9 +13,16 @@ namespace openwow::render {
 
 namespace {
 
-constexpr float kRetailMapHalfSize = 17066.666f;
-constexpr float kRetailChunkSize = 33.333332f;
-constexpr float kRetailHalfChunkSize = 16.666666f;
+// WDL tile edges must use the same global double-precision lattice as Benilla's
+// WdlFile::tile_mesh. Computing an origin in f32 and then subtracting local
+// offsets gives adjacent tile edges different rounded positions, which exposes
+// camera-dependent one-pixel gaps/z-fights.
+constexpr double kRetailMapHalfSize = 32.0 * 1600.0 / 3.0;
+constexpr double kRetailChunkSize = (1600.0 / 3.0) / 16.0;
+
+static float WdlLatticePosition(const double global_index) {
+  return static_cast<float>(kRetailMapHalfSize - global_index * kRetailChunkSize);
+}
 constexpr std::uint16_t kWdlOuterVertexCount = 17u * 17u;
 
 }
@@ -41,14 +48,14 @@ BuildDistantTerrainTileMesh(const int storage_x, const int storage_y,
   mesh.indices.reserve(16u * 16u * 12u);
   mesh.maho_indices.reserve(16u * 16u * 12u);
 
-  const float origin_x = kRetailMapHalfSize - static_cast<float>(storage_y * 16) * kRetailChunkSize;
-  const float origin_y = kRetailMapHalfSize - static_cast<float>(storage_x * 16) * kRetailChunkSize;
+  const double tile_row = static_cast<double>(storage_y) * 16.0;
+  const double tile_col = static_cast<double>(storage_x) * 16.0;
 
   for (std::size_t y = 0; y < 17u; ++y) {
     for (std::size_t x = 0; x < 17u; ++x) {
       mesh.positions.push_back({
-          origin_x - static_cast<float>(y) * kRetailChunkSize,
-          origin_y - static_cast<float>(x) * kRetailChunkSize,
+          WdlLatticePosition(tile_row + static_cast<double>(y)),
+          WdlLatticePosition(tile_col + static_cast<double>(x)),
           static_cast<float>(heights.outer[y][x]),
       });
     }
@@ -56,8 +63,8 @@ BuildDistantTerrainTileMesh(const int storage_x, const int storage_y,
   for (std::size_t y = 0; y < 16u; ++y) {
     for (std::size_t x = 0; x < 16u; ++x) {
       mesh.positions.push_back({
-          origin_x - kRetailHalfChunkSize - static_cast<float>(y) * kRetailChunkSize,
-          origin_y - kRetailHalfChunkSize - static_cast<float>(x) * kRetailChunkSize,
+          WdlLatticePosition(tile_row + static_cast<double>(y) + 0.5),
+          WdlLatticePosition(tile_col + static_cast<double>(x) + 0.5),
           static_cast<float>(heights.inner[y][x]),
       });
     }
@@ -292,9 +299,18 @@ void DistantTerrainRenderer::Render(bgfx::ViewId view,
       if (!mesh.valid)
         continue;
 
+      // De far band wordt ALTIJD getekend, ook waar het gedetailleerde terrein
+      // geladen is -- precies zoals de referentie: "fills whatever the detailed
+      // world leaves empty and can never overlap it"
+      // (benilla-assets/src/shaders/wdl.wgsl). Dat kan nu veilig, want de
+      // vertex-shader comprimeert de diepte naar [0.99999, 0.999999]: achter
+      // alles wat wij tekenen, maar voor de lege dieptebuffer. (De eerdere
+      // poging gebruikte [0.955, 0.96], wat bij ONZE projectie VOOR het verre
+      // terrein lag -- vandaar dat toen het hele beeld paars werd.)
+      // Zo vult de horizon elk gat dat het terrein laat: geen zwarte of paarse
+      // plekken meer, waar die ook door komen (streaming of culling).
       if (((detailed_row >> tx) & std::uint64_t{1}) != 0u) {
         ++render_stats_.detailed_tile_count;
-        continue;
       }
 
       if (frustum_ != nullptr &&

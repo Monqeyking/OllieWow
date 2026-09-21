@@ -1,4 +1,4 @@
-$input v_texcoord0, v_alphaUV, v_color0, v_viewDist, v_worldPos
+$input v_texcoord0, v_alphaUV, v_alphaSlice, v_color0, v_viewDist, v_worldPos
 
 #define OPENWOW_TERRAIN_LAYER_ARRAY 0
 

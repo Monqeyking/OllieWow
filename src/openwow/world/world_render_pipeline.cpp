@@ -15,7 +15,14 @@ namespace openwow::world {
 
 namespace {
 
-constexpr std::uint32_t kCWorldInitializeRenderFlagDefaults = 0x07104B73u;
+// Bit 0x40 (WorldRenderFlag::kTerrainShadows) staat hier bewust UIT: de
+// 1.12-client heeft geen real-time shadow map -- zijn terrein-schaduw is de
+// statische MCSH-bake per chunk (1.0 belicht / 0.2 in schaduw). Onze dynamische
+// schaduwmap volgt de view en maakte grote delen terrein donkerder dan het
+// origineel (gemeten: uitzetten maakt die plekken 30,5 -> 41,2 in helderheid),
+// en dat verandert mee met de camera. `showShadow` blijft bestaan om hem als
+// opt-in verbetering aan te zetten.
+constexpr std::uint32_t kCWorldInitializeRenderFlagDefaults = 0x07104B33u;
 
 constexpr std::uint32_t kDetailDoodadAlphaDefault = 0x80u;
 

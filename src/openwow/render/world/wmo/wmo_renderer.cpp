@@ -503,7 +503,15 @@ WmoLightingMode ResolveRetailWmoLightingMode(
     if (group_exterior) {
       return unlit ? WmoLightingMode::Unlit : WmoLightingMode::Outdoor;
     }
-    return window ? WmoLightingMode::Window : WmoLightingMode::Interior;
+    if (window) {
+      return WmoLightingMode::Window;
+    }
+    // 1.12: een interior-groep is onbelicht `tex x MOCV`
+    // (benilla-assets/src/materials.rs:190: "interior INT => unlit tex x MOCV");
+    // de MOCV bevat de interior-bake al. De oude `Interior`-mode telde daar nog
+    // root_ambient_ bij op, waardoor een cave overbelicht raakte ten opzichte van
+    // de omgeving.
+    return WmoLightingMode::Unlit;
   }
 
   if (region == WmoBatchMesh::Region::Interior) {

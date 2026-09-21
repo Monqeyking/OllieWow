@@ -5,22 +5,23 @@ $input v_texcoord0, v_color0, v_viewDist, v_worldPos
 
 #include "terrain_params.sh"
 
-uniform mat4 u_shadowMtx;
-uniform vec4 u_shadowParams;
-
-SAMPLER2DSHADOW(s_shadowMap, 5);
-
-#include "world_shadow.sh"
-
 void main()
 {
-    float shadowVisibility = 1.0;
-    if (u_shadowParams.z > 0.0) {
-        shadowVisibility = openwowSampleWorldShadow(v_worldPos, u_shadowParams.x);
-        shadowVisibility = mix(1.0, shadowVisibility, u_shadowParams.z);
+    // Match Benilla's detailed-world farclip wall: terrain fragments beyond
+    // the planar eye-Z farclip must not survive rasterization.
+    if (u_terrainFogParams.w > 0.0 && v_viewDist > u_terrainFogParams.w)
+    {
+        discard;
     }
+
+    // Classic terrain has only the per-chunk MCSH bake. Do not sample the
+    // optional view-following shadow map here: its light matrix is rebuilt
+    // from the camera frustum and makes dark patches move with pitch.
+    const float shadowVisibility = 1.0;
     vec3 shadowModulate = mix(u_terrainShadowMod.rgb, vec3_splat(1.0), shadowVisibility);
-    vec3 litColor = u_terrainColor.rgb * v_color0.rgb * (2.0 * shadowModulate);
+    // De 2.0 compenseerde de halve schaal van de MCCV hierboven; die
+    // vermenigvuldiging is weg, dus de compensatie ook (referentie: MOD 1x).
+    vec3 litColor = u_terrainColor.rgb * v_color0.rgb * shadowModulate;
 
     float fogFactor = openwowLinearFogVisibility(u_terrainFogParams, v_viewDist);
     gl_FragColor = vec4(mix(u_terrainFogColor.rgb, litColor, fogFactor), u_terrainColor.a);

@@ -37,7 +37,14 @@ void main()
         lighting += terrainPointLightDiffuse(index).rgb * strength;
     }
     v_texcoord0 = a_texcoord0;
-    v_color0 = vec4(clamp(lighting, 0.0, 1.0) * a_color0.rgb, a_color0.a);
+    // GEEN vermenigvuldiging met a_color0 (de MCCV-bake van de ADT). De
+    // byte-verified referentie doet dat niet: hun terreinwet is
+    // `tex x clamp(ambient + diffuse*max(N.L,0) + puntlichten)` -- "modulated
+    // into the texture (MOD 1x)" (benilla-assets/src/shaders/terrain.wgsl:5-8)
+    // -- en het vertexkleur-kanaal draagt daar de textuurlaag-indices, geen
+    // licht (:24-26). Onze extra MCCV-vermenigvuldiging maakte het terrein
+    // donkerder waar de bake onder 0.5 zit: de discrete donkere plekken.
+    v_color0 = vec4(clamp(lighting, 0.0, 1.0), a_color0.a);
     v_viewDist = openwowWorldFogDepth(
         mul(u_modelView, vec4(a_position, 1.0)).xyz);
 }

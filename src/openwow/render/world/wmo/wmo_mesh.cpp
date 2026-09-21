@@ -261,7 +261,12 @@ WmoGroupMesh GenerateWmoGroupMeshImpl(const WmoGroup &group,
                 (static_cast<uint32_t>(vc.b) << 16) | (static_cast<uint32_t>(vc.a) << 24);
     } else {
 
-      v.color = (mohd_flags & data::wmo::kWmoFlagUnifiedRender) != 0u ? 0xFF000000u : 0xFF7F7F7Fu;
+      // Geen MOCV: neutraal, geen modulatie. Hier stond in unified-render-roots
+      // 0xFF000000 (zwart), waardoor zo'n groep in BEIDE lichtpaden volledig
+      // zwart rendert -- zwart x licht is zwart. Dat zijn de zwarte WMO-vlakken
+      // in de verte. De vertexkleuren staan op halve schaal (de shader verdubbelt
+      // ze, fs_wmo.sc:25), dus 0x7F is de neutrale 1.0.
+      v.color = 0xFF7F7F7Fu;
     }
 
     if (use_composite_vertices) {

@@ -633,6 +633,39 @@ en M2 LightIntBand rij 0/1 gebruiken (`benilla-formats/src/light/atmosphere.rs:8
 Nu dezelfde bron. Bonus: `kSunColor` las rij 8 (shadow-opacity-slot) in plaats van
 rij 9 (de zon) — `light.rs:15-16`.
 
+### Batch 7 — terrein-schaduw: dynamische shadow map uit (opgelost 2026-09-21)
+
+De donkere plekken op het terrein ("alsof het niet gerenderd is") zijn gemeten
+met het debugkanaal en pixel-diffs op twee screenshots vanaf dezelfde camera:
+
+| A/B | verschil | richting |
+|---|---|---|
+| `showCull` (terrein-frustum-culling) aan/uit | 0,81% van de pixels, **symmetrisch** (3761 donkerder vs 3519 helderder) | culling is **niet** de oorzaak |
+| `showShadow` (dynamische schaduwmap) aan/uit | **3,02%**, helderheid **30,5 → 41,2** (+35% = precies de 0,7-modulate) | **dit is de oorzaak** |
+
+**Oorzaak.** Onze dynamische terrein-schaduwmap. Die wordt vanuit de **view**
+opgebouwd, dus de donkere plekken worden meer of minder als je de camera draait.
+De 1.12-client heeft **geen** real-time shadow map: zijn terrein-schaduw is de
+statische **MCSH**-bake per chunk (1 bit, 1.0 belicht; diffuse in schaduw
+wordt volgens de Benilla-combine met 0.7 gemoduleerd) —
+`benilla-assets/src/materials.rs:171-175`, `benilla-adt/src/lib.rs:90-96`,
+`benilla-assets/src/shaders/terrain.wgsl:281-300`.
+
+**Fix.** `kCWorldInitializeRenderFlagDefaults`: `0x07104B73` → `0x07104B33`
+(het `kTerrainShadows`-bit 0x40 uit). `showShadow` blijft als opt-in verbetering.
+
+**Meetrecept (herbruikbaar).** `devctl.ps1 shot` → `artifacts\tgafast.ps1` →
+pixel-diff; render-flags live omschakelen met
+`devctl.ps1 lua 'ConsoleExec("<flag>")'` (`showCull`, `showShadow`,
+`showLowDetail`, `maxLOD`).
+
+**WDL (zelfde sessie).** De far band is nu een backdrop zoals de referentie:
+altijd getekend, diepte gecomprimeerd naar `[0.99999, 0.999999]` (achter alles
+wat wij tekenen, vóór de lege dieptebuffer) en een vlakke fog-hull. Let op: het
+bereik `[0.955, 0.96]` uit de referentie werkte hier **niet** — bij onze
+projectie reikt het verre terrein dieper, dus dan occludeert de backdrop de
+verte (het hele beeld werd paars).
+
 ## Werkvoorraad: pariteit met het origineel
 
 Open, in volgorde van impact:
@@ -651,16 +684,22 @@ Open, in volgorde van impact:
 5. **Harness-gate**: `world_offline_play_regression` faalt op zijn eigen asserties
    (`ChatFrame1 message count did not advance`, render-ready-wait). Zolang die rood
    staan betekent "groen" alleen "mijn regel is groen".
+6. **MCSH-terrein-schaduw** (Batch 7): we parsen de bake al
+   (`adt_file.cpp:169-227`, `575`) maar voeden de shader met een globale
+   `terrain_shadow_mod` (`world_render_pipeline.cpp:74`,
+   `terrain_renderer.cpp:509-533`) in plaats van de per-chunk bake. Dat is de
+   originele statische terrein-schaduw en hoort de volgende stap te zijn.
 
 ## Toekomst: opt-in graphics-upgrades (ná pariteit)
 
 Alles achter één CVar (`gfx.enhanced`), standaard **uit**, zodat de 1.12-look het
 contract blijft. Volgorde op impact:
 
-1. **Schaduwen op WMO + M2.** De shadow map bestaat al
-   (`shadow_presentation_runtime.cpp`, `ShadowMap`-pass) maar **alleen
-   `fs_terrain.sc`** sampelt hem; gebouwen en modellen ontvangen dus geen schaduw.
-   Grootste sprong, additief.
+1. **Schaduwen op WMO + M2.** De shadow-map-infrastructuur bestaat al
+   (`shadow_presentation_runtime.cpp`, `ShadowMap`-pass), maar de Classic-
+   terreinshaders sampelen hem niet meer: terrein gebruikt alleen de statische
+   MCSH-bake. Gebouwen en modellen ontvangen nog geen dynamische schaduw.
+   Grootste opt-in graphics-upgrade, additief.
 2. **Per-pixel lighting** voor WMO/M2 (nu per-vertex in `vs_wmo.sc`) — voorwaarde
    voor normal maps.
 3. **Post**: SSAO, HDR/tonemapping en AA-opties (de post-keten bestaat al).

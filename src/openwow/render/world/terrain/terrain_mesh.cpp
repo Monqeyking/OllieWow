@@ -2,6 +2,7 @@
 #include "openwow/render/world/terrain/terrain_material_compositor.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <limits>
 
@@ -22,6 +23,16 @@ static void ExpandBounds(float bounds_min[3], float bounds_max[3], const float w
   bounds_max[0] = std::max(bounds_max[0], wx);
   bounds_max[1] = std::max(bounds_max[1], wy);
   bounds_max[2] = std::max(bounds_max[2], wz);
+}
+
+// MCNK headers carry independently rounded f32 origins. Snap shared outer
+// vertices back to WoW's global lattice so adjacent chunks/tiles are watertight.
+static float SnapTerrainLattice(const float coordinate) {
+  constexpr double kMapHalfSize = 32.0 * 1600.0 / 3.0;
+  constexpr double kLatticeUnit = (1600.0 / 3.0) / 128.0;
+  const double index = std::round((kMapHalfSize - static_cast<double>(coordinate)) /
+                                  kLatticeUnit);
+  return static_cast<float>(kMapHalfSize - index * kLatticeUnit);
 }
 
 static constexpr int OuterIndex(int r, int c) {
@@ -64,14 +75,14 @@ static void AppendChunkVertices(std::vector<TerrainVertex> &vertices, float boun
     vert.normal[2] = normal.z;
     vert.texcoord[0] = u;
     vert.texcoord[1] = v;
-    constexpr float atlas_scale =
-        static_cast<float>(kAlphaMapSize - 1) / static_cast<float>(kTerrainAlphaAtlasSize);
-    const float atlas_offset_x = (static_cast<float>(chunk_x * kAlphaMapSize) + 0.5f) /
-                                 static_cast<float>(kTerrainAlphaAtlasSize);
-    const float atlas_offset_y = (static_cast<float>(chunk_y * kAlphaMapSize) + 0.5f) /
-                                 static_cast<float>(kTerrainAlphaAtlasSize);
-    vert.alpha_texcoord[0] = u * atlas_scale + atlas_offset_x;
-    vert.alpha_texcoord[1] = v * atlas_scale + atlas_offset_y;
+    // Benilla keeps alpha UVs local to each MCNK and supplies the chunk's
+    // texture-array slice separately; no atlas boundary can be filtered here.
+    vert.alpha_texcoord[0] = u;
+    vert.alpha_texcoord[1] = v;
+    const std::uint8_t alpha_slice = static_cast<std::uint8_t>(
+        chunk_y * static_cast<std::uint32_t>(kChunksPerSide) + chunk_x);
+    for (std::uint8_t &value : vert.alpha_slice)
+      value = alpha_slice;
 
     if (has_colors) {
       const auto &vc = chunk.vertex_colors[static_cast<std::size_t>(local_idx)];
@@ -89,8 +100,8 @@ static void AppendChunkVertices(std::vector<TerrainVertex> &vertices, float boun
   for (int r = 0; r < kOuterGrid; ++r) {
     for (int c = 0; c < kOuterGrid; ++c) {
       const int local_idx = OuterIndex(r, c);
-      const float wx = base_x - static_cast<float>(r) * kUnitSize;
-      const float wy = base_y - static_cast<float>(c) * kUnitSize;
+      const float wx = SnapTerrainLattice(base_x - static_cast<float>(r) * kUnitSize);
+      const float wy = SnapTerrainLattice(base_y - static_cast<float>(c) * kUnitSize);
       const float wz = base_z + chunk.heights[static_cast<std::size_t>(local_idx)];
       const float u = static_cast<float>(c) / 8.0f;
       const float v = static_cast<float>(r) / 8.0f;
@@ -202,8 +213,11 @@ static void DecodeChunkAlphaMap(const TerrainChunk &chunk, const int layer_count
     static_cast<void>(DecompressAlphaMapInto(
         chunk.alpha_data.data() + alpha_offset, chunk.alpha_data.size() - alpha_offset, ly.flags,
         big_alpha,
-        (chunk.header.flags & data::terrain::McnkFlags::kDoNotFixAlphaMap) == 0u,
-        rgba + channel, rgba_size - channel, pixel_stride, row_stride));
+        // Benilla's Vanilla path always passes fix_alpha=true when it builds
+        // the combined per-chunk map (terrain.rs:465-470). Duplicate the
+        // final row/column before atlas upload so linear filtering cannot
+        // expose an uninitialized/format-dependent edge texel.
+        true, rgba + channel, rgba_size - channel, pixel_stride, row_stride));
   }
 
   constexpr std::size_t kShadowBytesPerRow = kAlphaMapSize / 8u;
@@ -231,13 +245,15 @@ PreparedTerrainTile PrepareAdtTerrainTile(const AdtFile &adt, const uint32_t til
       std::count_if(adt.chunks.begin(), adt.chunks.end(),
                     [](const TerrainChunk &chunk) { return chunk.holes != 0u; }));
   prepared.hole_indices.reserve(holed_chunk_count * 768u);
-  prepared.alpha_atlas_rgba.assign(
-      static_cast<std::size_t>(kTerrainAlphaAtlasSize) * kTerrainAlphaAtlasSize * 4u, 0u);
-  for (std::size_t alpha = 3u; alpha < prepared.alpha_atlas_rgba.size(); alpha += 4u) {
-    prepared.alpha_atlas_rgba[alpha] = 255u;
+  constexpr std::size_t kAlphaSliceBytes =
+      static_cast<std::size_t>(kAlphaMapSize) * kAlphaMapSize * 4u;
+  prepared.alpha_array_rgba.assign(
+      static_cast<std::size_t>(kTerrainAlphaArrayLayers) * kAlphaSliceBytes, 0u);
+  for (std::size_t alpha = 3u; alpha < prepared.alpha_array_rgba.size(); alpha += 4u) {
+    prepared.alpha_array_rgba[alpha] = 255u;
   }
 
-  constexpr std::size_t kAtlasRowStride = static_cast<std::size_t>(kTerrainAlphaAtlasSize) * 4u;
+  constexpr std::size_t kAlphaRowStride = static_cast<std::size_t>(kAlphaMapSize) * 4u;
   for (int y = 0; y < kChunksPerSide; ++y) {
     for (int x = 0; x < kChunksPerSide; ++x) {
       const std::size_t chunk_index = static_cast<std::size_t>(y * kChunksPerSide + x);
@@ -248,13 +264,10 @@ PreparedTerrainTile PrepareAdtTerrainTile(const AdtFile &adt, const uint32_t til
       PopulateChunkMaterial(adt, source, chunk);
       prepared.has_alpha_layers = prepared.has_alpha_layers || chunk.layer_count > 0;
 
-      const std::size_t alpha_offset =
-          (static_cast<std::size_t>(y * kAlphaMapSize) * kTerrainAlphaAtlasSize +
-           static_cast<std::size_t>(x * kAlphaMapSize)) *
-          4u;
+      const std::size_t alpha_offset = chunk_index * kAlphaSliceBytes;
       DecodeChunkAlphaMap(source, chunk.layer_count, big_alpha,
-                          prepared.alpha_atlas_rgba.data() + alpha_offset,
-                          prepared.alpha_atlas_rgba.size() - alpha_offset, 4u, kAtlasRowStride);
+                          prepared.alpha_array_rgba.data() + alpha_offset,
+                          kAlphaSliceBytes, 4u, kAlphaRowStride);
 
       if (source.holes != 0u) {
         chunk.hole_index_start = static_cast<uint32_t>(prepared.hole_indices.size());

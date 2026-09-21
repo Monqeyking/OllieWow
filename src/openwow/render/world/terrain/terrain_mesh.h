@@ -13,8 +13,7 @@ static constexpr int kMaxTerrainLayers = 4;
 
 static constexpr int kAlphaMapSize = 64;
 
-static constexpr int kTerrainAlphaAtlasChunksPerAxis = data::terrain::kChunksPerSide;
-static constexpr int kTerrainAlphaAtlasSize = kAlphaMapSize * kTerrainAlphaAtlasChunksPerAxis;
+static constexpr int kTerrainAlphaArrayLayers = data::terrain::kTotalChunks;
 
 struct TerrainVertex {
   float position[3];
@@ -24,8 +23,9 @@ struct TerrainVertex {
   uint32_t color;
 
   uint8_t layer_slice[kMaxTerrainLayers];
+  uint8_t alpha_slice[4];
 };
-static_assert(sizeof(TerrainVertex) == 48, "TerrainVertex must be 48 bytes");
+static_assert(sizeof(TerrainVertex) == 52, "TerrainVertex must be 52 bytes");
 
 struct TerrainLayerMaterialInfo {
 
@@ -54,7 +54,7 @@ struct PreparedTerrainTile {
   std::vector<TerrainVertex> vertices;
 
   std::vector<uint16_t> hole_indices;
-  std::vector<uint8_t> alpha_atlas_rgba;
+  std::vector<uint8_t> alpha_array_rgba;
   std::array<PreparedTerrainChunk, data::terrain::kTotalChunks> chunks{};
   bool has_alpha_layers{false};
 };

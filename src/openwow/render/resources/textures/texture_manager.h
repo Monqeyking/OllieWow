@@ -121,6 +121,12 @@ class TextureManager final : public api::RendererDeviceLifecycleObserver {
       const std::string& path,
       const std::function<std::vector<std::uint8_t>(const std::string&)>& loader);
 
+  // Benilla terrain contract: normalize every ground layer to one 256² RGBA8
+  // array-compatible chain with eight authored/nearest-filled mip levels.
+  [[nodiscard]] static PreparedTextureUpload PrepareTerrainLayerTextureUploadFromLoader(
+      const std::string& path,
+      const std::function<std::vector<std::uint8_t>(const std::string&)>& loader);
+
   bgfx::TextureHandle CommitPreparedTexture(const PreparedTextureUpload& upload);
 
   [[nodiscard]] TextureLease AcquireTabardEmblemRenderTargetAsync(

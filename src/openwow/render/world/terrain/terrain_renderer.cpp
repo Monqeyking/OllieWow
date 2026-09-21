@@ -133,6 +133,7 @@ bool TerrainRenderer::Initialize() {
       .add(bgfx::Attrib::Color0, 4, bgfx::AttribType::Uint8, true)
 
       .add(bgfx::Attrib::TexCoord2, 4, bgfx::AttribType::Uint8, true)
+      .add(bgfx::Attrib::TexCoord3, 4, bgfx::AttribType::Uint8, true)
       .end();
 
   const auto type = bgfx::getRendererType();
@@ -180,7 +181,8 @@ PreparedTerrainMaterialTextures TerrainRenderer::PrepareMaterialTextures(
       if (path.empty() || !queued.insert(path).second) {
         continue;
       }
-      auto upload = TextureManager::PrepareTextureUploadFromLoader(path, loader);
+      auto upload =
+          TextureManager::PrepareTerrainLayerTextureUploadFromLoader(path, loader);
       if (upload.valid) {
         materials.uploads.push_back(std::move(upload));
       }
@@ -419,17 +421,27 @@ void TerrainRenderer::UploadPreparedAdt(const PreparedTerrainTile &prepared,
     }
   }
 
+  constexpr std::size_t kAlphaSliceBytes =
+      static_cast<std::size_t>(kAlphaMapSize) * kAlphaMapSize * kAlphaPixelBytes;
   const std::size_t expected_alpha_bytes =
-      static_cast<std::size_t>(kAlphaAtlasSize) * kAlphaAtlasSize * kAlphaPixelBytes;
-  if (prepared.has_alpha_layers && prepared.alpha_atlas_rgba.size() >= expected_alpha_bytes) {
-    const bgfx::Memory *alpha_memory = bgfx::copy(prepared.alpha_atlas_rgba.data(),
-                                                  static_cast<std::uint32_t>(expected_alpha_bytes));
-    tile.alpha_atlas = bgfx::createTexture2D(
-        kAlphaAtlasSize, kAlphaAtlasSize, false, 1, bgfx::TextureFormat::RGBA8,
-        BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP, alpha_memory);
-    if (!bgfx::isValid(tile.alpha_atlas)) {
+      static_cast<std::size_t>(kTerrainAlphaArrayLayers) * kAlphaSliceBytes;
+  if (prepared.has_alpha_layers && prepared.alpha_array_rgba.size() >= expected_alpha_bytes) {
+    tile.alpha_array = bgfx::createTexture2D(
+        kAlphaMapSize, kAlphaMapSize, false, kTerrainAlphaArrayLayers,
+        bgfx::TextureFormat::RGBA8, BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP);
+    if (bgfx::isValid(tile.alpha_array)) {
+      for (std::uint16_t slice = 0u; slice < kTerrainAlphaArrayLayers; ++slice) {
+        const std::size_t offset = static_cast<std::size_t>(slice) * kAlphaSliceBytes;
+        bgfx::updateTexture2D(
+            tile.alpha_array, slice, 0u, 0u, 0u, static_cast<std::uint16_t>(kAlphaMapSize),
+            static_cast<std::uint16_t>(kAlphaMapSize),
+            bgfx::copy(prepared.alpha_array_rgba.data() + offset,
+                       static_cast<std::uint32_t>(kAlphaSliceBytes)),
+            UINT16_MAX);
+      }
+    } else {
       openwow::diagnostics::Log(openwow::diagnostics::LogLevel::kWarn,
-                                "TerrainRenderer: tile alpha atlas creation failed for (" +
+                                "TerrainRenderer: tile alpha array creation failed for (" +
                                     std::to_string(tile_x) + "," + std::to_string(tile_y) +
                                     "); using fallback terrain material");
       for (auto &chunk : tile.chunks) {
@@ -618,13 +630,13 @@ void TerrainRenderer::Render(uint8_t view_id, const WorldEnvironmentSnapshot &en
         draw.setTexture(static_cast<std::uint8_t>(layer), s_terrain_tex_[layer],
                         bgfx::TextureHandle{key.texture_indices[layer]}, sampler_flags);
       }
-      draw.setTexture(4, s_terrain_alpha_, tile.alpha_atlas,
+      draw.setTexture(4, s_terrain_alpha_, tile.alpha_array,
                       BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP);
     } else if (key.program == TerrainProgramKind::kSplatArray) {
 
       draw.setTexture(0, s_terrain_layers_,
                       bgfx::TextureHandle{key.layer_array_index}, sampler_flags);
-      draw.setTexture(4, s_terrain_alpha_, tile.alpha_atlas,
+      draw.setTexture(4, s_terrain_alpha_, tile.alpha_array,
                       BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP);
     }
 
@@ -657,7 +669,7 @@ void TerrainRenderer::Render(uint8_t view_id, const WorldEnvironmentSnapshot &en
       }
 
       TerrainProgramKind program = TerrainProgramKind::kSolid;
-      if (gpu.layer_count > 0 && bgfx::isValid(tile.alpha_atlas)) {
+      if (gpu.layer_count > 0 && bgfx::isValid(tile.alpha_array)) {
         if (has_splat_array && bgfx::isValid(gpu.layer_array_tex)) {
           program = TerrainProgramKind::kSplatArray;
         } else if (has_splat) {
@@ -745,8 +757,8 @@ void TerrainRenderer::DestroyTileGpu(TerrainTileGpu &gpu) {
   if (bgfx::isValid(gpu.vb)) {
     bgfx::destroy(gpu.vb);
   }
-  if (bgfx::isValid(gpu.alpha_atlas)) {
-    bgfx::destroy(gpu.alpha_atlas);
+  if (bgfx::isValid(gpu.alpha_array)) {
+    bgfx::destroy(gpu.alpha_array);
   }
   if (bgfx::isValid(gpu.index_buffer)) {
     bgfx::destroy(gpu.index_buffer);

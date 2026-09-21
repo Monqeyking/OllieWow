@@ -89,11 +89,11 @@ constexpr std::uint32_t kPersistenceScopeMask = 0x30u;
 constexpr char kCombatLogRetentionTimeCVarName[] = "combatLogRetentionTime";
 constexpr int kDefaultCVarConsoleCategory = CVarSystem::kFallbackConsoleCategory;
 
-// Classic OptionsFrame.xml still uses the short 1.12 audio CVar names.
-// Resolve them centrally so reads, writes and defaults all hit the same
-// Sound_* entries used by the audio runtime.
-constexpr std::array<std::pair<std::string_view, std::string_view>, 7>
-    kLegacyAudioCVarAliases = {{
+// Classic Options.lua uses Vanilla-era names for audio and environment
+// settings. Resolve them centrally so reads, writes, defaults and renderer
+// consumers all hit the same registered CVar.
+constexpr std::array<std::pair<std::string_view, std::string_view>, 8>
+    kLegacyCVarAliases = {{
         {"MasterVolume", "Sound_MasterVolume"},
         {"SoundVolume", "Sound_SFXVolume"},
         {"MusicVolume", "Sound_MusicVolume"},
@@ -101,10 +101,11 @@ constexpr std::array<std::pair<std::string_view, std::string_view>, 7>
         {"EnableAllSound", "Sound_EnableAllSound"},
         {"EnableMusic", "Sound_EnableMusic"},
         {"EnableAmbience", "Sound_EnableAmbience"},
+        {"smallCull", "environmentDetail"},
     }};
 
 std::string_view CanonicalCVarName(const std::string_view name) {
-  for (const auto& [legacy, canonical] : kLegacyAudioCVarAliases) {
+  for (const auto& [legacy, canonical] : kLegacyCVarAliases) {
     if (openwow::text::EqualsIgnoreCaseAscii(legacy, name)) {
       return canonical;
     }
@@ -2064,7 +2065,9 @@ void CVarSystem::RegisterDefaults() {
   RegisterCVar("particleDensity", "1.0", F::Archive, "Particle density", 0.0f, 1.0f);
   SetValidationCallback("particleDensity", ParticleDensityValidationCallback);
   (void)ReconcileValueAgainstValidationCallback("particleDensity");
-  RegisterCVar("environmentDetail", "1.0", F::Archive, "Environment detail level", 0.5f, 1.5f);
+  // `smallCull` is the local Classic/Turtle Options.lua name; its alias
+  // above resolves to this CVar. Keep the Vanilla slider's full 0..2 range.
+  RegisterCVar("environmentDetail", "1.0", F::Archive, "Environment detail level", 0.0f, 2.0f);
   RegisterCVar("baseMip", "0", F::Archive, "Texture resolution (0=high, 1=low)", 0.0f, 1.0f);
   RegisterCVar("waterLOD", "0", F::Archive, "Water geometry LOD");
   RegisterCVar("componentTextureLevel", "8", F::Archive,

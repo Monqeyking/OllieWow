@@ -617,9 +617,13 @@ void WorldPresentationScene::Render(
                 frustum.planes[p].begin());
   WorldEnvironmentSnapshot env{};
   env.generation = snapshot.map_generation.value;
+  // The WDL far-band shader uses the fourth slot as its far-clip wall. The
+  // regular fog helpers only consume x/y, so carrying the camera wall here is
+  // backward-compatible for terrain, water, models, and particles.
   env.fog.params = {snapshot.environment.fog_start,
                     snapshot.environment.fog_end,
-                    snapshot.environment.fog_density, 0.0f};
+                    snapshot.environment.fog_density,
+                    snapshot.camera.far_clip};
   env.fog.color = snapshot.environment.fog_color;
   env.models.light_direction = snapshot.environment.model_light_direction;
   env.models.ambient_color = snapshot.environment.model_ambient;

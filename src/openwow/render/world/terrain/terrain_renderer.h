@@ -61,7 +61,7 @@ struct TerrainTileGpu {
   bgfx::VertexBufferHandle vb = BGFX_INVALID_HANDLE;
 
   bgfx::IndexBufferHandle index_buffer = BGFX_INVALID_HANDLE;
-  bgfx::TextureHandle alpha_atlas = BGFX_INVALID_HANDLE;
+  bgfx::TextureHandle alpha_array = BGFX_INVALID_HANDLE;
   std::array<TerrainChunkGpu, 256> chunks{};
   int32_t tile_x{0};
   int32_t tile_y{0};
@@ -138,10 +138,7 @@ public:
   }
 
   static constexpr std::size_t kChunksPerTile = 256u;
-  static constexpr std::uint16_t kAlphaAtlasChunksPerAxis = 16u;
-  static constexpr std::uint16_t kAlphaAtlasSize =
-      static_cast<std::uint16_t>(kAlphaMapSize * kAlphaAtlasChunksPerAxis);
-  static_assert(kAlphaAtlasSize == kTerrainAlphaAtlasSize);
+  static_assert(kChunksPerTile == static_cast<std::size_t>(kTerrainAlphaArrayLayers));
 
   [[nodiscard]] static constexpr TerrainGpuHandleBudget
   PersistentHandleBudget(const std::size_t tile_count) noexcept {
@@ -154,6 +151,8 @@ public:
   }
 
   [[nodiscard]] static constexpr std::uint32_t DiffuseSamplerFlags() noexcept {
+    // Benilla's terrain sampler is Repeat + Linear with mip filtering and
+    // anisotropy. BGFX repeat is the default when no *_CLAMP flag is present.
     return BGFX_SAMPLER_MIN_ANISOTROPIC | BGFX_SAMPLER_MAG_ANISOTROPIC;
   }
 

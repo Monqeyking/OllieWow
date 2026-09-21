@@ -19,19 +19,27 @@ SAMPLER2D(s_terrainTex2, 2);
 SAMPLER2D(s_terrainTex3, 3);
 #endif
 
-SAMPLER2D(s_terrainAlpha, 4);
-
-SAMPLER2DSHADOW(s_shadowMap, 5);
-
-uniform mat4 u_shadowMtx;
-uniform vec4 u_shadowParams;
-
-#include "world_shadow.sh"
+SAMPLER2DARRAY(s_terrainAlpha, 4);
 
 void main()
 {
+    // Match Benilla's detailed-world farclip wall: terrain fragments beyond
+    // the planar eye-Z farclip must not survive rasterization.
+    if (u_terrainFogParams.w > 0.0 && v_viewDist > u_terrainFogParams.w)
+    {
+        discard;
+    }
 
-    vec4 alphaBytes = texture2D(s_terrainAlpha, v_alphaUV);
+    // Benilla keeps one 64x64 alpha map per chunk in a texture array. Clamp
+    // the local bilinear footprint to half a texel so linear filtering cannot
+    // sample outside this chunk's map. The vertex carries the array slice.
+    const float kAlphaMapSize = 64.0;
+    const float kAlphaHalfTexel = 0.5;
+    vec2 alphaUV = clamp(v_alphaUV,
+                         vec2_splat(kAlphaHalfTexel / kAlphaMapSize),
+                         vec2_splat(1.0 - kAlphaHalfTexel / kAlphaMapSize));
+    vec4 alphaBytes = texture2DArray(
+        s_terrainAlpha, vec3(alphaUV, floor(v_alphaSlice + 0.5)));
 
 #if OPENWOW_TERRAIN_LAYER_ARRAY
 
@@ -51,15 +59,18 @@ void main()
     blended = mix(blended, c2, alphaBytes.g);
     blended = mix(blended, c3, alphaBytes.b);
 
-    float shadowVisibility = mix(1.0, alphaBytes.a, u_terrainShadowMod.a);
-    if (u_shadowParams.z > 0.0) {
-        float projectedVisibility = openwowSampleWorldShadow(v_worldPos, u_shadowParams.x);
-        projectedVisibility = mix(1.0, projectedVisibility, u_shadowParams.z);
-        shadowVisibility = min(shadowVisibility, projectedVisibility);
-    }
-    vec3 shadowModulate = mix(u_terrainShadowMod.rgb, vec3_splat(1.0), shadowVisibility);
+    // Classic terrain uses only the static per-chunk MCSH bake. The
+    // view-following shadow map is intentionally not sampled: its projection
+    // changes with camera pitch and produces moving dark patches.
+    float shadowVisibility = alphaBytes.a;
+    vec3 bakedShadowModulate =
+        mix(u_terrainShadowMod.rgb, vec3_splat(1.0), shadowVisibility);
+    // The uniform alpha is the render-flag switch; keep the MCSH bake available
+    // for normal rendering while retaining the Vanilla MOD 1x terrain path.
+    vec3 shadowModulate =
+        mix(vec3_splat(1.0), bakedShadowModulate, u_terrainShadowMod.a);
     vec3 litColor = blended.rgb * v_color0.rgb * u_terrainColor.rgb
-                  * (2.0 * shadowModulate);
+                  * shadowModulate;
 
     float fogFactor = openwowLinearFogVisibility(u_terrainFogParams, v_viewDist);
     gl_FragColor = vec4(mix(u_terrainFogColor.rgb, litColor, fogFactor), 1.0);

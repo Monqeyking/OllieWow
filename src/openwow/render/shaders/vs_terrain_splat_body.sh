@@ -43,7 +43,10 @@ void main()
     v_texcoord0 = a_texcoord0 * tileScale;
 
     v_alphaUV = a_texcoord1;
-    v_color0 = vec4(clamp(lighting, 0.0, 1.0) * a_color0.rgb, a_color0.a);
+    v_alphaSlice = a_texcoord3.x * 255.0;
+    // Match the Vanilla terrain contract: lighting modulates the blended texture
+    // once in the fragment stage; MCCV is not an additional light multiplier.
+    v_color0 = vec4(clamp(lighting, 0.0, 1.0), a_color0.a);
 
     v_viewDist = openwowWorldFogDepth(
         mul(u_modelView, vec4(a_position, 1.0)).xyz);

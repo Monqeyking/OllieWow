@@ -42,6 +42,46 @@ constexpr const char* kDefaultFrameXmlTocPath =
     "/Interface/FrameXML/FrameXML.toc";
 constexpr const char* kKeyBindingRegistryKey = "openwow.key_binding_manager";
 
+// The local Classic/Turtle FrameXML mixes the newer OptionsFrame.lua with
+// Vanilla SoundOptionsFrame.lua. The latter still calls these legacy global
+// helpers, so define the Vanilla-compatible surface before loading it.
+constexpr const char* kClassicOptionsFrameCompatibility = R"lua(
+if OptionsFrame_DisableCheckBox == nil then
+  function OptionsFrame_DisableCheckBox(checkBox)
+    checkBox:Disable()
+    getglobal(checkBox:GetName() .. "Text"):SetTextColor(GRAY_FONT_COLOR.r, GRAY_FONT_COLOR.g, GRAY_FONT_COLOR.b)
+  end
+end
+if OptionsFrame_EnableCheckBox == nil then
+  function OptionsFrame_EnableCheckBox(checkBox, setChecked, checked, isWhite)
+    if setChecked then
+      checkBox:SetChecked(checked)
+    end
+    checkBox:Enable()
+    local color = isWhite and HIGHLIGHT_FONT_COLOR or NORMAL_FONT_COLOR
+    getglobal(checkBox:GetName() .. "Text"):SetTextColor(color.r, color.g, color.b)
+  end
+end
+if OptionsFrame_DisableSlider == nil then
+  function OptionsFrame_DisableSlider(slider)
+    local name = slider:GetName()
+    getglobal(name .. "Thumb"):Hide()
+    getglobal(name .. "Text"):SetVertexColor(GRAY_FONT_COLOR.r, GRAY_FONT_COLOR.g, GRAY_FONT_COLOR.b)
+    getglobal(name .. "Low"):SetVertexColor(GRAY_FONT_COLOR.r, GRAY_FONT_COLOR.g, GRAY_FONT_COLOR.b)
+    getglobal(name .. "High"):SetVertexColor(GRAY_FONT_COLOR.r, GRAY_FONT_COLOR.g, GRAY_FONT_COLOR.b)
+  end
+end
+if OptionsFrame_EnableSlider == nil then
+  function OptionsFrame_EnableSlider(slider)
+    local name = slider:GetName()
+    getglobal(name .. "Thumb"):Show()
+    getglobal(name .. "Text"):SetVertexColor(NORMAL_FONT_COLOR.r, NORMAL_FONT_COLOR.g, NORMAL_FONT_COLOR.b)
+    getglobal(name .. "Low"):SetVertexColor(HIGHLIGHT_FONT_COLOR.r, HIGHLIGHT_FONT_COLOR.g, HIGHLIGHT_FONT_COLOR.b)
+    getglobal(name .. "High"):SetVertexColor(HIGHLIGHT_FONT_COLOR.r, HIGHLIGHT_FONT_COLOR.g, HIGHLIGHT_FONT_COLOR.b)
+  end
+end
+)lua";
+
 openwow::game::BindingProfiles* GetBindingProfiles(lua_State* lua) {
   lua_getfield(lua, LUA_REGISTRYINDEX, kKeyBindingRegistryKey);
   auto* bindings = static_cast<openwow::game::BindingProfiles*>(
@@ -381,6 +421,14 @@ bool FrameXmlRuntimeLoader::LoadDefaultUI(
     return false;
   }
   owner_.frame_materializer_->ReconcileDefaultLuaGlobals();
+  if (luaL_dostring(lua, kClassicOptionsFrameCompatibility) != LUA_OK) {
+    const char* error = lua_tostring(lua, -1);
+    openwow::diagnostics::Log(
+        openwow::diagnostics::LogLevel::kWarn,
+        "GameUIManager: options compatibility bootstrap failed: " +
+            std::string(error != nullptr ? error : "Lua error"));
+    lua_pop(lua, 1);
+  }
   // Classic/Turtle compat: the active Turtle TOC omits Blizzard's
   // SoundOptionsFrame, but the vanilla file ships in local VFS data and
   // vanilla addons address the named frame directly. Load it when the TOC

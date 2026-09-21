@@ -3,6 +3,7 @@
 #include "openwow/render/backend/bgfx/embedded_shaders.h"
 #include "openwow/foundation/diagnostics/logging.h"
 
+// Embed the current generated shader headers in the normal client build.
 #include <array>
 #include <string>
 

@@ -345,6 +345,136 @@ std::optional<std::vector<std::uint8_t>> TryBuildPortraitIconTextureImage(
   return source_mip_rgba;
 }
 
+constexpr std::uint32_t kTerrainLayerExtent = 256u;
+constexpr std::uint8_t kTerrainLayerMipCount = 8u;
+
+std::vector<std::uint8_t> ResizeTerrainMipNearest(const std::vector<std::uint8_t> &source,
+                                                  const std::uint32_t source_width,
+                                                  const std::uint32_t source_height,
+                                                  const std::uint32_t target_width,
+                                                  const std::uint32_t target_height) {
+  const std::size_t source_bytes = static_cast<std::size_t>(source_width) * source_height * 4u;
+  if (source_width == 0u || source_height == 0u || source.size() != source_bytes ||
+      target_width == 0u || target_height == 0u) {
+    return {};
+  }
+  std::vector<std::uint8_t> result(
+      static_cast<std::size_t>(target_width) * target_height * 4u);
+  for (std::uint32_t y = 0u; y < target_height; ++y) {
+    const std::uint32_t source_y =
+        std::min(source_height - 1u, (y * source_height) / target_height);
+    for (std::uint32_t x = 0u; x < target_width; ++x) {
+      const std::uint32_t source_x =
+          std::min(source_width - 1u, (x * source_width) / target_width);
+      const std::size_t source_offset =
+          (static_cast<std::size_t>(source_y) * source_width + source_x) * 4u;
+      const std::size_t result_offset =
+          (static_cast<std::size_t>(y) * target_width + x) * 4u;
+      std::copy_n(source.data() + source_offset, 4u, result.data() + result_offset);
+    }
+  }
+  return result;
+}
+
+std::vector<std::uint8_t> BuildTerrainLayerMipChain(const auto &blp) {
+  if (!blp.isValid || blp.mipCount == 0u || blp.header.width == 0u ||
+      blp.header.height == 0u) {
+    return {};
+  }
+
+  std::vector<std::uint8_t> chain;
+  std::size_t total_bytes = 0u;
+  for (std::uint8_t level = 0u; level < kTerrainLayerMipCount; ++level) {
+    total_bytes += static_cast<std::size_t>(std::max(kTerrainLayerExtent >> level, 1u)) *
+                   std::max(kTerrainLayerExtent >> level, 1u) * 4u;
+  }
+  chain.reserve(total_bytes);
+
+  for (std::uint8_t level = 0u; level < kTerrainLayerMipCount; ++level) {
+    const std::uint32_t target_width = std::max(kTerrainLayerExtent >> level, 1u);
+    const std::uint32_t target_height = target_width;
+    std::uint8_t source_level = 0u;
+    for (std::uint8_t candidate = 0u; candidate < blp.mipCount; ++candidate) {
+      const auto dimensions = data::BLPTextureLoader::GetMipDimensions(
+          blp.header.width, blp.header.height, candidate);
+      if (dimensions.first == target_width && dimensions.second == target_height) {
+        source_level = candidate;
+        break;
+      }
+      if (dimensions.first > target_width && dimensions.second > target_height) {
+        source_level = candidate;
+      }
+    }
+
+    const auto dimensions = data::BLPTextureLoader::GetMipDimensions(
+        blp.header.width, blp.header.height, source_level);
+    const auto decoded = data::BLPTextureLoader::DecompressMip(blp, source_level);
+    auto resized = ResizeTerrainMipNearest(decoded, dimensions.first, dimensions.second,
+                                           target_width, target_height);
+    if (resized.empty()) {
+      return {};
+    }
+    chain.insert(chain.end(), resized.begin(), resized.end());
+  }
+  return chain;
+}
+
+PreparedTextureUpload DecodeTerrainLayerUpload(
+    const std::string &path, const std::function<std::vector<std::uint8_t>(const std::string &)> &loader) {
+  PreparedTextureUpload prepared = TextureManager::PrepareTextureUploadFromLoader(path, loader);
+  if (!prepared.valid) {
+    return prepared;
+  }
+  const std::string stored_path = data::CopyTextureCacheRowPath(path);
+  auto source_bytes = loader(data::MakeRetailTextureCacheBlpPath(stored_path));
+  if (source_bytes.empty()) {
+    source_bytes = loader(data::MakeRetailTextureCacheTgaPath(stored_path));
+  }
+  if (source_bytes.empty()) {
+    prepared.valid = false;
+    prepared.error = "missing terrain texture source";
+    return prepared;
+  }
+
+  std::vector<std::uint8_t> chain;
+  const auto blp = data::BLPTextureLoader::Load(source_bytes);
+  if (blp.isValid) {
+    chain = BuildTerrainLayerMipChain(blp);
+  } else {
+    const auto decoded = data::image::DecodeImage(source_bytes);
+    if (decoded.ok) {
+      chain = ResizeTerrainMipNearest(decoded.pixels_rgba, decoded.width, decoded.height,
+                                      kTerrainLayerExtent, kTerrainLayerExtent);
+      if (!chain.empty()) {
+        std::vector<std::uint8_t> full_chain;
+        for (std::uint8_t level = 0u; level < kTerrainLayerMipCount; ++level) {
+          const std::uint32_t extent = std::max(kTerrainLayerExtent >> level, 1u);
+          auto mip = ResizeTerrainMipNearest(chain, kTerrainLayerExtent, kTerrainLayerExtent,
+                                             extent, extent);
+          full_chain.insert(full_chain.end(), mip.begin(), mip.end());
+        }
+        chain = std::move(full_chain);
+      }
+    }
+  }
+
+  if (chain.empty()) {
+    prepared.valid = false;
+    prepared.error = "terrain layer normalization failed";
+    return prepared;
+  }
+  prepared.rgba_bytes = std::move(chain);
+  prepared.upload_format = BlpUploadFormat::kRgba8;
+  prepared.width = kTerrainLayerExtent;
+  prepared.height = kTerrainLayerExtent;
+  prepared.upload_size = static_cast<std::uint32_t>(prepared.rgba_bytes.size());
+  prepared.mip_count = kTerrainLayerMipCount;
+  prepared.complete_mip_chain = true;
+  prepared.is_cube = false;
+  prepared.valid = true;
+  return prepared;
+}
+
 PreparedTextureUpload DecodeTextureUpload(
     const std::string& path,
     const openwow::data::TextureCacheRowIdentity& row,
@@ -1213,6 +1343,12 @@ PreparedTextureUpload TextureManager::PrepareTextureUpload(
       {.hash = openwow::data::HashTextureCachePath(path),
        .path = openwow::data::CopyTextureCacheRowPath(path)},
       source_bytes);
+}
+
+PreparedTextureUpload TextureManager::PrepareTerrainLayerTextureUploadFromLoader(
+    const std::string& path,
+    const std::function<std::vector<std::uint8_t>(const std::string&)>& loader) {
+  return DecodeTerrainLayerUpload(path, loader);
 }
 
 PreparedTextureUpload TextureManager::PrepareTextureUploadFromLoader(
