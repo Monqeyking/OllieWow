@@ -2338,7 +2338,7 @@ void WorldScene::InitializeSpellVisuals() {
               instance_id,
               [this, instance_id](const openwow::render::m2::M2TriggeredEvent& event) {
                 (void)SpellVisualKit_AreaModel_SoundEventCallback(
-                    sound_runtime_, area_model_sound_throttle_,
+                    sound_runtime_,
                     instance_id, static_cast<std::uint32_t>(event.bone),
                     event.identifier, event.data, event.world_position.data());
               });

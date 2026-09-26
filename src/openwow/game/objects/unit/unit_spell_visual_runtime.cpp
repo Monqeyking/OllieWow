@@ -69,7 +69,34 @@ void AddHardcodedOneShotEffect(const WorldSession &session, CGUnit_C &unit,
     // Pending-destroy effects finish only after their model sequence ends.
     // Start the one-shot sequence explicitly; AddEffect creates the M2
     // instance but intentionally does not select an animation by itself.
-    (void)m2->SetAnimation(created_effect->GetModelInstanceId(), 0u);
+    const std::uint32_t model_instance_id = created_effect->GetModelInstanceId();
+    (void)m2->SetAnimation(model_instance_id, 0u);
+
+    // The completion callback alone cannot retire these. The renderer binds the
+    // sequence through SetAnimationSequenceSample (spell_visual_renderer.cpp
+    // BindDefaultModelSequence), which marks the instance sample-driven, and
+    // QueueBaseLoopCompletions returns early for exactly those instances while
+    // ApplySequenceSampleLocked only records animation_completion_fired without
+    // invoking the callback. So a one-shot needs its own deadline, the same way
+    // Benilla gives a non-persistent effect `now + first_seq_span`
+    // (creature_anim/spell_visual.rs:1300-1335 and entities/spell_fx/mod.rs:940-950):
+    // the file-order-first M2 sequence's authored duration, with a fallback when
+    // the model declares none.
+    constexpr std::uint32_t kOneShotFallbackSpanMs = 1000u;
+    std::uint32_t span_ms = kOneShotFallbackSpanMs;
+    if (const auto model = m2->QueryInstanceModel(model_instance_id);
+        model.status == render::m2::M2ResultStatus::kReady) {
+      if (const auto animations = m2->QueryModelAnimationList(model.model_id);
+          animations.status == render::m2::M2ResultStatus::kReady &&
+          !animations.animations.empty()) {
+        const std::uint32_t authored_span_ms =
+            animations.animations.front().duration_ms;
+        if (authored_span_ms != 0u) {
+          span_ms = authored_span_ms;
+        }
+      }
+    }
+    created_effect->SetTimestampCleanup(SpellVisualEffectNowMs() + span_ms);
   }
 }
 

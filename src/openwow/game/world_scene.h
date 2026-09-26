@@ -285,7 +285,6 @@ class WorldScene final
   std::unique_ptr<world::WorldMap> world_map_owner_;
   world::WorldMap& world_map_;
   openwow::audio::SoundRuntime& sound_runtime_;
-  std::uint32_t area_model_sound_throttle_{0};
   render::TextureManager& texture_manager_;
   render::m2::M2System& m2_system_;
 

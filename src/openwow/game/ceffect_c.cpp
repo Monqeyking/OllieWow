@@ -668,7 +668,12 @@ bool CEffect_C::Update(const std::uint32_t frame_tick_ms) {
       return true;
     }
     BeginTeardown();
-  } else if ((flags_ & CEffectFlags::kPendingDestroy) == 0u && cleanup_due) {
+  } else if (cleanup_due) {
+    // cleanup_due is only ever true for a non-zero deadline (TickStrictlyAfter
+    // rejects 0), so a kPendingDestroy effect without a deadline still waits for
+    // its model completion callback. One that carries a deadline -- the one-shot
+    // hardcoded effects, which the sample-driven renderer path can never complete
+    // -- is retired here instead of leaking forever.
     BeginTeardown();
   }
 

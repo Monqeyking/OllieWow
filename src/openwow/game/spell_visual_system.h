@@ -422,7 +422,6 @@ void MountTransitionObject_Release(MountTransitionObjectHandle handle);
 
 void SpellVisualKit_AreaModel_SoundEventCallback(
     openwow::audio::SoundRuntime& sound_runtime,
-    std::uint32_t& throttle_counter,
     std::uint32_t model, std::uint32_t bone,
     std::uint32_t fourcc, std::uint32_t data, const float* pos);
 
@@ -681,6 +680,13 @@ void SpellVisuals_BeginLightingEnvelope(const WorldSession& session,
 void SpellVisuals_ClearLightingEnvelope();
 [[nodiscard]] SpellVisualLightingEnvelope
 SpellVisuals_GetLightingEnvelopeSnapshot();
+
+// The tick that CEffect_C::UpdateAll receives. One-shot effects derive their
+// teardown deadline from it, so anything arming such a deadline must use the
+// same clock or the deadline lands in a different time base. Named distinctly
+// from the file-local SpellVisualNowMs() in spell_visual_system.cpp, which sits
+// in an anonymous namespace.
+[[nodiscard]] std::uint32_t SpellVisualEffectNowMs();
 
 void SpellVisuals_UpdateAll(WorldSession& session, float delta_seconds);
 

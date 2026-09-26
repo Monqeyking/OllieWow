@@ -1985,13 +1985,15 @@ static constexpr std::uint32_t kFourCC_SND = 0x444E5324u;
 
 void SpellVisualKit_AreaModel_SoundEventCallback(
     openwow::audio::SoundRuntime& sound_runtime,
-    std::uint32_t& throttle_counter,
     std::uint32_t , std::uint32_t ,
     std::uint32_t fourcc, std::uint32_t data, const float* pos) {
-  const std::uint32_t counter = ++throttle_counter;
-
-  if ((counter & 3u) == 0 && fourcc == kFourCC_SND) {
-
+  // Benilla rings an M2 sound event unconditionally per crossed key: its router
+  // matches b"$SND" | b"$DSO" | b"$DSL" | b"$CSD" with only `data != 0` as the gate
+  // (crates/benilla-app/src/sound/anim_events.rs:83-87). This callback is invoked
+  // once per triggered event, so the counter filter that used to live here dropped
+  // three of every four one-shots -- and because the counter was shared across all
+  // area models, which ones survived depended on unrelated traffic.
+  if (fourcc == kFourCC_SND && data != 0u) {
     (void)sound_runtime.PlaySoundKit(data, pos, nullptr);
   }
 }
@@ -2494,5 +2496,10 @@ void SpellVisualRibbonRandomizeSegmentPositionAndVelocity(
       openwow::foundation::hashing::AdlerSeedNextRangeFloat(
           phase_min, phase_max, rng);
 }
+
+// Public accessor for the tick CEffect_C::UpdateAll receives. The SpellVisualNowMs
+// above lives in an anonymous namespace, so callers outside this translation unit
+// that must arm a deadline on the same clock come through here.
+[[nodiscard]] std::uint32_t SpellVisualEffectNowMs() { return SpellVisualNowMs(); }
 
 }
