@@ -836,10 +836,18 @@ static void ApplyFrameTextureDefaultsExceptPath(
   state->tile_x = frame.tile_x;
   state->tile_y = frame.tile_y;
   state->clamp_v_wrap = frame.clamp_v_wrap;
-  state->color_r = frame.color_r;
-  state->color_g = frame.color_g;
-  state->color_b = frame.color_b;
-  state->color_a = frame.texture_alpha.value_or(frame.color_a);
+  // A `<Texture file=...>` with a `<Color>` child DISCARDS the colour. The client's
+  // CSimpleTexture::LoadXML writes `<Color>` into the +0xcc solid slot and reads
+  // `file=` only afterwards; a successful load overwrites that very slot, so the
+  // generated solid is released unused (wow-re texture-color-composition.md,
+  // VERIFIED). Only a fileless `<Color>` is a real fill -- and only that fill
+  // multiplies with a later SetVertexColor. Keeping the authored colour as a tint on
+  // art is what made the OctoCalendar weekday backgrounds draw yellow.
+  const bool has_art = !frame.file.empty();
+  state->color_r = has_art ? 1.0F : frame.color_r;
+  state->color_g = has_art ? 1.0F : frame.color_g;
+  state->color_b = has_art ? 1.0F : frame.color_b;
+  state->color_a = frame.texture_alpha.value_or(has_art ? 1.0F : frame.color_a);
 
   const std::string_view alpha_mode = frame.alpha_mode;
   if (openwow::text::EqualsIgnoreCaseAscii(alpha_mode, "DISABLE")) {
@@ -1133,22 +1141,30 @@ void BuildTextureRenderStateFromLuaFieldsInto(
     state.tile_y = *tile_y_override;
   }
 
+  // The vertex colour MULTIPLIES the region's base (authored) colour — it does not
+  // replace it. Benilla, `benilla-ui/src/script/types.rs:434-442` (wow-re
+  // `texture-color-composition.md`, VERIFIED): "drawn = texel x vertexColour, per
+  // channel, alpha included ... This is why the reference SkillFrame's row trough —
+  // declared <Color 1,1,1,0.2>, then SetVertexColor(0, 0, 0.75, 0.5)'d — draws at
+  // alpha 0.2 x 0.5 = 0.1, not 0.5". Assigning made the tint REPLACE the authored
+  // alpha, which painted every skill row a flat full-width blue: measured (6,6,102)
+  // where the vanilla client draws (11,11,27) — exactly the 0.5-vs-0.1 difference.
   double component = 0.0;
   if (texture_field::ReadNumber(L, source, texture_field::kVertexColorR,
                                 &component)) {
-    state.color_r = static_cast<float>(component);
+    state.color_r *= static_cast<float>(component);
   }
   if (texture_field::ReadNumber(L, source, texture_field::kVertexColorG,
                                 &component)) {
-    state.color_g = static_cast<float>(component);
+    state.color_g *= static_cast<float>(component);
   }
   if (texture_field::ReadNumber(L, source, texture_field::kVertexColorB,
                                 &component)) {
-    state.color_b = static_cast<float>(component);
+    state.color_b *= static_cast<float>(component);
   }
   if (texture_field::ReadNumber(L, source, texture_field::kVertexColorA,
                                 &component)) {
-    state.color_a = static_cast<float>(component);
+    state.color_a *= static_cast<float>(component);
   }
 
   if (state.texture_path.empty() && !state.clear_texture) {
@@ -1276,17 +1292,23 @@ void BuildTextureRenderStateInto(
     state.tile_y = *source->vertical_tile;
   }
 
+  // The runtime vertex colour MULTIPLIES the region's base (authored) colour; it
+  // does not replace it. The SkillFrame row trough is declared <Color 1,1,1,0.2>
+  // and then SetVertexColor(0, 0, 0.75, 0.5)'d, so it must draw at alpha
+  // 0.2 x 0.5 = 0.1. Replacing painted every skill row a flat full-width blue.
+  // NOTE: BuildTextureRenderStateFromLuaFieldsInto holds the same multiply rule
+  // but is currently never called; keep both in sync until it is removed.
   if (source->vertex_color[0].has_value()) {
-    state.color_r = static_cast<float>(*source->vertex_color[0]);
+    state.color_r *= static_cast<float>(*source->vertex_color[0]);
   }
   if (source->vertex_color[1].has_value()) {
-    state.color_g = static_cast<float>(*source->vertex_color[1]);
+    state.color_g *= static_cast<float>(*source->vertex_color[1]);
   }
   if (source->vertex_color[2].has_value()) {
-    state.color_b = static_cast<float>(*source->vertex_color[2]);
+    state.color_b *= static_cast<float>(*source->vertex_color[2]);
   }
   if (source->vertex_color[3].has_value()) {
-    state.color_a = static_cast<float>(*source->vertex_color[3]);
+    state.color_a *= static_cast<float>(*source->vertex_color[3]);
   }
 
   if (state.texture_path.empty() && !state.clear_texture) {
