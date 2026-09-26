@@ -310,16 +310,6 @@ int ReputationInfo::GetStandingLevel(std::int32_t faction_id) const {
   return 0;
 }
 
-bool ReputationInfo::IsChildFaction(std::int32_t faction_id) const {
-  for (std::size_t i = 0; i < num_visible_; ++i) {
-    if (entries_[i].faction_id == faction_id && entries_[i].header_idx >= 0) {
-      auto hidx = static_cast<std::size_t>(entries_[i].header_idx);
-      return headers_[hidx].parent_faction != 0;
-    }
-  }
-  return false;
-}
-
 bool ReputationInfo::IsEmptyHeader(const FactionHeader& hdr) const {
   if (!IsPlayerFriendly(hdr.faction_id)) {
     return hdr.child_count == 0;
@@ -486,6 +476,8 @@ bool ReputationInfo::HandleSetFactionVisible(const ObjectManager& objects,
   if ((rep_flags_[slot] & kRepFlagVisible) == 0) {
     AddFactionEntry(objects, slot, true);
     rep_flags_[slot] |= kRepFlagVisible;
+    // The reveal is a server push too, so the folds reset with it.
+    ResetHeaderCollapse();
     RebuildFactionList();
   }
   return true;
@@ -494,14 +486,12 @@ bool ReputationInfo::HandleSetFactionVisible(const ObjectManager& objects,
 bool ReputationInfo::HandleSetFactionStanding(const ObjectManager& objects,
                                                 const std::uint8_t* data,
                                                 std::size_t len) {
-  if (!data || len < 9) return false;
+  // 1.12 sends the count FIRST, then count x (rep list id, standing). The
+  // bonus-rep float and the "increased" byte are the 3.3.5 prefix and do not
+  // exist here — the local server's ReputationMgr::SendState writes the count
+  // at offset 0.
+  if (!data || len < 4) return false;
   PacketReader r(data, len);
-
-  float bonus_rep;
-  if (!r.ReadFloat(bonus_rep)) return false;
-
-  std::uint8_t increased;
-  if (!r.ReadU8(increased)) return false;
 
   std::uint32_t count;
   if (!r.ReadU32(count)) return false;
@@ -538,7 +528,7 @@ bool ReputationInfo::HandleSetFactionStanding(const ObjectManager& objects,
       rep_standing_[slot] = new_standing;
       if (rep_message_mode != 0) {
         DisplayRepChangeMessage(objects, faction_id, delta,
-                                rep_message_mode == 2, bonus_rep);
+                                rep_message_mode == 2, 0.0f);
       }
     }
 
@@ -576,7 +566,11 @@ bool ReputationInfo::HandleSetFactionStanding(const ObjectManager& objects,
     }
   }
 
-  if (flags_changed) {
+  // A server push resets the folds (everything expanded, then the synthetic
+  // "Inactive" header collapsed) — the reference's own rebuild, and the reason
+  // a fold does not survive a standing tick.
+  if (flags_changed || standing_changed) {
+    ResetHeaderCollapse();
     RebuildFactionList();
   }
 
@@ -620,7 +614,9 @@ void ReputationInfo::SendToggleAtWar(std::int32_t faction_id,
                                      bool set_at_war,
                                      bool active_player_in_combat) {
 
-  if (FindHeaderIndex(faction_id) > 0) return;
+  // A header row is not a faction bar: no send at all. `>= 0`, not `> 0` —
+  // header index 0 is a header too (the old form let the first header through).
+  if (FindHeaderIndex(faction_id) >= 0) return;
 
   if (!set_at_war && GetCurrentStanding(faction_id) < -3000) return;
 
@@ -659,7 +655,7 @@ void ReputationInfo::SendSetWatchedFaction(std::int32_t faction_id) {
 }
 
 void ReputationInfo::SendSetInactive(std::int32_t faction_id, bool inactive) {
-  if (FindHeaderIndex(faction_id) > 0) return;
+  if (FindHeaderIndex(faction_id) >= 0) return;
 
   auto slot = LookupRepListId(faction_id);
   if (slot < 0 || static_cast<std::uint32_t>(slot) >= kMaxRepSlots) return;
@@ -674,6 +670,18 @@ void ReputationInfo::SendSetInactive(std::int32_t faction_id, bool inactive) {
   (void)net::ClientServices__SendPacket(
       BuildSetFactionInactivePacket(uslot, inactive));
   RebuildFactionList();
+}
+
+void ReputationInfo::ResetHeaderCollapse() {
+  // All-expanded (a set bit means expanded), then the synthetic "Inactive"
+  // header (faction id -1) folded again — the reference's rebuild.
+  collapsed_mask_ = ~std::uint64_t{0};
+  for (std::size_t h = 0; h < num_headers_; ++h) {
+    headers_[h].collapsed_hidden = 0;
+    if (headers_[h].faction_id == -1) {
+      collapsed_mask_ &= ~(std::uint64_t{1} << h);
+    }
+  }
 }
 
 void ReputationInfo::ToggleHeaderCollapse(std::size_t entry_idx, bool collapse) {
@@ -1001,16 +1009,10 @@ ReputationInfo::FactionLuaInfo ReputationInfo::PushFactionInfo(
     if (IsHeaderCollapsed(header_index)) {
       info.is_collapsed = true;
     }
-    if (IsPlayerFriendly(faction_id)) {
-      info.is_player_friendly = true;
-    }
   }
 
   if (IsWatchedFaction(faction_id)) {
     info.is_watched = true;
-  }
-  if (IsChildFaction(faction_id)) {
-    info.is_child = true;
   }
   return info;
 }

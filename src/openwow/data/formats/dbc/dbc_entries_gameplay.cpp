@@ -61,6 +61,23 @@ OPENWOW_DBC_SCHEMA(SpellItemEnchantmentEntry,
     DBC_U32_ARRAY(tail_fields, 35)
 )
 
+// The local Classic record is the 37-field vanilla one that
+// dbc_retail_catalog.inc declares for DBFilesClient\Faction.dbc (37 fields /
+// 148 bytes) and that Source\src\game\Database\DBCStructure.h:302-316
+// documents: ID(0), reputationListID(1), raceMask[4](2-5), classMask[4](6-9),
+// baseRep[4](10-13), reputationFlags[4](14-17), team(18), name[8](19-26),
+// string flags(27), description[8](28-35), string flags(36).
+//
+// Measured against the real client archive (patch-9.mpq, 204 records, 37 fields,
+// record_size 148): field 19 holds "Ironforge"/"Booty Bay"/… and field 28 their
+// descriptions, while field 23 — the WotLK name offset — lands on a different
+// locale column and field 40 is past field_count, so FieldPtr rejects it. Both
+// were read as empty/garbage through the reputation pane.
+//
+// The WotLK-only parentFactionMod[2]/parentFactionCap[2] at 19-22 have no home
+// in this record (that range IS name[0..3] here); they are still read, and
+// quest_manager.cpp:563-594 consumes them for rep spillover. That needs the
+// local rep-spillover semantics before it can be corrected — flagged, not fixed.
 OPENWOW_DBC_SCHEMA(FactionEntry,
     e.id                  = f.GetUInt32(row, 0);
     e.reputation_list_id  = f.GetInt32(row, 1);
@@ -71,12 +88,12 @@ OPENWOW_DBC_SCHEMA(FactionEntry,
       e.reputation_flags[i]    = f.GetUInt32(row, 14 + i);
     }
     e.parent_faction_id   = f.GetUInt32(row, 18);
-    e.parent_faction_mod0 = f.GetFloat(row, 19);
-    e.parent_faction_mod1 = f.GetFloat(row, 20);
-    e.parent_faction_cap0 = f.GetUInt32(row, 21);
-    e.parent_faction_cap1 = f.GetUInt32(row, 22);
-    e.name                = f.GetLocalizedString(row, 23);
-    e.description         = f.GetLocalizedString(row, 40);
+    // Veld 19-22 is hier name[0..3], NIET de WotLK parentFactionMod/Cap: die
+    // kolommen bestaan in dit 37-velds record niet en blijven dus 0. De client
+    // hoort ook geen spillover te rekenen — de server doet dat en pusht de
+    // resulterende standing (zie de noot in quest_manager.cpp).
+    e.name                = f.GetLocalizedString(row, 19);
+    e.description         = f.GetLocalizedString(row, 28);
 )
 
 OPENWOW_DBC_SCHEMA(FactionTemplateEntry,

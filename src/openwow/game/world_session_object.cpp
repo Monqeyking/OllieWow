@@ -843,6 +843,9 @@ void WorldSession::OnLocalPlayerCreated(const ObjectGuid &guid) {
     world_map_->RegisterActivePlayerExplorationRefresh(guid);
   }
   RebindActivePlayerDescriptorCallbacks(guid);
+  // The create update has no values-change dispatch. Mirror Benilla's initial
+  // PLAYER_SKILL_INFO notification for the Skills frame.
+  ui::game::ScriptEventDispatch::Get().FireEvent(ui::game::events::SKILL_LINES_CHANGED);
 
   if (dbc_ != nullptr) {
     if (const auto *const player = objects().GetLocalPlayerTyped();
@@ -2620,6 +2623,8 @@ void WorldSession::OnFieldsChanged(const WorldObject &obj, const FieldUpdateBatc
         RequestVisibleQuestgiverStatusRefresh();
         RefreshQuestRuntimeFromPlayer(false);
         dispatch.FireQuestLogUpdate();
+      } else if (std::strcmp(evt.event_name, "SKILL_LINES_CHANGED") == 0) {
+        dispatch.FireEvent(ui::game::events::SKILL_LINES_CHANGED);
       } else if (std::strcmp(evt.event_name, "SPELLS_CHANGED") == 0) {
         dispatch.FireSpellsChanged();
       }

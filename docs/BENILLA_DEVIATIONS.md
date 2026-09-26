@@ -666,6 +666,195 @@ bereik `[0.955, 0.96]` uit de referentie werkte hier **niet** — bij onze
 projectie reikt het verre terrein dieper, dus dan occludeert de backdrop de
 verte (het hele beeld werd paars).
 
+### Batch 8 — reputation-tab leeg: Faction.dbc werd nooit geladen, plus WotLK-kolomoffsets (opgelost 2026-09-22)
+
+De reputation-tab toonde **helemaal geen rijen**. Live gemeten in de draaiende
+client via het debug-kanaal: `GetNumFactions() == 0`, `GetFactionInfo(1)` gaf
+alleen de synthetische `Inactive`-header, en `GetFactionInfoByID(id)` gaf voor
+**0 van de 200** getestte ids een naam — de Faction-store was dus leeg.
+
+**Oorzaak 1 (de lege lijst).** `IsClassicMvpDbc` (`dbc_loader.cpp:59-153`) is de
+whitelist waarop `DbcLoader::LoadAll` met `DbcLoadProfile::kClassicMvp` alle
+tabellen filtert (`dbc_table_registry.cpp:163`, `dbc_loader.cpp:329`).
+`FactionGroup.dbc` en `FactionTemplate.dbc` stonden erin, **`Faction.dbc` niet**.
+Zonder die tabel is `dbc_->faction()` leeg, geeft `LookupEntry()` altijd
+`nullptr` en voegt `InitFromPlayerData` nul entries toe. Fix: `Faction.dbc`
+toegevoegd (81 → 82). Exact dezelfde faalwijze die in dat bestand al bij
+`CreatureDisplayInfoExtra.dbc` staat gedocumenteerd.
+
+**Oorzaak 2 (rijen zonder naam), gevonden tijdens dezelfde audit.**
+`FactionEntry::Load` las de WotLK-offsets (naam veld 23, beschrijving veld 40) op
+het lokale **37-velds vanilla-record**. Gemeten op de echte clientarchieven
+(`artifacts/mpq_extract.exe`, uit `patch-9.mpq`; zie `artifacts/dbc-check/`):
+204 records, `field_count` 37, `record_size` 148. Veld 19 bevat de naam
+("Ironforge", "Booty Bay", "Thorium Brotherhood"), veld 28 de beschrijving (46 van
+de 54 reputatiefacties hebben er een). Veld 23 landde op een andere locale-kolom
+(`??????(??????)`) en veld 40 is ≥ `field_count`, dus `DbcFile::FieldPtr`
+weigerde het en `GetLocalizedString` gaf altijd leeg terug. Fix: veld 19/28.
+
+**Beide fixes zijn nodig:** oorzaak 1 maakt de lijst leeg, oorzaak 2 maakt de namen
+leeg zodra de lijst wél gevuld is. Geen DBC-, MPQ-, server- of brongewijziging;
+bouwt en linkt schoon (TU's/archieven/link exit 0).
+
+**Volledige faction/reputation-ronde (zelfde sessie).** Na de twee oorzaken hierboven
+is de hele surface tegen het lokale 1.12-contract gelegd — de lokale
+`vfsdump2/framexml_all/Interface_FrameXML_ReputationFrame.{lua,xml}`, pfUI's
+`xpbar.lua`, en Benilla's `benilla-ui/src/script/reputation.rs` +
+`benilla-formats/src/factions.rs`. Daaruit zijn nog acht afwijkingen gerepareerd:
+
+1. `GetFactionInfo` gaf **13** waarden met de 3.3.5-volgorde; het lokale contract
+   is **11** met `isWatched` op positie 11 (`ReputationFrame.lua:35,51`). De twee
+   3.3.5-only velden (`isPlayerFriendly`, `isChild`) en hun state zijn verwijderd.
+2. Buiten het zichtbare bereik geeft `GetFactionInfo` nu de echte miss-tuple
+   `nil,nil,1,0,0,0,nil,nil,nil,nil,nil` — die `1` in het standingID-slot is
+   load-bearing, want de referentie indexeert `FACTION_BAR_COLORS[standingID]`
+   ongeguard.
+3. `GetWatchedFactionInfo` geeft bij "niets gevolgd" één `nil` i.p.v. vijf nullen.
+4. `SetSelectedFaction` wist de selectie op een header- of buiten-bereik-rij.
+5. `FactionToggleAtWar` respecteert `canToggleAtWar` (standing ≥ −3000 én geen
+   peace-forced vlag 0x10).
+6. `SendToggleAtWar`/`SendSetInactive` gebruikten `FindHeaderIndex(...) > 0`
+   waardoor **header-index 0** erdoor glipte en een header als faction-bar werd
+   behandeld; nu `>= 0`.
+7. `SMSG_SET_FACTION_STANDING` werd als 3.3.5 geparsed (float bonus + u8
+   "increased" vóór de count); de lokale `ReputationMgr::SendState` schrijft
+   **count-first**. Nu count-first, `bonus_rep` vervalt (0.0f).
+8. Een serverpush reset nu de folds (alles uitgeklapt, dan de synthetische
+   "Inactive"-header dicht) — het gedrag dat maakt dat een fold een standing-tick
+   niet overleeft.
+
+Geverifieerd tegen de lokale Source: de opcodes (0x123/0x124/0x125/0x313/0x317/
+0x318), de CMSG-bodies (ATWAR u32+u8, INACTIVE u32+u8, WATCHED i32) en de
+SMSG-bodies (VISIBLE u32, ATWAR u32+u8) komen overeen; de rank-edges en de
+Exalted-cap 43000 matchen `benilla-formats::reputation_rank`.
+
+Bewust additief gelaten: `GetFactionInfoByID`, `CollapseAllFactionHeaders` en
+`ExpandAllFactionHeaders` bestaan niet in 1.12/Benilla, maar zijn extra globals
+zonder lokaal contract in de weg. De selectie wordt intern op faction-id gehouden
+i.p.v. op rep-list-slot (waarneembaar gelijk). `DisplayRepChangeMessage`'s
+`bonus_rep`-tak is nu onbereikbaar omdat 1.12 dat veld niet stuurt.
+
+**Runtime-bevestiging (zelfde sessie, in de draaiende client).** Met het
+debug-kanaal in-game gemeten op een Horde-character:
+
+```
+GetNumFactions()                      = 6            (was 0)
+GetFactionInfo(1)                     = "Horde"      (was "Inactive")
+GetFactionInfoByID(47)                = "Ironforge"  (was nil)
+rijen 1..6                            = Horde | Darkspear Trolls | Durotar Labor
+                                        Union | Orgrimmar | Thunder Bluff | Undercity
+select('#', GetFactionInfo(1))        = 11           (was 13)
+select('#', GetWatchedFactionInfo())  = 1            (was 5)
+```
+
+Niet runtime-bevestigd: de fold-reset bij een standing-tick (reparatie 8) — dat
+vraagt een dichtgeklapte header plus een reputatiewijziging.
+
+Nog open in dit domein (aparte beslissing nodig): de WotLK-only
+`parentFactionMod[2]`/`parentFactionCap[2]` worden nog van veld 19-22 gelezen —
+dat bereik IS hier `name[0..3]` — en `quest_manager.cpp:563-594` gebruikt ze voor
+reputatie-spillover. Dat vraagt de vanilla-spillover-semantiek.
+
+### Batch 9 — Skills-tab leeg (zelfde oorzaak) en rep-spillover opgeruimd (opgelost 2026-09-22)
+
+**Skills-tab leeg.** `SkillInfoStore::UpdateFromPlayer` slaat elke skill over
+waarvan de categorie niet in `SkillLineCategory.dbc` staat (`skill_info.cpp:273`),
+en die tabel stond niet in `IsClassicMvpDbc` — net zomin als `SkillTiers.dbc` en
+`SkillCostsData.dbc` (stepCost/skillMaxRank resp. de trainingskosten;
+`game_lua_api_profession.cpp:397`, `skill_info.cpp:170`). Fix: alle drie
+toegevoegd (82 → 85). Exact dezelfde faalwijze als `Faction.dbc` in Batch 8 — de
+whitelist is handonderhouden en mist entries.
+
+Daarnaast gaf `GetSkillLineInfo` buiten bereik dertien nullen i.p.v. één `nil`.
+Het contract is 13 op een skill-rij, 12 op een header en 1 `nil` erbuiten
+(`benilla-ui/src/script/skills.rs`). Nu één `nil`; een header zonder categorie
+antwoordt in de header-vorm (12, lege naam), omdat een `nil` daar
+`SkillFrame_SetStatusBar` in nil-rekenwerk zou sturen.
+
+**Rep-spillover.** De WotLK-only `parentFactionMod/Cap`-kolommen bestaan niet in het
+lokale 37-velds Faction.dbc — veld 19-22 is daar `name[0..3]`. De decode en de twee
+spillover-blokken in `QuestManager::AccumulateRewardFactionPreview` zijn
+verwijderd. Op de echte data evalueerde de oude code naar 0 (veld 20-22 zijn leeg en
+veld 19 als float is denormaal), dus er verscheen nooit phantom-spillover; de code
+suggereerde alleen steun die er niet is. De client hoeft het ook niet te weten: de
+server past spillover toe (`reputation_spillover_template`) en pusht de
+resulterende standing via `SMSG_SET_FACTION_STANDING`.
+
+### Batch 10 — honor-pane verkeerd gecentreerd: GetWidth van een FontString (opgelost 2026-09-22)
+
+De honor-tab stond scheef: de rank en het honor-getal hingen rechts, deels buiten het
+paneel, terwijl de arena-tab (die `GetWidth` niet gebruikt) goed stond.
+
+Gemeten in de draaiende client:
+
+```
+HonorFrameCurrentPVPTitle:GetWidth()        =  31.11   ("None")
+HonorFrameCurrentPVPTitle:GetStringWidth()  =  31.11
+HonorFrameCurrentPVPTitle:GetLeft()         =  62.80
+HonorFrameCurrentPVPTitle:GetRight()        = 283.46   -> rect-breedte 220.66
+HonorFrameCurrentPVPRank:GetLeft()          = 288.65   (= title.right + 5)
+```
+
+`GetWidth()` en de resolved rect spraken elkaar dus tegen: 31 versus 220,66.
+`HonorFrameCurrentPVPRank` ankert op de **resolved** rechterrand (283,5), terwijl
+`honorframe.lua:76` (`SetPoint("TOP","HonorFrame","TOP", -GetWidth()/2, -83)`) op
+`GetWidth()/2 = 15,5` rekent. Het gevolg is een vaste puntverschuiving van ~190 px
+naar rechts.
+
+Dat is precies de afwijking die Benilla documenteert
+(`benilla-ui/src/script/tests/measure.rs:285`): **`GetStringWidth` is de natuurlijke
+tekstbreedte, `GetWidth` dekt de LAYOUT-extent** — dezelfde rect waar de anchor-engine
+tegen werkt. OpenWow gaf in beide gevallen de gemeten tekstbreedte terug.
+
+Fix: `ResolveLuaFontStringEffectiveSize` (`frame_region_geometry.cpp`) geeft nu de
+resolved rect terug als die er is, en valt pas daarna terug op `SetSize` en de meting.
+`GetStringWidth` blijft de gemeten natuurlijke breedte. Dit raakt alleen
+FontStrings waar rect en tekstbreedte uiteenlopen (over-geconstraineerde of
+parent-gevulde regio's); een gewone auto-sized FontString geeft dezelfde waarde als
+voorheen.
+
+**Addendum bij Batch 10 (oorzaak dieper).** Met de `GetWidth`-fix is `GetWidth` gelijk aan de rect (220,66 = `GetRight()-GetLeft()`), maar de rect zelf is fout — de honor-rij blijft scheef. Gemeten: `HonorFrameCurrentPVPTitle:GetNumPoints() == 2`. De titel heeft dus TWEE anchors: de `TOPLEFT (63,-84)` uit de lokale `HonorFrame.xml` én de `TOP` die `honorframe.lua:75-76` elke repaint zet.
+
+De referentie bewaart anchors in negen `point`-slots en honoreert per as maar ÉÉN anchor (eerste aanwezige): Benilla `benilla-ui/src/layout.rs:196-198` ("if two share a point, the last wins", client `SetPoint 0x767c70`) en de scans `anchorScanX 0x7671a0` / `anchorScanY 0x7671f0`. OpenWow heeft dat slotmodel al (`framexml/layout_anchor_resolution.h:159 BuildAnchorSlots`), maar combineert in `layout_resolver.cpp:290-299` wél beide: `resolved_left = left_x` (63) én `resolved_right = SynthesizeHorizontalSide(center_x, left_x, width)` met een `width` van 220,66 in plaats van de gemeten tekstbreedte 31. Daardoor wordt de rect 220 breed en duwt `HonorFrameCurrentPVPRank` (geankerd op `title.right`) plus het honor-getal ~190 px naar rechts.
+
+Kleinste wijziging: in die synthesepad voor een auto-sized FontString zonder opposing-paar (left+center, geen right) de **gemeten tekstbreedte** gebruiken — dezelfde waarde die `GetStringWidth` al teruggeeft. Dat is een layout-enginewijziging, geen datawijziging; de lokale XML blijft ongemoeid.
+
+**Skillbalk.** `SkillRankFrameN` geeft via Lua de juiste waarden (`v=30 mn=0 mx=30 w=271`), dus de data klopt. In `SkillFrame.xml` is `$parentBackground` een Texture **zonder Size en zonder anchors** (vult dus het parent, volle breedte) die de lokale Lua zelf blauw zet; de voortgang is de StatusBar-BarTexture erbovenop. Dat er geen enkel verschil tussen 1/30 en 30/30 te zien is, betekent dat die fill-quad niet (zichtbaar) wordt gesubmit — vermoedelijk paint-orde van de BarTexture t.o.v. dezelfde-laag `$parentBackground`. Nog te toetsen in de render-/paint-orderroute.
+
+### Batch 11 — skillbalk-fill gecropt; honor en skills visueel gelijk aan vanilla (geverifieerd 2026-09-22)
+
+**Honor (Batch 10) is A/B-bevestigd.** Na de span-regel in `SynthesizeHorizontalSide`
+staat "None (Rank 0)" met het honor-getal gecentreerd, gelijk aan de vanilla-client.
+
+**Skillbalk.** De `[sbtrace]`-meting (env-gated, inmiddels weer verwijderd) liet zien
+dat de keten klopte: `SkillRankFrame3Bar value=1/30 → fill=15,7 van 470 px`,
+`SkillRankFrame5Bar value=32/33 → fill=455,8 van 470`, `visible=1`, `has_texture=1`,
+en dezelfde textuur (`PaperDollInfoFrame\UI-Character-Skills-Bar`) wordt ook door de
+reputatiebalken met `submitted=1` gerenderd. Geometrie, kleur, laagorde en textuur
+waren dus alle correct — de fill werd alleen **geplet**: de volle UV-range (0→1) ging
+in een 15-px quad, waardoor de 256-px balkkunst tot een egale lap werd gemiddeld.
+
+Fix naar het patroon van WoWee's `drawStatusBar` (`Kelsidavis/WoWee`,
+`src/ui/widget_renderer.cpp:876-881`: "the texture is cropped to the filled part
+rather than squashed into it"): de fill-quad cropt nu op de fractie
+(`u1 → u0 + (u1-u0)·fractie`, verticaal de y-twin). Bij fractie 1 is dat identiek aan
+de oude waarde, dus volle balken (health/mana/reputatie) veranderen niet. Visueel
+bevestigd gelijk aan vanilla.
+
+**Open nieuw punt — onze wereld is donkerder dan vanilla.** A/B tegen de echte
+vanilla-client laat zien dat het terrein bij ons duidelijk donkerder is. Twee
+kandidaten, beide bron-toetsbaar:
+1. `vs_terrain.sc:47` / `vs_terrain_splat_body.sh:49` clampen de lichtsom naar 1,0:
+   `v_color0 = clamp(ambient + diffuse·max(N·L,0) + puntlichten, 0, 1)`. Dat is
+   dezelfde wet die het comment zelf citeert
+   (`benilla-assets/src/shaders/terrain.wgsl:5-8`), dus de clamp hoort — maar dan
+   moeten de ambient/diffuse-waarden uit LightIntBand rij 0/1 ook kloppen.
+   `vs_wmo.sc:33-34` clampt eveneens.
+2. Het **dag/nacht-tijdstip**: als onze klok anders samplet dan de server, rendert de
+   wereld op een donkerder uur. Dit is met één meting te scheiden
+   (`GetGameTime()` in de client naast de servertijd) en dat is de eerstvolgende stap
+   vóór er iets aan de lichtwaarden verandert.
+
 ## Werkvoorraad: pariteit met het origineel
 
 Open, in volgorde van impact:
@@ -689,6 +878,10 @@ Open, in volgorde van impact:
    `terrain_shadow_mod` (`world_render_pipeline.cpp:74`,
    `terrain_renderer.cpp:509-533`) in plaats van de per-chunk bake. Dat is de
    originele statische terrein-schaduw en hoort de volgende stap te zijn.
+7. **Rep-spillover-velden** (Batch 8): de WotLK-only
+   `parentFactionMod`/`parentFactionCap` worden van Faction.dbc-veld 19-22
+   gelezen (dat bereik IS hier `name[0..3]`) en `quest_manager.cpp:563-594`
+   gebruikt ze voor reputatie-spillover. Vraagt de vanilla-spillover-semantiek.
 
 ## Toekomst: opt-in graphics-upgrades (ná pariteit)
 

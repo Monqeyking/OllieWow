@@ -332,6 +332,11 @@ int LuaGetSkillLineInfo(lua_State* L) {
           ? store.GetSkillEntry(skill_index)
           : nullptr;
   if (player == nullptr || dbc == nullptr || visible_entry == nullptr) {
+    // Out of range must still answer in the NUMERIC empty shape: the local
+    // SkillFrame.lua:192-194 does `skillRank = skillRank + numTempPoints` BEFORE
+    // its own `not skillName` guard, so a bare nil here throws
+    // "attempt to perform arithmetic on local 'skillRank'". The reference's
+    // single-nil answer is not usable with this client's Lua.
     PushEmptySkillLineInfo(L);
     return 13;
   }
@@ -347,6 +352,8 @@ int LuaGetSkillLineInfo(lua_State* L) {
       return 12;
     }
 
+    // A header whose category is absent answers in the same numeric empty shape,
+    // for the same reason: a bare nil would reach arithmetic before the guard.
     PushEmptySkillLineInfo(L);
     return 13;
   }

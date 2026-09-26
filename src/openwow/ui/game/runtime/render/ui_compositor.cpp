@@ -9,6 +9,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -850,11 +851,38 @@ void runtime::render::UiCompositor::Render(const UiCompositorFrame& compositor_f
     }
 
     if (is_status_bar_fill) {
+      static std::unordered_set<std::string> logged_skill_status_bar_traces;
+      const bool is_skill_bar =
+          entry.key.find("SkillRankFrame") != std::string::npos ||
+          frame.name.find("SkillRankFrame") != std::string::npos ||
+          frame.parent.find("SkillRankFrame") != std::string::npos;
+      const auto log_skill_status_bar_trace =
+          [&](const std::string_view phase, auto&& details_supplier) {
+            if (!is_skill_bar) return;
+            std::string trace_key(entry.key);
+            trace_key.append("|");
+            trace_key.append(phase);
+            if (!logged_skill_status_bar_traces.insert(trace_key).second) {
+              return;
+            }
+            openwow::diagnostics::Log(
+                openwow::diagnostics::LogLevel::kInfo,
+                "SkillStatusBarTrace: " + trace_key + " " +
+                    details_supplier());
+          };
 
       const auto owner_rect = retained_layout_.rects().find(frame.parent);
       auto* status_bar = frame_store_.FindStatusBar(frame.parent);
       if (owner_rect == retained_layout_.rects().end() ||
           status_bar == nullptr || !has_lua_ref) {
+        log_skill_status_bar_trace("skip", [&] {
+          return "texture=" + frame.name + " owner=" + frame.parent +
+                 " owner_rect=" +
+                 (owner_rect != retained_layout_.rects().end() ? "yes" : "no") +
+                 " native_status_bar=" +
+                 (status_bar != nullptr ? "yes" : "no") +
+                 " lua_ref=" + (has_lua_ref ? "yes" : "no");
+        });
         continue;
       }
 
@@ -872,6 +900,20 @@ void runtime::render::UiCompositor::Render(const UiCompositorFrame& compositor_f
         const auto status_bar_snapshot = status_bar->Snapshot();
         const auto plan = stateful_widgets::BuildStatusBarRenderPlan(
             status_bar_snapshot, owner_render_rect);
+        log_skill_status_bar_trace("draw", [&] {
+          return "texture=" + frame.name + " owner=" + frame.parent +
+                 " has_range=" +
+                 (status_bar_snapshot.has_range ? "yes" : "no") +
+                 " min=" + std::to_string(status_bar_snapshot.minimum) +
+                 " max=" + std::to_string(status_bar_snapshot.maximum) +
+                 " has_value=" +
+                 (status_bar_snapshot.has_value ? "yes" : "no") +
+                 " value=" + std::to_string(status_bar_snapshot.value) +
+                 " fraction=" + std::to_string(plan.normalized_value) +
+                 " owner_width=" + std::to_string(owner_render_rect.width) +
+                 " fill_width=" + std::to_string(plan.fill_rect.width) +
+                 " visible=" + (plan.visible ? "yes" : "no");
+        });
         if (plan.visible) {
           TextureRenderState& texture_state = texture_state_scratch_;
           BuildTextureRenderStateInto(lua_, -1, frame, session_, vfs_,
@@ -887,11 +929,33 @@ void runtime::render::UiCompositor::Render(const UiCompositorFrame& compositor_f
           quad.abgr = PackStraightTextureAbgr(
               texture_state.color_r, texture_state.color_g,
               texture_state.color_b, texture_state.color_a, alpha);
+          // WoWee's drawStatusBar CROPS the bar art to the filled part instead of
+          // squashing the whole texture into it — "a bar at half value shows half
+          // its art at its own scale" (src/ui/widget_renderer.cpp:876-881). We
+          // stretched the full UV range into the fill quad, so a 15-px fill of a
+          // 256-px art averaged the art down to an undifferentiated blue block.
           const auto status_uv = texture_state.uv_quad.ToUiRendererOrder();
           for (std::size_t uv_index = 0u; uv_index < status_uv.size();
                ++uv_index) {
             quad.uv_quad[uv_index] = {status_uv[uv_index].u,
                                       status_uv[uv_index].v};
+          }
+          const float fill_fraction =
+              std::clamp(plan.normalized_value, 0.0f, 1.0f);
+          if (status_bar_snapshot.orientation ==
+              openwow::ui::widgets::StatusBarOrientation::Vertical) {
+            // Texture order is TL, TR, BR, BL; a vertical bar grows upward.
+            const float v0 = status_uv[0].v;
+            const float v1 = status_uv[3].v;
+            const float cropped_v = v0 + (v1 - v0) * (1.0f - fill_fraction);
+            quad.uv_quad[0].v = cropped_v;
+            quad.uv_quad[1].v = cropped_v;
+          } else {
+            const float u0 = status_uv[0].u;
+            const float u1 = status_uv[1].u;
+            const float cropped_u = u0 + (u1 - u0) * fill_fraction;
+            quad.uv_quad[1].u = cropped_u;
+            quad.uv_quad[2].u = cropped_u;
           }
           quad.has_custom_uv_quad = true;
           quad.desaturated = texture_state.desaturated;

@@ -4,8 +4,8 @@
 #include "openwow/game/combat_rating.h"
 #include "openwow/game/inventory/items/item_definitions.h"
 #include "openwow/game/objects/unit/unit_cast_runtime.h"
-#include "openwow/game/skill_line_ability_lookup.h"
 #include "openwow/data/formats/dbc/dbc_table_registry.h"
+#include "openwow/game/weapon_skill_line.h"
 
 #include <array>
 #include <cmath>
@@ -26,51 +26,17 @@ constexpr std::array<std::uint8_t, 2> kMeleeSkillBonusRatings = {20u, 21u};
 
 [[nodiscard]] std::uint32_t ResolveMeleeWeaponSkillLine(
     const openwow::game::CGPlayer_C &player,
-    const openwow::data::dbc::DbcLoader &dbc,
-    std::uint8_t equip_slot) {
+    const std::uint8_t equip_slot) {
   const auto item_meta = player.GetVisibleItemTemplateMetadata(equip_slot);
-  std::uint32_t subclass_id = 0;
-  bool have_subclass = false;
-
-  if (item_meta.has_value()) {
-    if (item_meta->item_class != kWeaponItemClassForSkill) return 0;
-    subclass_id = item_meta->subclass;
-    have_subclass = true;
-  } else {
-
-    for (const auto &entry : dbc.item_sub_class().entries()) {
-      if (entry.class_id == kWeaponItemClassForSkill && (entry.flags & 0x4u) != 0) {
-        subclass_id = entry.subclass_id;
-        have_subclass = true;
-        break;
-      }
-    }
+  if (!item_meta.has_value() ||
+      item_meta->item_class != kWeaponItemClassForSkill) {
+    // Vanilla uses Unarmed for an empty, unresolved, or non-weapon hand.
+    return openwow::game::kSkillUnarmed;
   }
-  if (!have_subclass) return 0;
 
-  std::uint32_t spell_id = 0;
-  const auto target_mask = 1u << subclass_id;
-  for (auto it = dbc.spell().entries().rbegin();
-       it != dbc.spell().entries().rend(); ++it) {
-    if ((it->attributes & 0x40u) == 0 || it->equipped_item_class != 2)
-      continue;
-    auto sub_mask = static_cast<std::uint32_t>(it->equipped_item_sub_class_mask);
-    if (sub_mask == target_mask) {
-      spell_id = it->id;
-      break;
-    }
-  }
-  if (spell_id == 0) return 0;
-
-  for (const auto &ability : dbc.skill_line_ability().entries()) {
-    if (ability.spell_id != spell_id ||
-        !::openwow::game::SkillLineAbilityMatchesRaceClass(
-            ability, player.State().GetRace(), player.State().GetClass())) {
-      continue;
-    }
-    return ability.skill_id;
-  }
-  return 0;
+  const auto skill_line =
+      openwow::game::WeaponSubclassSkillLineOrZero(item_meta->subclass);
+  return skill_line != 0u ? skill_line : openwow::game::kSkillUnarmed;
 }
 
 struct AttackPowerValues {
@@ -513,7 +479,7 @@ int LuaUnitAttackBothHands(lua_State* L) {
     if (player && dbc && player->GetGuid() == unit->GetGuid()) {
       for (int slot = 0; slot < 2; ++slot) {
         auto skill_line_id =
-            ResolveMeleeWeaponSkillLine(*player, *dbc, kMeleeEquipSlots[slot]);
+            ResolveMeleeWeaponSkillLine(*player, kMeleeEquipSlots[slot]);
 
         if (skill_line_id != 0) {
           if (auto skill_slot = player->FindActiveSkillSlot(

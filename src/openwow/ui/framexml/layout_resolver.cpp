@@ -72,12 +72,21 @@ bool IsDefined(float v) {
   return v != kUndefined && std::isfinite(v);
 }
 
+// The missing edge of a known SPAN is `opposite + size` — Benilla's
+// `layout_767_span` primitive, whose `size` is VIRTUAL: a plain frame answers the
+// authored width, a region (FontString/Texture) the RENDERED one. Mirroring the
+// opposite edge about the centre (`2·centre − opposite`) is only the fallback for
+// an unknown size, and taking it first over-constrains any frame that carries both
+// a corner and a centre anchor: HonorFrameCurrentPVPTitle has the local XML's
+// TOPLEFT (left = 63) plus the repaint's TOP (centre), which produced a 220-wide
+// rect instead of the 31-wide text box and pushed HonorFrameCurrentPVPRank and the
+// honour number ~190 px right.
 float SynthesizeHorizontalSide(float center, float opposite, float size) {
-  if (IsDefined(center) && IsDefined(opposite)) {
-    return center + center - opposite;
-  }
   if (IsDefined(opposite) && size != 0.0F) {
     return opposite + size;
+  }
+  if (IsDefined(center) && IsDefined(opposite)) {
+    return center + center - opposite;
   }
   if (IsDefined(center)) {
     if (size == 0.0F) {

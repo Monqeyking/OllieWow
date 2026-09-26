@@ -435,13 +435,29 @@ static LuaRegionSizeValues ResolveLuaFontStringEffectiveSize(
     lua_State *L,
     const int font_string_index,
     const LuaRegionSizeValues explicit_size) {
-  LuaRegionSizeValues resolved = explicit_size;
-
-  std::optional<openwow::render::text::TextLayout> measurement;
-  if (resolved.width == 0.0f || resolved.height == 0.0f) {
-    measurement = MeasureLuaFontStringMetrics(L, font_string_index);
+  // Benilla/Vanilla: GetWidth on a FontString echoes the LAID-OUT extent — the same
+  // resolved rect the anchor engine works against — and only falls back to the
+  // declared size when the region has no resolved rect. Answering with the measured
+  // TEXT width instead put the two out of step: measured on HonorFrameCurrentPVPTitle
+  // ("None") gave GetWidth 31.1 while the resolved rect was 220.7 wide, so
+  // honorframe.lua:76 turned GetWidth()/2 = 15.5 into an anchor offset while
+  // HonorFrameCurrentPVPRank anchored off the RESOLVED right edge (283.5) — pushing
+  // the rank and the honour number ~190 px right of the title. GetStringWidth stays
+  // the measured natural width, exactly as the reference separates them.
+  ScriptFrameUiRect rect{};
+  if (TryGetScriptFrameRect(L, font_string_index, &rect) &&
+      rect.width > 0 && rect.height > 0) {
+    LuaRegionSizeValues resolved = explicit_size;
+    resolved.width = static_cast<float>(rect.width);
+    resolved.height = static_cast<float>(rect.height);
+    return resolved;
   }
 
+  // No resolved rect yet: measure the text. A declared size still wins, as the
+  // reference's fallback does. (A FontString is measured on every read — a declared
+  // width must not suppress the request.)
+  const auto measurement = MeasureLuaFontStringMetrics(L, font_string_index);
+  LuaRegionSizeValues resolved = explicit_size;
   resolved.width = openwow::ui::ResolveFontStringEffectiveScriptDimension(
       resolved.width, measurement.has_value() ? measurement->width : 0.0f);
   resolved.height = openwow::ui::ResolveFontStringEffectiveScriptDimension(

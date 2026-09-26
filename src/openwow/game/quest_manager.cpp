@@ -552,49 +552,18 @@ std::int32_t QuestManager::AccumulateRewardFactionPreview(const std::int32_t fac
       .amount = delta,
   };
 
-  if (suppress_spillover) {
-    return target;
-  }
-
-  const auto current_faction_id = static_cast<std::int32_t>(faction->id);
-  const auto parent_faction_id = static_cast<std::int32_t>(faction->parent_faction_id);
-  if (parent_faction_id != 0 && parent_faction_id != source_faction_id) {
-    const auto parent_delta =
-        static_cast<std::int32_t>(static_cast<float>(delta) * faction->parent_faction_mod1);
-    if (parent_delta != 0) {
-      AccumulateRewardFactionPreview(parent_faction_id, parent_delta,
-                                     static_cast<std::int32_t>(faction->parent_faction_cap1), -1,
-                                     current_faction_id, false);
-    }
-  }
-
-  const auto *child_spillover_factions =
-      reputation.FindChildSpilloverFactionIds(current_faction_id);
-  if (child_spillover_factions == nullptr) {
-    return target;
-  }
-
-  for (const auto child_faction_id : *child_spillover_factions) {
-    if (static_cast<std::int32_t>(child_faction_id) == source_faction_id) {
-      continue;
-    }
-
-    const auto *child = dbc->faction().LookupEntry(child_faction_id);
-    if (child == nullptr) {
-      continue;
-    }
-
-    const auto child_delta =
-        static_cast<std::int32_t>(static_cast<float>(delta) * child->parent_faction_mod0);
-    if (child_delta == 0) {
-      continue;
-    }
-
-    AccumulateRewardFactionPreview(static_cast<std::int32_t>(child->id), child_delta,
-                                   static_cast<std::int32_t>(child->parent_faction_cap0), -1,
-                                   current_faction_id, false);
-  }
-
+  // Geen client-side spillover. Het lokale Faction.dbc-record heeft 37 velden met
+  // name[8] op 19-26 en description[8] op 28-35: er IS geen
+  // parentFactionMod/parentFactionCap-kolom (die zijn WotLK). De vorige blokken
+  // lazen die offsets uit het naam-blok; op de echte data evalueerden ze naar 0,
+  // dus er verscheen nooit phantom-spillover, maar de code suggereerde steun die
+  // er niet is. De client hoeft het ook niet te weten: de SERVER past spillover
+  // toe (ReputationMgr::SetReputation / reputation_spillover_template) en stuurt
+  // de resulterende standing terug via SMSG_SET_FACTION_STANDING.
+  (void)faction;
+  (void)source_faction_id;
+  (void)suppress_spillover;
+  (void)reputation;
   return target;
 }
 

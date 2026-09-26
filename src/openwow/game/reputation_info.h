@@ -101,6 +101,10 @@ class ReputationInfo {
 
   void ToggleHeaderCollapse(std::size_t entry_idx, bool collapse);
 
+  // Reset the folds the way a server reputation push does: everything expanded,
+  // then the synthetic "Inactive" header collapsed again.
+  void ResetHeaderCollapse();
+
   [[nodiscard]] bool IsAtWar(std::int32_t faction_id) const;
   [[nodiscard]] bool IsForced(std::int32_t faction_id) const;
   [[nodiscard]] bool IsInactive(std::size_t entry_idx) const;
@@ -111,7 +115,6 @@ class ReputationInfo {
   [[nodiscard]] std::int32_t GetCurrentStanding(std::int32_t faction_id) const;
   [[nodiscard]] int GetStandingLevel(std::int32_t faction_id) const;
 
-  [[nodiscard]] bool IsChildFaction(std::int32_t faction_id) const;
   [[nodiscard]] bool IsEmptyHeader(const FactionHeader& hdr) const;
   [[nodiscard]] bool IsPlayerFriendly(std::int32_t faction_id) const;
 
@@ -141,9 +144,7 @@ class ReputationInfo {
     std::optional<bool> can_toggle_at_war;
     std::optional<bool> is_header;
     std::optional<bool> is_collapsed;
-    std::optional<bool> is_player_friendly;
     std::optional<bool> is_watched;
-    std::optional<bool> is_child;
   };
 
   [[nodiscard]] FactionLuaInfo PushFactionInfo(std::int32_t faction_id) const;

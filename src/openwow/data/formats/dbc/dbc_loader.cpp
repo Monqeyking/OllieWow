@@ -60,7 +60,7 @@ bool IsClassicMvpDbc(const std::string_view filename) {
   // Keep this list tied to the current Classic world-entry MVP. The full
   // catalog remains available for later Classic feature work, but loading it
   // eagerly retains a large amount of data that the MVP never reads.
-  static constexpr std::array<std::string_view, 81> kClassicMvpTables = {
+  static constexpr std::array<std::string_view, 85> kClassicMvpTables = {
       "DBFilesClient\\AreaTable.dbc",
       "DBFilesClient\\AnimationData.dbc",
       "DBFilesClient\\CharBaseInfo.dbc",
@@ -88,6 +88,11 @@ bool IsClassicMvpDbc(const std::string_view filename) {
       "DBFilesClient\\EmotesTextData.dbc",
       "DBFilesClient\\EmotesTextSound.dbc",
       "DBFilesClient\\Exhaustion.dbc",
+      // De reputatielijst leest zijn naam, parent en race/class-masker uit deze
+      // tabel. Zonder hem is de Faction-store leeg, geeft LookupEntry() nullptr
+      // en blijft GetNumFactions() 0: de reputation-tab toont dan helemaal geen
+      // rijen (alleen de synthetische "Inactive"-header).
+      "DBFilesClient\\Faction.dbc",
       "DBFilesClient\\FactionGroup.dbc",
       "DBFilesClient\\FactionTemplate.dbc",
       "DBFilesClient\\GameObjectArtKit.dbc",
@@ -121,7 +126,14 @@ bool IsClassicMvpDbc(const std::string_view filename) {
       "DBFilesClient\\Resistances.dbc",
       "DBFilesClient\\SkillLine.dbc",
       "DBFilesClient\\SkillLineAbility.dbc",
+      // De skilllijst slaat elke skill over waarvan de categorie niet in deze
+      // tabel staat (skill_info.cpp:273); zonder hem is de Skills-tab leeg.
+      "DBFilesClient\\SkillLineCategory.dbc",
       "DBFilesClient\\SkillRaceClassInfo.dbc",
+      // skill_tiers() voedt stepCost/skillMaxRank en skill_costs_data() de
+      // trainingskosten (game_lua_api_profession.cpp:397, skill_info.cpp:170).
+      "DBFilesClient\\SkillTiers.dbc",
+      "DBFilesClient\\SkillCostsData.dbc",
       "DBFilesClient\\SoundAmbience.dbc",
       "DBFilesClient\\SoundEntries.dbc",
       "DBFilesClient\\SoundEntriesAdvanced.dbc",

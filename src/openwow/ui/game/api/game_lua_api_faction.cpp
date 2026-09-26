@@ -89,6 +89,23 @@ static void PushOptionalWowBool(lua_State* L, const std::optional<bool>& value) 
   }
 }
 
+// The 1.12 miss tuple, eleven wide: `nil, nil, 1, 0, 0, 0, nil, nil, nil,
+// nil, nil`. The `1` rides the standingID slot because the reference indexes
+// `FACTION_BAR_COLORS[standingID]` unguarded.
+static void PushUnknownFaction(lua_State* L) {
+  lua_pushnil(L);
+  lua_pushnil(L);
+  lua_pushnumber(L, 1);
+  lua_pushnumber(L, 0);
+  lua_pushnumber(L, 0);
+  lua_pushnumber(L, 0);
+  lua_pushnil(L);
+  lua_pushnil(L);
+  lua_pushnil(L);
+  lua_pushnil(L);
+  lua_pushnil(L);
+}
+
 static void PushFactionInfo(lua_State* L,
                             const ::openwow::game::ReputationInfo::FactionLuaInfo& info) {
   PushOptionalString(L, info.name);
@@ -101,9 +118,7 @@ static void PushFactionInfo(lua_State* L,
   PushOptionalWowBool(L, info.can_toggle_at_war);
   PushOptionalWowBool(L, info.is_header);
   PushOptionalWowBool(L, info.is_collapsed);
-  PushOptionalWowBool(L, info.is_player_friendly);
   PushOptionalWowBool(L, info.is_watched);
-  PushOptionalWowBool(L, info.is_child);
 }
 
 static void ToggleAllFactionHeaders(lua_State* L, const bool collapse) {
@@ -121,9 +136,13 @@ int LuaGetFactionInfo(lua_State* L) {
   const auto entry_index = ParseSaturatedFactionEntryIndex(
       L, "Usage: GetFactionInfo(index)");
   auto& info = GetReputationInfo(L);
+  if (entry_index >= info.num_visible()) {
+    PushUnknownFaction(L);
+    return 11;
+  }
   const auto faction_id = info.GetFactionIdByIndex(entry_index);
   PushFactionInfo(L, info.PushFactionInfo(faction_id));
-  return 13;
+  return 11;
 }
 
 int LuaGetFactionInfoByID(lua_State* L) {
@@ -134,7 +153,7 @@ int LuaGetFactionInfoByID(lua_State* L) {
       openwow::ui::TruncateLuaNumberToI32(lua_tonumber(L, 1));
   auto& info = GetReputationInfo(L);
   PushFactionInfo(L, info.PushFactionInfo(faction_id));
-  return 13;
+  return 11;
 }
 
 int LuaExpandFactionHeader(lua_State* L) {
@@ -203,22 +222,16 @@ int LuaSetWatchedFactionIndex(lua_State* L) {
 int LuaGetWatchedFactionInfo(lua_State* L) {
   auto& info = GetReputationInfo(L);
   const auto faction_id = info.GetWatchedFactionId();
+  // Nothing watched is a SINGLE nil, not a five-wide zero tuple: the reference
+  // gates the whole bar on `if ( name )`.
   if (faction_id == 0) {
     lua_pushnil(L);
-    lua_pushnumber(L, 0);
-    lua_pushnumber(L, 0);
-    lua_pushnumber(L, 0);
-    lua_pushnumber(L, 0);
-    return 5;
+    return 1;
   }
   const auto lua_info = info.PushFactionInfo(faction_id);
   if (!lua_info.name.has_value()) {
     lua_pushnil(L);
-    lua_pushnumber(L, 0);
-    lua_pushnumber(L, 0);
-    lua_pushnumber(L, 0);
-    lua_pushnumber(L, 0);
-    return 5;
+    return 1;
   }
   lua_pushstring(L, lua_info.name->c_str());
   lua_pushnumber(L, static_cast<lua_Number>(lua_info.standing_id));
@@ -238,8 +251,14 @@ int LuaSetSelectedFaction(lua_State* L) {
   auto& info = GetReputationInfo(L);
   const auto entry_index = ParseTruncatedFactionEntryIndex(
       L, "Usage: SetSelectedFaction(index)");
-  const auto faction_id = info.GetFactionIdByIndex(entry_index);
-  info.SetSelectedFaction(faction_id);
+  // A header row (or an index past the visible list) CLEARS the selection —
+  // only a real bar row selects its reputation slot.
+  if (entry_index >= info.num_visible() ||
+      info.GetEntry(entry_index).is_header != 0) {
+    info.SetSelectedFaction(0);
+    return 0;
+  }
+  info.SetSelectedFaction(info.GetFactionIdByIndex(entry_index));
   return 0;
 }
 
@@ -253,6 +272,13 @@ int LuaFactionToggleAtWar(lua_State* L) {
       static_cast<std::size_t>(
           openwow::ui::SaturateLuaNumberToU32(lua_tonumber(L, 1)) - 1u));
   if (faction_id != 0) {
+    // The toggle is stricter than the reported predicate: it refuses below the
+    // -3000 floor and on a peace-forced faction, which is exactly what
+    // `canToggleAtWar` reports (standing >= -3000 and flag 0x10 clear).
+    if (info.GetCurrentStanding(faction_id) < -3000 ||
+        info.IsForced(faction_id)) {
+      return 0;
+    }
     info.SendToggleAtWar(
         faction_id,
         !info.IsAtWar(faction_id),

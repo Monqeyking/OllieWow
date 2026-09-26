@@ -16,8 +16,8 @@
 #include "openwow/game/objects/cgplayer.h"
 #include "openwow/game/objects/cgunit.h"
 #include "openwow/game/pet_manager.h"
-#include "openwow/game/skill_line_ability_lookup.h"
 #include "openwow/game/player_chat_flags.h"
+#include "openwow/game/weapon_skill_line.h"
 #include "openwow/game/power_display.h"
 #include "openwow/game/query_cache.h"
 #include "openwow/game/script_event_helpers.h"
@@ -111,48 +111,14 @@ constexpr std::uint8_t kArmorPenetrationRating = 24u;
 constexpr std::size_t kUnboundedStormStringCompare = 0x7FFFFFFFu;
 
 [[nodiscard]] std::uint32_t ResolveRangedWeaponSkillLine(
-    const openwow::game::CGPlayer_C &player,
-    const openwow::data::dbc::DbcLoader &dbc) {
+    const openwow::game::CGPlayer_C &player) {
   const auto item_meta = player.GetVisibleItemTemplateMetadata(kRangedEquipSlot);
-  std::uint32_t subclass_id = 0;
-  bool have_subclass = false;
-
-  if (item_meta.has_value()) {
-    if (item_meta->item_class != kWeaponItemClass) return 0;
-    subclass_id = item_meta->subclass;
-    have_subclass = true;
-  } else {
-
-    for (const auto &entry : dbc.item_sub_class().entries()) {
-      if (entry.class_id == kWeaponItemClass && (entry.flags & 0x4u) != 0) {
-        subclass_id = entry.subclass_id;
-        have_subclass = true;
-        break;
-      }
-    }
+  if (!item_meta.has_value() || item_meta->item_class != kWeaponItemClass) {
+    // Vanilla exposes no ranged skill when the ranged slot is empty or unresolved.
+    return 0u;
   }
-  if (!have_subclass) return 0;
 
-  std::uint32_t spell_id = 0;
-  const auto target_mask = 1u << subclass_id;
-  for (auto it = dbc.spell().entries().rbegin();
-       it != dbc.spell().entries().rend(); ++it) {
-    if ((it->attributes & 0x40u) == 0 || it->equipped_item_class != 2)
-      continue;
-    auto sub_mask = static_cast<std::uint32_t>(it->equipped_item_sub_class_mask);
-    if (sub_mask == target_mask) {
-      spell_id = it->id;
-      break;
-    }
-  }
-  if (spell_id == 0) return 0;
-
-  const auto *ability = openwow::game::FindSkillLineAbilityForRaceClassSpell(
-      dbc.skill_line_ability().entries(),
-      dbc.skill_race_class_info().entries(),
-      player.State().GetRace(), player.State().GetClass(), spell_id);
-  if (!ability || ability->spell_id != spell_id) return 0;
-  return ability->skill_id;
+  return openwow::game::WeaponSubclassSkillLineOrZero(item_meta->subclass);
 }
 
 [[nodiscard]] bool ActivePlayerHasFullControl(const openwow::game::WorldSession &session,
@@ -3106,7 +3072,7 @@ int LuaUnitRangedAttack(lua_State *L) {
   int modifier = 0;
 
   if (dbc) {
-    const auto skill_line_id = ResolveRangedWeaponSkillLine(*player, *dbc);
+    const auto skill_line_id = ResolveRangedWeaponSkillLine(*player);
 
     if (skill_line_id != 0) {
       if (auto slot = player->FindActiveSkillSlot(
