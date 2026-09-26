@@ -1,4 +1,5 @@
-# Builds the client on every supported platform, on every push and PR.
+# Builds the client on every supported platform, on PRs and on code pushes to
+# main (documentation-only pushes are skipped -- see the trigger below).
 #
 # The matrix, the caches and the build steps all live in build.yml, which
 # release.yml calls too -- see its header. This file only decides when that
@@ -8,8 +9,19 @@
 name: CI
 
 on:
+  # Not on every push. A push that only touches documentation, the gap register
+  # or licence/funding files does not need three full platform builds -- one of
+  # which can spend ~45 minutes rebuilding vcpkg ports when its binary cache has
+  # been invalidated by a runner-image roll. Code pushes still run it, because
+  # that is the thing that proves main compiles and links; workflow_dispatch is
+  # there whenever it is wanted on demand.
   push:
     branches: [main]
+    paths-ignore:
+      - 'docs/**'
+      - '**/*.md'
+      - 'LICENSE'
+      - '.github/FUNDING.yml'
   pull_request:
   workflow_dispatch:
 
