@@ -20,24 +20,49 @@ enum class MonsterMoveType : std::uint8_t {
 };
 
 namespace SplineFlag {
-  inline constexpr std::uint32_t kDone            = 0x00000100;
+  // 1.12.1 wire values. Authority:
+  // D:\OllieWoW\Source\src\game\Movement\spline\MoveSplineFlag.h:38-78.
+  //
+  // The previous table carried post-Classic (WotLK) bit positions. Two
+  // consequences were live: IsCyclic() tested 0x00080000 where 1.12 puts Cyclic
+  // at 0x00100000, so a cyclic spline was never recognised as cyclic and never
+  // ran EnterCyclicLoop()'s erase-first-vertex step; and HasTriggeredAnimationTier()
+  // tested 0x00200000, which the 1.12 server sets as Enter_Cycle on every cyclic
+  // spline (packet_builder.cpp:71-72), so cyclic splines were treated as carrying
+  // an animation tier.
+  inline constexpr std::uint32_t kDone        = 0x00000001;
+  inline constexpr std::uint32_t kFalling     = 0x00000002;
+  inline constexpr std::uint32_t kRunmode     = 0x00000100;
+  inline constexpr std::uint32_t kFlying      = 0x00000200;
+  inline constexpr std::uint32_t kNoSpline    = 0x00000400;
+  inline constexpr std::uint32_t kFinalPoint  = 0x00010000;
+  inline constexpr std::uint32_t kFinalTarget = 0x00020000;
+  inline constexpr std::uint32_t kFinalAngle  = 0x00040000;
+  inline constexpr std::uint32_t kCyclic      = 0x00100000;
+  inline constexpr std::uint32_t kEnterCycle  = 0x00200000;
+  inline constexpr std::uint32_t kFrozen      = 0x00400000;
 
-  inline constexpr std::uint32_t kStateQueryExempt = 0x00000400;
-  inline constexpr std::uint32_t kFalling         = 0x00000200;
-  inline constexpr std::uint32_t kParabolic       = 0x00000800;
+  inline constexpr std::uint32_t kMaskFinalFacing =
+      kFinalPoint | kFinalTarget | kFinalAngle;
+  // 1.12's Mask_CatmullRom IS the Flying bit (MoveSplineFlag.h:77).
+  inline constexpr std::uint32_t kMaskCatmullRom = kFlying;
+  inline constexpr std::uint32_t kCatmullRom     = kMaskCatmullRom;
+  inline constexpr std::uint32_t kFreeze         = kFrozen;
 
-  inline constexpr std::uint32_t kWalkMode        = 0x00001000;
-  inline constexpr std::uint32_t kFlying          = 0x00002000;
-  inline constexpr std::uint32_t kOrientFixed     = 0x00004000;
-  inline constexpr std::uint32_t kCatmullRom      = 0x00040000;
-  inline constexpr std::uint32_t kCyclic          = 0x00080000;
-  inline constexpr std::uint32_t kEnterCycle      = 0x00100000;
-  inline constexpr std::uint32_t kAnimation       = 0x00200000;
-  inline constexpr std::uint32_t kFreeze          = 0x00400000;
-  inline constexpr std::uint32_t kTransportEnter  = 0x00800000;
-  inline constexpr std::uint32_t kTransportExit   = 0x01000000;
+  // 1.12 has no parabolic, walk-mode, orient-fixed, transport-enter/exit or
+  // backward spline flag. kParabolic keeps its old bit only so the parabolic read
+  // stays inert (the 1.12 server never sets 0x00000800); backward movement is a
+  // MovementInfo flag on this wire, not a spline flag.
+  inline constexpr std::uint32_t kParabolic = 0x00000800;
 
-  inline constexpr std::uint32_t kBackward        = 0x08000000;
+  // 0x00004000 is a real 1.12 bit that the server enum leaves unnamed
+  // (MoveSplineFlag.h:53, Unknown15); the client reads it as "orientation is
+  // fixed", which is how it uses it in the no-auto-rotate mask.
+  inline constexpr std::uint32_t kOrientFixed = 0x00004000;
+
+  // Legacy name for the No_Spline gate that keeps spline-derived state out of
+  // speed and flag queries.
+  inline constexpr std::uint32_t kStateQueryExempt = kNoSpline;
 
   [[nodiscard]] inline bool HasNonExemptFlag(const std::uint32_t spline_flags,
                                              const std::uint32_t queried_flag) {
@@ -65,9 +90,6 @@ struct MonsterMoveInfo {
   float facing_angle = 0.0f;
 
   std::uint32_t spline_flags = 0;
-
-  std::uint8_t animation_id = 0;
-  std::uint32_t anim_start_time = 0;
 
   std::uint32_t duration = 0;
 

@@ -75,10 +75,14 @@ bool MonsterMoveManager::ParseMonsterMove(PacketReader& r,
 
   if (!r.ReadU32(out.spline_flags)) return false;
 
-  if (out.spline_flags & SplineFlag::kAnimation) {
-    if (!r.ReadU8(out.animation_id)) return false;
-    if (!r.ReadU32(out.anim_start_time)) return false;
-  }
+  // 1.12 has NO Animation spline flag: its bit table puts Enter_Cycle at
+  // 0x00200000 (Source/.../MoveSplineFlag.h:60), and the server sets that bit on
+  // every cyclic spline as a fake marker (packet_builder.cpp:71-72, "add fake
+  // Enter_Cycle flag - needed for client-side cyclic movement"). The client's
+  // SplineFlag::kAnimation still carries the post-Classic 0x00200000, so this
+  // block used to read 5 bytes that were never written and desynchronised every
+  // cyclic spline -- the waypoint count landed on the wrong offset. Nothing
+  // consumed animation_id/anim_start_time, so the read is simply gone.
 
   if (!r.ReadU32(out.duration)) return false;
 

@@ -2772,20 +2772,10 @@ void UnitAnimationRuntime::UpdateMountAndPassengerAnimations() {
                               1, false);
 }
 
-void UnitAnimationRuntime::ApplySplineAnimationTier(const std::uint8_t tier) {
-  if (tier == cached_anim_tier_) {
-    return;
-  }
-  const bool was_airborne =
-      cached_anim_tier_ == 2u || cached_anim_tier_ == 3u;
-  const bool enters_airborne = tier == 2u || tier == 3u;
-  if (enters_airborne && cached_anim_tier_ == 0u) {
-    ApplySelectedStandAnimation(458u, 0u);
-  } else if (tier == 0u && was_airborne) {
-    ApplySelectedStandAnimation(460u, 0u);
-  }
-  cached_anim_tier_ = tier;
-}
+// ApplySplineAnimationTier was removed with the spline Animation flag: 1.12 has
+// no such flag, so a spline never carried an animation tier. The tier itself
+// still exists and is set by UpdateCachedAnimationTier from the movement packet
+// handler (unit_packet_handlers.cpp:129).
 
 void UnitAnimationRuntime::ResetAuraAnimationVisualState(const WorldSession &session) {
   owner_.Auras().ClearAnimFlags();

@@ -510,14 +510,12 @@ void ObjectManager::AdvanceSplineMovement(
          velocity.x * velocity.x + velocity.y * velocity.y > 0.0018490001f);
     unit.Movement().ApplySplineMovementPose(
         position, facing, locomoting,
-        (spline->GetSplineFlags() & SplineFlag::kBackward) != 0u,
+        // 1.12 has no backward spline flag; the other call sites pass false too.
+        false,
         spline->HasCoordinateParentBinding(), spline->GetCoordinateParent(),
         spline->GetCoordinateParentSeat(), spline->GetSplineFlags(),
         spline->GetTotalArcLength(), spline->GetDuration(),
         spline->IsActive());
-    if (spline->HasTriggeredAnimationTier()) {
-      unit.Animation().ApplySplineAnimationTier(spline->GetAnimationId());
-    }
   });
 }
 

@@ -249,13 +249,9 @@ void MoveSpline::Initialize(const game::MonsterMoveInfo& info, float start_facin
     parabolic_start_ms_ = 0;
   }
 
-  if (info.spline_flags & game::SplineFlag::kAnimation) {
-    animation_id_         = info.animation_id;
-    anim_start_time_ms_   = info.anim_start_time;
-  } else {
-    animation_id_         = 0;
-    anim_start_time_ms_   = 0;
-  }
+  // 1.12 has no Animation spline flag, so there is no animation tier to read
+  // here. The old block tested 0x00200000, which on this wire is Enter_Cycle --
+  // set by the server on every cyclic spline.
 
   if (info.move_type == game::MonsterMoveType::kStop) {
     Stop();
@@ -346,8 +342,6 @@ void MoveSpline::Initialize(const game::MovementUpdate& update,
     parabolic_start_ms_ = 0;
   }
 
-  animation_id_ = 0;
-  anim_start_time_ms_ = 0;
   base_rate_ = update.spline.duration_mod;
   playback_speed_ = update.spline.duration_mod_next;
 }
@@ -371,8 +365,6 @@ void MoveSpline::Initialize(const std::vector<game::Vec3>& points,
   facing_mode_    = SplineFacingMode::kNone;
   vertical_accel_ = 0.0f;
   parabolic_start_ms_ = 0;
-  animation_id_       = 0;
-  anim_start_time_ms_ = 0;
   base_rate_ = 1.0f;
   playback_speed_ = 1.0f;
   entered_cycle_ = false;
@@ -716,10 +708,8 @@ float MoveSpline::GetCurrentFacing() const {
     }
   }
 
-  if (!apply_final_facing &&
-      (spline_flags_ & game::SplineFlag::kBackward) != 0u) {
-    facing -= std::numbers::pi_v<float>;
-  }
+  // 1.12 carries no backward spline flag; backward movement is a MovementInfo
+  // flag on this wire, so the facing flip that used to live here was dead.
   const float full_circle = 2.0f * std::numbers::pi_v<float>;
   facing = std::fmod(facing, full_circle);
   if (facing < 0.0f) {

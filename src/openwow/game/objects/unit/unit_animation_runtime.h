@@ -177,7 +177,6 @@ public:
   [[nodiscard]] bool IsRestPoseStaleForFlags(std::uint32_t movement_flags) const;
   [[nodiscard]] bool IsEmoteTalk(std::uint32_t animation_id) const;
   void UpdateMountAndPassengerAnimations();
-  void ApplySplineAnimationTier(std::uint8_t tier);
   void UpdatePendingFallAnimation(std::uint32_t previous_movement_flags,
                                   std::uint32_t current_movement_flags);
   void PlayDeadTransitionAnimation(const WorldSession &session,

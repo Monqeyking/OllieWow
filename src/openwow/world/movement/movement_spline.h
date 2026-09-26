@@ -147,13 +147,10 @@ class MoveSpline {
   [[nodiscard]] float ComputeParabolicZ(std::uint32_t time_ms) const;
   [[nodiscard]] float ComputeFallingZ(std::uint32_t time_ms) const;
 
-  [[nodiscard]] std::uint8_t GetAnimationId() const { return animation_id_; }
-
-  [[nodiscard]] std::uint32_t GetAnimStartTime() const { return anim_start_time_ms_; }
-  [[nodiscard]] bool HasTriggeredAnimationTier() const {
-    return (spline_flags_ & game::SplineFlag::kAnimation) != 0u &&
-           time_passed_ms_ >= anim_start_time_ms_;
-  }
+  // 1.12 carries no Animation spline flag, so there is no animation tier to
+  // expose here. GetAnimationId/GetAnimStartTime/HasTriggeredAnimationTier were
+  // removed with it; the old predicate tested 0x00200000, which on this wire is
+  // Enter_Cycle and therefore fired on every cyclic spline.
 
   [[nodiscard]] float GetBaseRate() const { return base_rate_; }
   void SetBaseRate(float rate) { base_rate_ = rate; }
@@ -216,9 +213,6 @@ class MoveSpline {
 
   float vertical_accel_         = 0.0f;
   std::uint32_t parabolic_start_ms_ = 0;
-
-  std::uint8_t animation_id_       = 0;
-  std::uint32_t anim_start_time_ms_= 0;
 
   float base_rate_       = 1.0f;
   float playback_speed_  = 1.0f;
