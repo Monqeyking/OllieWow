@@ -241,6 +241,12 @@ public:
                                                       std::string_view raceModelToken,
                                                       uint8_t gender);
 
+  // Helmtexturen wonen onder Item\ObjectComponents\Head\ met .blp erachter,
+  // net als de schouders. Het in-world pad zette hier eerder de rauwe
+  // texturenaam neer, waardoor de helmtexture nooit resolde terwijl het
+  // glue-pad (BuildObjectComponentTexturePath) en de schouder het wel deden.
+  [[nodiscard]] static std::string BuildHeadTexturePath(std::string_view textureStem);
+
   // De client noemt helm-modellen `<stem>_<Ra><S>.m2` met een TWEE-letterige
   // racetoken (1..8 = Hu, Or, Dw, Ni, Sc, Ta, Gn, Tr). Geeft nullptr buiten dat
   // bereik (custom races houden dan hun eigen lange token).

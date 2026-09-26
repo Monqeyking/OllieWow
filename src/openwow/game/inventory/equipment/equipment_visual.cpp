@@ -397,6 +397,17 @@ std::string EquipmentVisualSystem::BuildShoulderTexturePath(const std::string_vi
   return path;
 }
 
+std::string EquipmentVisualSystem::BuildHeadTexturePath(const std::string_view textureStem) {
+  if (textureStem.empty()) {
+    return {};
+  }
+
+  std::string path(kHeadModelPathPrefix);
+  path.append(textureStem);
+  path.append(".blp");
+  return path;
+}
+
 const char *EquipmentVisualSystem::HelmRaceFilePrefix(const uint32_t race_id) {
   // Benilla entities/equipment/mod.rs:309-316 ("RACE_PREFIX = Hu Or Dw Ni Sc Ta
   // Gn Tr", sex == 1 -> F). Bewijs uit onze eigen log dat de lange modelnaam fout
