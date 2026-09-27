@@ -34,6 +34,7 @@
 #include "openwow/ui/font_string_layout.h"
 #include "openwow/ui/framexml/backdrop_render_utils.h"
 #include "openwow/ui/game/framescript/core/frame_alpha.h"
+#include "openwow/render/models/characters/portrait_icon_texture.h"
 #include "openwow/ui/game/game_ui_scale.h"
 #include "openwow/ui/game/runtime/frame_input_router.h"
 #include "openwow/ui/game/runtime/frame_store.h"
@@ -2248,6 +2249,21 @@ void runtime::render::UiCompositor::Render(const UiCompositorFrame& compositor_f
     }
 
     if (has_texture) {
+      // WoW portraits are circular. The 3D portrait is rendered to a texture and
+      // drawn as a plain quad, so its corners show whatever the model rendered
+      // behind it. Mask it to the inscribed circle with the same asset the
+      // portrait-icon path bakes in (texture_manager.cpp:594-604): the UI material
+      // shader multiplies the sample's alpha by the mask whenever a mask texture
+      // is bound (fs_ui_material.sc:20-22 via u_uiMaterial.z). Nothing else in the
+      // portrait pipeline masks -- there is no present pass to hook, the render
+      // target is swapped into place (model_portrait.cpp:376-379).
+      if (entry.key == "PlayerPortrait") {
+        if (const UiTextureInfo* const portrait_mask = ResolvePassTexture(
+                std::string(openwow::render::kPortraitIconMaskTexturePath) + ".blp");
+            portrait_mask != nullptr) {
+          quad.mask_texture = TextureHandleFromInfo(*portrait_mask);
+        }
+      }
       const bool submitted = ui_renderer_->Submit(quad);
       record_background_submission(entry, submitted);
       if (submitted && entry.key.starts_with("WorldMapDetailTile")) {
