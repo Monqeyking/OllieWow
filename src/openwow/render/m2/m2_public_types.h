@@ -216,6 +216,10 @@ struct M2AnimationSlotState {
   std::int32_t animation_lookup_id = -1;
   std::uint16_t animation_lookup_sequence_index = kInvalidM2AnimationSequenceIndex;
   std::int32_t loop_count = 0;
+  // Whether this slot's sequence loops, taken from the model's own sequence flags
+  // (kM2SequenceFlagPlayOnce -- the same source AnimationSequenceLoops reads). A
+  // one-shot slot must clamp at its end and be released, not wrap.
+  bool looping = false;
   bool used_random_variant = false;
   float time_seconds = 0.0f;
   float speed = 1.0f;

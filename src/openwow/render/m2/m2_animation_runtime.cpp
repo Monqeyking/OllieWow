@@ -79,6 +79,12 @@ constexpr double kAnimationInstanceMicroseconds = 1.15;
   state.animation_lookup_id = request.animation_lookup_id;
   state.animation_lookup_sequence_index = selection.resolved_lookup_sequence_index;
   state.loop_count = request.loop_count;
+  state.looping =
+      selection.resolved &&
+      static_cast<std::size_t>(selection.resolved_sequence_index) <
+          model.animation_sequences.size() &&
+      (model.animation_sequences[selection.resolved_sequence_index].flags &
+       openwow::data::model::kM2SequenceFlagPlayOnce) == 0u;
   state.used_random_variant = selection.used_random_variant;
   state.speed = request.speed;
   state.duration_ms = selection.resolved
@@ -273,12 +279,62 @@ void AdvancePoseBlendSourceClock(detail::M2Instance &instance,
   instance.pose_blend_source_time = time;
 }
 
+// Advance one active slot's clock by `delta_seconds` of real time, honouring the
+// sequence's own loop flag. The client releases a one-shot's arm when its clip
+// ends (benilla creature_anim/sheath.rs:198-199, the on-anim-finish handler's
+// `0x7121a0(subSeq, -1, ...)`), so a non-looping slot must clamp at its end
+// instead of wrapping: it held the arm on frame 1 before, and wrapped forever
+// once the sample-driven clock started advancing it.
+[[nodiscard]] bool AdvanceSlotClock(M2AnimationSlotState &slot,
+                                    const float delta_seconds) {
+  slot.time_seconds += delta_seconds * slot.speed;
+  const float duration =
+      static_cast<float>(slot.duration_ms) * kMillisecondsToSeconds;
+  if (duration <= 0.0f) {
+    if (slot.time_seconds < 0.0f) {
+      slot.time_seconds = 0.0f;
+    }
+    return false;
+  }
+  if (slot.time_seconds >= duration) {
+    if (slot.looping) {
+      slot.time_seconds = std::fmod(slot.time_seconds, duration);
+      if (slot.time_seconds < 0.0f) {
+        slot.time_seconds += duration;
+      }
+      return false;
+    }
+    slot.time_seconds = duration;
+    return true;
+  }
+  if (slot.time_seconds < 0.0f) {
+    slot.time_seconds = 0.0f;
+  }
+  return false;
+}
+
+// Hand a finished one-shot slot's subtree back to the body animation. The client
+// stops the per-arm overlay when its clip ends (benilla creature_anim/sheath.rs
+// :417-421, `player.stop(node)` on `is_finished()`), which is the arm's release
+// after a sheathe ceremony; without it the arm stays pinned to the clip's last
+// frame. Called after the slot loop so the active-slot accounting stays coherent.
+void ReleaseFinishedSlots(detail::M2Instance &instance,
+                          std::uint64_t release_slots) {
+  while (release_slots != 0ull) {
+    const auto slot_index = std::countr_zero(release_slots);
+    release_slots &= release_slots - 1ull;
+    AssignAnimationSlot(instance, static_cast<std::size_t>(slot_index), {});
+    instance.pending_slot_animations[slot_index].reset();
+  }
+}
+
 void AdvanceAnimation(detail::M2Instance &instance, const float delta_time,
                       std::vector<PendingCompletion> *completions) {
   const float scaled_delta = delta_time * instance.animation_speed;
   const float previous_time = instance.animation_time;
   instance.animation_time += scaled_delta;
 
+  std::uint64_t release_slots = 0ull;
   std::uint32_t remaining_active_slots = instance.active_animation_slot_count;
   for (std::size_t slot_index = 0;
        remaining_active_slots > 0u && slot_index < instance.animation_slots.size();
@@ -288,27 +344,19 @@ void AdvanceAnimation(detail::M2Instance &instance, const float delta_time,
       continue;
     }
     --remaining_active_slots;
-    slot.time_seconds += delta_time * slot.speed;
-    const float duration =
-        static_cast<float>(slot.duration_ms) * kMillisecondsToSeconds;
-    if (duration > 0.0f &&
-        (slot.time_seconds >= duration || slot.time_seconds < 0.0f)) {
-
-      if (slot.time_seconds >= duration) {
-        instance.slot_loop_wrapped_mask |= 1ull << slot_index;
-      }
-      slot.time_seconds = std::fmod(slot.time_seconds, duration);
-      if (slot.time_seconds < 0.0f) {
-        slot.time_seconds += duration;
-      }
-    } else if (slot.time_seconds < 0.0f) {
-      slot.time_seconds = 0.0f;
+    const float slot_time_before = slot.time_seconds;
+    if (AdvanceSlotClock(slot, delta_time)) {
+      release_slots |= 1ull << slot_index;
+    }
+    if (slot.looping && slot.time_seconds < slot_time_before) {
+      instance.slot_loop_wrapped_mask |= 1ull << slot_index;
     }
 
     AdvancePoseBlend(slot.blend, delta_time);
 
     ++instance.animation_state_generation;
   }
+  ReleaseFinishedSlots(instance, release_slots);
   if (instance.pose_blend_remaining > 0.0f) {
 
     AdvancePoseBlendSourceClock(instance, delta_time);
@@ -958,6 +1006,7 @@ void M2AnimationRuntime::ApplyAnimationSampleLocked(
     DeferredCallbacks &sampled_events) {
   const float target_time = static_cast<float>(time_ms) * kMillisecondsToSeconds;
   float previous_time = instance.animation_time;
+  const float slot_previous_time = instance.animation_time;
 
   if (speed > 0.0f && previous_time > 0.0f && target_time < previous_time) {
 
@@ -977,6 +1026,32 @@ void M2AnimationRuntime::ApplyAnimationSampleLocked(
   }
   instance.animation_time = target_time;
   instance.animation_speed = speed;
+
+  // The base clock is sample-driven, and AdvanceAnimation -- the only place that
+  // advances the animation slots -- never runs for a sample-driven instance (the
+  // world renderer only calls UpdateAnimation for game objects, destructibles and
+  // the attachment batch). Without this the per-arm sheathe ceremony resolved and
+  // activated its slot but sat on frame 1 of the clip forever, so the arm never
+  // moved. Push the same real-time delta the base just advanced through.
+  {
+    const float base_delta = target_time - slot_previous_time;
+    const float real_delta = speed > 0.0f ? base_delta / speed : base_delta;
+    if (real_delta > 0.0f) {
+      std::uint64_t release_slots = 0ull;
+      for (std::size_t slot_index = 0;
+           slot_index < instance.animation_slots.size(); ++slot_index) {
+        auto &slot = instance.animation_slots[slot_index];
+        if (!slot.active) {
+          continue;
+        }
+        if (AdvanceSlotClock(slot, real_delta)) {
+          release_slots |= 1ull << slot_index;
+        }
+        ++instance.animation_state_generation;
+      }
+      ReleaseFinishedSlots(instance, release_slots);
+    }
+  }
 
   instance.base_clock_sample_driven = true;
   instance.pose_playback_bound =
@@ -1086,6 +1161,7 @@ M2ResultStatus M2AnimationRuntime::SetAnimationSlotRequest(
       model_it->second->model_data, request,
       DrawInstanceVariantRandom(*instance_it->second, instance_id),
       [this](const auto id) { return LookupAnimationAliasInfo(id, dbc_); });
+
   if (selection.resolved) {
     const auto residency = sequence_streamer_.EnsureResidentLocked(
         instance_it->second->model_id, selection.resolved_sequence_index,
