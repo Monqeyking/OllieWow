@@ -86,7 +86,11 @@ void TogglePlayerSheathe(WorldSession& session) {
   }
 
   if (next_state != current_state) {
-    player->Animation().ChangeSheatheStateAndNotifyServer(next_state, false, false);
+    // Benilla is byte-verified across all 24 SetSheatheState call sites: every
+    // transition SNAPS except the manual toggle, which is the one that carries the
+    // draw/stow ceremony (creature_anim/driver.rs:796-798, wow-re sheath-policy.md).
+    // Passing false here meant the player's own toggle never animated.
+    player->Animation().ChangeSheatheStateAndNotifyServer(next_state, true, false);
   }
 
   if (current_state == 0 &&

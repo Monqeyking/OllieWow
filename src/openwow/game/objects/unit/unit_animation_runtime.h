@@ -100,7 +100,6 @@ public:
 
   void SeedCachedSheatheStateFromDescriptor();
   void TransitionWeaponSheatheState();
-  void PlayWeaponSheatheAnimation(std::int32_t old_state);
   [[nodiscard]] render::m2::M2OperationSummary SetAnimationRecursive(
       std::uint32_t instance_id, std::int32_t anim_group,
       std::uint32_t anim_id, std::int32_t sub_variant, std::int32_t loop,

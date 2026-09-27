@@ -1165,7 +1165,20 @@ void UnitAnimationRuntime::TransitionWeaponSheatheState() {
           owner_.Interaction().CompleteAutoAttackInteraction(false, true);
         }
       }
+      // Draw. Benilla plays the SAME clip in both directions
+      // (creature_anim/sheath.rs:491-506: STOW_HIP and DRAW_HIP are both clip 90,
+      // STOW_BACK and DRAW_BACK both 89); only the direction the weapon model moves
+      // differs, carried by the state. This branch used to have no animation at all,
+      // which is why unsheathing snapped the weapon into the hand.
       emote_internal_flags_ &= ~kWeaponTransitionMask;
+      if (GetVisibleWeaponMetadataForAnimation(owner_, 0u).has_value() &&
+          PlayMainhandSheatheAnimation()) {
+        emote_internal_flags_ |= kWeaponTransitionMainhand;
+      }
+      if (GetVisibleWeaponMetadataForAnimation(owner_, 1u).has_value() &&
+          PlayOffhandSheatheAnimation()) {
+        emote_internal_flags_ |= kWeaponTransitionOffhand;
+      }
       break;
     }
 
@@ -1175,11 +1188,13 @@ void UnitAnimationRuntime::TransitionWeaponSheatheState() {
             kCharacterModelFlagForceEquipmentRefresh);
       }
 
-      if (owner_.State().GetVirtualItemSlotEntry(0) != 0u && PlayMainhandSheatheAnimation()) {
+      if (GetVisibleWeaponMetadataForAnimation(owner_, 0u).has_value() &&
+          PlayMainhandSheatheAnimation()) {
         emote_internal_flags_ |= kWeaponTransitionMainhand;
       }
 
-      if (owner_.State().GetVirtualItemSlotEntry(1) != 0u && PlayOffhandSheatheAnimation()) {
+      if (GetVisibleWeaponMetadataForAnimation(owner_, 1u).has_value() &&
+          PlayOffhandSheatheAnimation()) {
         emote_internal_flags_ |= kWeaponTransitionOffhand;
       }
       break;
@@ -1199,8 +1214,6 @@ void UnitAnimationRuntime::TransitionWeaponSheatheState() {
       break;
   }
 }
-
-void UnitAnimationRuntime::PlayWeaponSheatheAnimation(std::int32_t ) {}
 
 openwow::render::m2::M2OperationSummary UnitAnimationRuntime::SetAnimationRecursive(
     std::uint32_t instance_id, std::int32_t anim_group,
@@ -1223,12 +1236,32 @@ openwow::render::m2::M2OperationSummary UnitAnimationRuntime::SetAnimationRecurs
 
   current_anim_group_ = anim_group;
   if (instance_id == 0u || instance_id == owner_.GetPrimaryM2InstanceId()) {
-    const auto requested_animation = anim_group >= 0
-                                         ? static_cast<std::uint32_t>(anim_group)
-                                         : anim_id;
-    const bool looping = loop != 0 || AnimationSequenceLoops(requested_animation);
-    RequestPlayback(static_cast<std::uint16_t>(requested_animation), looping,
-                    !looping);
+    if (anim_group >= 0 && owner_.m2_system() != nullptr) {
+      // A non-negative anim_group is a per-arm sub-sequence SLOT, not an
+      // animation id: benilla creature_anim/sheath.rs:41 and :155-157 -- "the
+      // client's animation sub-sequence slots, which are per-arm: the mainhand
+      // plays on 3 (HandRight), the offhand on 2 (HandLeft)". The old code fed
+      // that slot to RequestPlayback as if it were the animation, so a sheathe
+      // played animation 3/2 ("Stop") whole-body instead of clip 89/90 on the
+      // arm -- which is why the arm never moved. The slot composes over whatever
+      // the body is doing, which is what the reference wants (sheath.rs:40-42,
+      // "composed over whatever the body is doing: walk, run, jump").
+      const openwow::render::m2::M2AnimationRequest animation_request{
+          .animation_lookup_id = -1,
+          .animation_id = anim_id,
+          .sub_animation_index = sub_variant,
+          .loop_count = loop,
+          .speed = speed,
+      };
+      const auto target_instance =
+          instance_id == 0u ? owner_.GetPrimaryM2InstanceId() : instance_id;
+      result.AddStatus(owner_.m2_system()->SetAnimationSlotRequest(
+          target_instance, static_cast<std::uint32_t>(anim_group),
+          animation_request));
+    } else {
+      const bool looping = loop != 0 || AnimationSequenceLoops(anim_id);
+      RequestPlayback(static_cast<std::uint16_t>(anim_id), looping, !looping);
+    }
   } else if (owner_.m2_system() != nullptr) {
     const openwow::render::m2::M2AnimationRequest animation_request{
         .animation_lookup_id = -1,
@@ -1300,19 +1333,51 @@ int UnitAnimationRuntime::StopAnimAndPropagateToPassengers(const bool clear_prim
 bool UnitAnimationRuntime::PlayMainhandSheatheAnimation() {
   emote_internal_flags_ |= kWeaponTransitionMainhand;
 
-  if (prev_sheathe_state_ == 0)
-    return false;
-
+  // The mainhand arm is sub-sequence slot 3 (HandRight) and the offhand slot 2
+  // (HandLeft) -- benilla creature_anim/sheath.rs:155-157, "the client's
+  // animation sub-sequence slots, which are per-arm: the mainhand plays on 3
+  // (HandRight), the offhand on 2 (HandLeft)". AnimationData.dbc: 89 = "Sheath"
+  // (weapon on the back), 90 = "HipSheath"; benilla names the same pair 0x59/0x5a
+  // (sheath.rs:195).
   constexpr std::int32_t  kAnimGroupMainhand      = 3;
   constexpr std::uint32_t kAnimReadySheatheMelee   = 89u;
   constexpr std::uint32_t kAnimReadySheatheRanged  = 90u;
 
-  if (sheathe_state_ == 1) {
-    const std::uint32_t display_id = owner_.State().GetVirtualItemSlotEntry(0);
-    if (display_id == 0)
-      return false;
-
+  if (sheathe_state_ == 0) {
+    // Draw leg: the weapon that ends up in this hand is in the new state's slot,
+    // and it plays the same clip as the stow (creature_anim/sheath.rs:499-506).
+    // A player has no UNIT_VIRTUAL_ITEM_DISPLAY -- the server only fills it for
+    // creatures (Source Creature.cpp:1873, ScriptedAI.cpp:275-281), so gating on
+    // GetVirtualItemSlotEntry here was always 0 for the active player and the
+    // ceremony was never attempted. GetVisibleWeaponMetadataForAnimation already
+    // resolves the right source per unit type (inventory for a player, the virtual
+    // slot for a creature).
     const auto metadata = GetVisibleWeaponMetadataForAnimation(owner_, 0u);
+    if (!metadata.has_value())
+      return false;
+    const bool is_ranged_sheathe_type =
+        metadata.has_value() &&
+        SheatheTypeUsesRangedReadyAnimation(metadata->sheath);
+    const std::uint32_t anim_id =
+        is_ranged_sheathe_type ? kAnimReadySheatheRanged : kAnimReadySheatheMelee;
+
+    const auto animation_result = SetAnimationRecursive(
+        owner_.GetPrimaryM2InstanceId(), kAnimGroupMainhand, anim_id,
+        -1, 0, 1.0f,
+        1, 1, false);
+    return animation_result.status == openwow::render::m2::M2ResultStatus::kReady;
+  }
+
+  if (sheathe_state_ == 1) {
+    // A player has no UNIT_VIRTUAL_ITEM_DISPLAY -- the server only fills it for
+    // creatures (Source Creature.cpp:1873, ScriptedAI.cpp:275-281), so gating on
+    // GetVirtualItemSlotEntry here was always 0 for the active player and the
+    // ceremony was never attempted. GetVisibleWeaponMetadataForAnimation already
+    // resolves the right source per unit type (inventory for a player, the virtual
+    // slot for a creature).
+    const auto metadata = GetVisibleWeaponMetadataForAnimation(owner_, 0u);
+    if (!metadata.has_value())
+      return false;
     const bool is_ranged_sheathe_type =
         metadata.has_value() &&
         SheatheTypeUsesRangedReadyAnimation(metadata->sheath);
@@ -1327,11 +1392,15 @@ bool UnitAnimationRuntime::PlayMainhandSheatheAnimation() {
   }
 
   if (sheathe_state_ == 2) {
-    const std::uint32_t display_id = owner_.State().GetVirtualItemSlotEntry(2);
-    if (display_id == 0)
-      return false;
-
+    // A player has no UNIT_VIRTUAL_ITEM_DISPLAY -- the server only fills it for
+    // creatures (Source Creature.cpp:1873, ScriptedAI.cpp:275-281), so gating on
+    // GetVirtualItemSlotEntry here was always 0 for the active player and the
+    // ceremony was never attempted. GetVisibleWeaponMetadataForAnimation already
+    // resolves the right source per unit type (inventory for a player, the virtual
+    // slot for a creature).
     const auto metadata = GetVisibleWeaponMetadataForAnimation(owner_, 2u);
+    if (!metadata.has_value())
+      return false;
     if (!metadata.has_value() ||
         !IsPrimaryRangedInventoryType(metadata->inventory_type)) {
       return false;
@@ -1355,19 +1424,47 @@ bool UnitAnimationRuntime::PlayMainhandSheatheAnimation() {
 bool UnitAnimationRuntime::PlayOffhandSheatheAnimation() {
   emote_internal_flags_ |= kWeaponTransitionOffhand;
 
-  if (prev_sheathe_state_ == 0)
-    return false;
-
+  // The offhand arm is sub-sequence slot 2 (HandLeft) and the mainhand slot 3
+  // (HandRight) -- benilla creature_anim/sheath.rs:155-157, "the client's
+  // animation sub-sequence slots, which are per-arm: the mainhand plays on 3
+  // (HandRight), the offhand on 2 (HandLeft)".
   constexpr std::int32_t  kAnimGroupOffhand        = 2;
   constexpr std::uint32_t kAnimReadySheatheMelee   = 89u;
   constexpr std::uint32_t kAnimReadySheatheRanged  = 90u;
 
-  if (sheathe_state_ == 1) {
-    const std::uint32_t display_id = owner_.State().GetVirtualItemSlotEntry(1);
-    if (display_id == 0)
-      return false;
-
+  if (sheathe_state_ == 0) {
+    // A player has no UNIT_VIRTUAL_ITEM_DISPLAY -- the server only fills it for
+    // creatures (Source Creature.cpp:1873, ScriptedAI.cpp:275-281), so gating on
+    // GetVirtualItemSlotEntry here was always 0 for the active player and the
+    // ceremony was never attempted. GetVisibleWeaponMetadataForAnimation already
+    // resolves the right source per unit type (inventory for a player, the virtual
+    // slot for a creature).
     const auto metadata = GetVisibleWeaponMetadataForAnimation(owner_, 1u);
+    if (!metadata.has_value())
+      return false;
+    const bool is_ranged_sheathe_type =
+        metadata.has_value() &&
+        SheatheTypeUsesRangedReadyAnimation(metadata->sheath);
+    const std::uint32_t anim_id =
+        is_ranged_sheathe_type ? kAnimReadySheatheRanged : kAnimReadySheatheMelee;
+
+    const auto animation_result = SetAnimationRecursive(
+        owner_.GetPrimaryM2InstanceId(), kAnimGroupOffhand, anim_id,
+        -1, 0, 1.0f,
+        1, 1, false);
+    return animation_result.status == openwow::render::m2::M2ResultStatus::kReady;
+  }
+
+  if (sheathe_state_ == 1) {
+    // A player has no UNIT_VIRTUAL_ITEM_DISPLAY -- the server only fills it for
+    // creatures (Source Creature.cpp:1873, ScriptedAI.cpp:275-281), so gating on
+    // GetVirtualItemSlotEntry here was always 0 for the active player and the
+    // ceremony was never attempted. GetVisibleWeaponMetadataForAnimation already
+    // resolves the right source per unit type (inventory for a player, the virtual
+    // slot for a creature).
+    const auto metadata = GetVisibleWeaponMetadataForAnimation(owner_, 1u);
+    if (!metadata.has_value())
+      return false;
     const bool is_ranged_sheathe_type =
         metadata.has_value() &&
         SheatheTypeUsesRangedReadyAnimation(metadata->sheath);
@@ -1382,11 +1479,15 @@ bool UnitAnimationRuntime::PlayOffhandSheatheAnimation() {
   }
 
   if (sheathe_state_ == 2) {
-    const std::uint32_t display_id = owner_.State().GetVirtualItemSlotEntry(2);
-    if (display_id == 0)
-      return false;
-
+    // A player has no UNIT_VIRTUAL_ITEM_DISPLAY -- the server only fills it for
+    // creatures (Source Creature.cpp:1873, ScriptedAI.cpp:275-281), so gating on
+    // GetVirtualItemSlotEntry here was always 0 for the active player and the
+    // ceremony was never attempted. GetVisibleWeaponMetadataForAnimation already
+    // resolves the right source per unit type (inventory for a player, the virtual
+    // slot for a creature).
     const auto metadata = GetVisibleWeaponMetadataForAnimation(owner_, 2u);
+    if (!metadata.has_value())
+      return false;
     if (!metadata.has_value() ||
         IsPrimaryRangedInventoryType(metadata->inventory_type)) {
       return false;
@@ -1417,9 +1518,10 @@ void UnitAnimationRuntime::ChangeSheatheStateAndNotifyServer(std::int32_t new_st
 
   if (animate) {
     TransitionWeaponSheatheState();
-  } else {
-    PlayWeaponSheatheAnimation(prev_sheathe_state_);
   }
+  // animate == false is the snap path (benilla driver.rs:796-798): the state is
+  // committed and the equipment refresh moves the weapon with no ceremony. The
+  // else branch used to call PlayWeaponSheatheAnimation, which was an empty stub.
 
   if (!silent && owner_.IsActivePlayer()) {
     if (const auto* objects = owner_.object_manager(); objects != nullptr) {
