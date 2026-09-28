@@ -102,6 +102,11 @@ void UiRenderer::Begin(int view_id, int width, int height) {
   bgfx::setViewFrameBuffer(bgfx_view_id, BGFX_INVALID_HANDLE);
   bgfx::setViewClear(bgfx_view_id, BGFX_CLEAR_NONE);
   bgfx::setViewMode(bgfx_view_id, bgfx::ViewMode::Sequential);
+  // bgfx's scissor is sticky per view and setViewRect does not reset it: a clipped widget from an
+  // earlier draw or frame keeps clipping everything this view submits afterwards. Start unclipped.
+  bgfx::setScissor(static_cast<std::uint16_t>(0), static_cast<std::uint16_t>(0),
+                   static_cast<std::uint16_t>(width_),
+                   static_cast<std::uint16_t>(height_));
 
   float view[16];
   float proj[16];
@@ -179,6 +184,13 @@ bool UiRenderer::SubmitRun(const DrawStateKey& key,
   if (key.scissor_active) {
     bgfx::setScissor(key.scissor.x, key.scissor.y, key.scissor.width,
                      key.scissor.height);
+  } else {
+    // Restore the full-view scissor: without this the previous draw's clip stays bound for every
+    // following unscissored draw in this view, so widgets vanish while every submit still reports
+    // them as drawn. This was the character-select loss after a world visit.
+    bgfx::setScissor(static_cast<std::uint16_t>(0), static_cast<std::uint16_t>(0),
+                     static_cast<std::uint16_t>(width_),
+                     static_cast<std::uint16_t>(height_));
   }
   bgfx::submit(static_cast<uint16_t>(view_id_), program_);
   return true;

@@ -127,6 +127,9 @@ try {
     })
     if ($compileObjs.Count -lt $objs.Count) {
       Write-Host ("Al actueel, overgeslagen: " + ($objs.Count - $compileObjs.Count) + " object(en)") -ForegroundColor DarkGray
+      if ($compileObjs.Count -eq 0) {
+        Write-Host 'Let op: alle geraakte objecten zijn al nieuwer. Heb je een bron met git checkout teruggezet, dan ziet git status die niet meer en wordt hij hier niet hercompileerd -- gebruik dan -All.' -ForegroundColor Yellow
+      }
     }
   }
   Write-Host ("Objecten: " + $compileObjs.Count + " te compileren van " + $objs.Count) -ForegroundColor Cyan
@@ -238,6 +241,12 @@ try {
   }
 
   # --- 5. Linken (sequentieel) ---------------------------------------------
+  # Onafhankelijke postconditie: een link die "slaagt" zonder de exe te herschrijven
+  # (bijvoorbeeld omdat een draaiende client het bestand vasthield, LNK1104) mag nooit
+  # als geslaagde build naar buiten komen. De exitcode-controle hieronder dekte dat in
+  # de praktijk niet altijd; de bestandstijd is daar niet van afhankelijk.
+  $exeBeforeLink = if (Test-Path $clientExe) { (Get-Item $clientExe).LastWriteTimeUtc } else { $null }
+
   $linkLog = Join-Path $logDir 'dev-link.log'
   $linkLines = New-Object System.Collections.Generic.List[string]
   $linkLines.Add('@echo off')
@@ -256,6 +265,13 @@ try {
 
   & cmd.exe /D /S /C $linkPath
   if ($LASTEXITCODE -ne 0) { throw ('Linken mislukt (exit ' + $LASTEXITCODE + '). Zie ' + $linkLog) }
+
+  if (-not $NoLink -and $links.Count -gt 0) {
+    $exeAfterLink = if (Test-Path $clientExe) { (Get-Item $clientExe).LastWriteTimeUtc } else { $null }
+    if ($exeAfterLink -eq $exeBeforeLink) {
+      throw ('De linkstappen meldden succes, maar ' + (Split-Path $clientExe -Leaf) + ' is niet opnieuw geschreven -- er wordt nu een oude binary als geslaagde build gepresenteerd. Houdt een draaiende client het bestand vast? Zie ' + $linkLog)
+    }
+  }
 } finally { Pop-Location }
 
 $elapsed = [int]((Get-Date) - $started).TotalSeconds

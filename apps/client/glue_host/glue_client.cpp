@@ -1415,11 +1415,29 @@ void GlueClient::ReturnFromWorldToGlue(const char *screen_name, bool disconnect_
 
   LoadGlueTocAndScripts();
   openwow::ui::glue::Login_SetScreen(game_state_.fire_event, screen_name);
+  // A screen change is the other moment the script set can have moved under the
+  // cached per-frame list; rebuild it before the first pump so the fade of the
+  // screen being shown is driven from its first frame.
+  glue_runtime_.InvalidateWidgetScriptCache();
   glue_runtime_.PumpVisibilityTransitions();
 
   if (mode_ != desired_mode) {
     HandleScreenTransition(previous_screen, screen_name,
                            true);
+  }
+
+  // The glue reload above rebuilt every widget, so the character-list row FontStrings came back
+  // empty and hidden. CharacterSelect_OnShow only *requests* the list (GetCharacterListUpdate);
+  // the rows are filled and shown exclusively by CharacterSelect_OnEvent's CHARACTER_LIST_UPDATE
+  // branch (CharacterSelect.lua:177-182 and 225-254). Waiting for the realm round-trip therefore
+  // leaves the list area blank for as long as the enum takes -- the "logged out and the characters
+  // are gone" window, and on a slow round-trip it is not a window but the whole screen.
+  //
+  // The roster is still in hand here (CGlueMgr_ResetCharacterListDisplay keeps gs.characters), so
+  // paint the rows from it immediately. This is the same event the server path fires, so the Lua
+  // contract is unchanged; the real CHARACTER_LIST_UPDATE simply replaces the values when it lands.
+  if (desired_mode == UiMode::kCharacterSelect && !game_state_.characters.empty()) {
+    FireGlueEvent("CHARACTER_LIST_UPDATE", {});
   }
 
   game_state_.current_screen = screen_name;
@@ -1865,6 +1883,16 @@ void GlueClient::LoadGlueTocAndScripts() {
   glue_load_.ok = toc_result.ok;
   glue_load_.error = toc_result.error;
   glue_load_.loaded_scripts = glue_runtime_.loaded_scripts();
+
+  // The per-frame OnUpdate list, and the widget-script presence cache behind it,
+  // are built from whichever widgets already carry an OnUpdate script. Both are
+  // consulted *during* TOC processing, so a lookup that lands before a widget's
+  // script is bound caches "no script" and keeps that widget out of the list for
+  // the rest of the session. GlueParent is the one that matters: its OnUpdate is
+  // what drives GlueFrameFadeUpdate, so a stale miss there strands the
+  // character-select fade at alpha 0 -- the half-faded screen seen when logging
+  // out before the glue had settled. Rebuild both from the finished TOC.
+  glue_runtime_.InvalidateWidgetScriptCache();
 
   openwow::diagnostics::Log(
       openwow::diagnostics::LogLevel::kInfo,

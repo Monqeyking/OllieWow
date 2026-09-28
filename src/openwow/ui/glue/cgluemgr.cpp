@@ -1292,8 +1292,22 @@ void CGlueMgr_RequestCharacterList(GlueGameState& state) {
 }
 
 void CGlueMgr_ResetCharacterListDisplay(GlueGameState& state) {
-  state.characters.clear();
-  state.selected_character_index = -1;
+  // A list *refresh* must not strip the data behind GetCharacterInfo/GetNumCharacters. The local
+  // CharacterSelect_OnShow only re-lists when it is NOT connected (CharacterSelect.lua:69-73):
+  // when connected it calls GetCharacterListUpdate() and leaves the existing row FontStrings
+  // untouched, so whatever GetCharacterInfo returns is what those rows keep showing. Clearing here
+  // therefore blanks the backing data at the moment the refresh is *requested*, while the screen is
+  // already visible -- and on the world->glue return nothing covers that window (the
+  // CharacterSelectUI fade-in only runs on the login->charselect path; see
+  // docs/CLASSIC_GAP_REGISTER.md §10).
+  //
+  // The reference keeps the account roster across a world visit and only ever *replaces* it when
+  // the fresh enum lands: benilla overwrites `roster.chars` (char_select/mod.rs:328) and its
+  // back_on_logout (mod.rs:443-452) clears only the pending pick. The replacement point here is
+  // ApplyCharacterListResult (apps/client/glue_host/glue_flow.cpp:986).
+  if (state.characters.empty()) {
+    state.selected_character_index = -1;
+  }
   state.char_select_requested_background.clear();
   state.wants_enter_world = false;
   if (state.char_select_scene != nullptr) {

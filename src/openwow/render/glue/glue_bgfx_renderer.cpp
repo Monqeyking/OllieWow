@@ -417,9 +417,12 @@ struct GlueBgfxRenderer::Impl {
        openwow::render::TextureManager& texture_manager,
        openwow::render::m2::M2System& m2_system,
        GlueBgfxRenderer::SoundKitSink sound_kit_sink)
+      // The glue texture stream decodes on its own pool. The config struct documents 2 as the
+      // default; HEAD passed 4. This is a tuning choice, not a fix -- the character-select loss was
+      // traced to the UI scissor (docs/CLASSIC_GAP_REGISTER.md §10), not to the worker count.
       : textures(openwow::render::GlueTextureStreamConfig{
             .vfs = vfs,
-            .async_worker_count = 4,
+            .async_worker_count = 2,
         }),
         natural_size_source(textures),
         text(vfs),

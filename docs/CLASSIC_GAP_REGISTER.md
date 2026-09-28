@@ -214,6 +214,8 @@ Status: **infra**.
 | CMake-reconfigure hangt | `ninja` blijft staan op `[0/2] Re-checking globbed directories...` — `dev.ps1` documenteert dit zelf. 9 minuten geprobeerd, niet doorgekomen. |
 | 5 ontbrekende response-files | `storm.rsp`, `openwow_game.rsp`, `openwow_ui_runtime.rsp`, `openwow_render_bgfx.rsp`, `openwow-client.rsp` ontbraken; gereconstrueerd uit `build.ninja`. Elke build heeft ze nodig. |
 | `openwow_render_bgfx.lib` ontbrak | Bestond niet; opnieuw gebouwd. |
+| `dev.ps1` meldde succes bij een gefaalde link | Bij een `LNK1104` (de draaiende client hield `OllieWoW.exe` vast) stond er tóch `DEV_BUILD_OK` plus de **oude** exe-tijd. De oorzaak is niet vastgesteld: de gegenereerde `dev-link.bat` heeft per link wél `if errorlevel 1` plus een `findstr`-vangnet. Toegevoegd als postconditie die daar niet van afhangt: het script controleert nu of de exe daadwerkelijk opnieuw geschreven is. |
+| Een teruggezette bron wordt niet hercompileerd | `dev.ps1` bepaalt zijn werkset uit `git status --porcelain`; een met `git checkout` teruggezette `.cpp` staat daar niet meer in en wordt dus overgeslagen, ook al is zijn object ouder dan de bron. Gebruik dan `dev.ps1 -All`; het script waarschuwt nu wanneer alle geraakte objecten al nieuwer waren. |
 
 ---
 
@@ -229,6 +231,34 @@ Status: **infra**.
 - FontString-kleur gebruikt een apart veld (`__ow_text_*`), niet het
   texture-vertexkleurpad.
 - De locatie van het level-up-effect: `unit_descriptor_callbacks.cpp:222`.
+
+### Glue-UI: half scherm terug na een wereld-bezoek — opgelost, niet opnieuw uitzoeken
+
+Symptoom: na `Logout` naar het karakterselect (en daarna het loginscherm) waren het model en de
+achtergrond er wel, maar de hele XML-UI (logo, panelen, rijen) niet.
+
+Oorzaak (28-9-2026, `src/openwow/render/ui/ui_renderer.cpp`): bgfx' scissor is **plakkend per
+view** en `bgfx::setViewRect` reset hem niet. `UiRenderer::Begin` zette framebuffer, clear,
+view-mode, transform en rect, maar niet de scissor; `SubmitRun` zette hem alleen als een draw
+geclipt was, en nooit terug. Eén geclipte widget liet zijn clip dus staan voor élke volgende
+ongeclipte draw in die view (en over frames heen): de draws werden gesubmit en kwamen nergens
+terecht. Herstel: volle view-scissor in `Begin` plus een `else` in `SubmitRun`.
+
+Tweede reparatie (`apps/client/glue_host/glue_client.cpp` en `src/openwow/ui/glue/cgluemgr.cpp`):
+de TOC-herlading op de terugweg bouwt alle 2751 widgets opnieuw, waardoor de rij-FontStrings leeg en
+verborgen terugkomen. `CharacterSelect_OnShow` vraagt in de connected tak alleen een refresh aan
+(`CharacterSelect.lua:69-73`) en vult zelf niets; de rijen worden uitsluitend door het
+`CHARACTER_LIST_UPDATE`-event gevuld en getoond (`CharacterSelect.lua:177-182`, `225-254`).
+Zolang het serverantwoord onderweg is blijft de lijst dus leeg. De roster blijft nu bewaard over het
+wereld-bezoek (referentie: benilla overschrijft `roster.chars` in `char_select/mod.rs:328` en
+`back_on_logout` wist alleen de pending pick) en op de terugweg wordt `CHARACTER_LIST_UPDATE`
+opnieuw gevuurd. Meetbaar: `with_text` 8 → 25 op de terugkeer-frame zelf.
+
+Met bewijs uitgesloten, dus niet opnieuw uitzoeken: FontFace-levensduur, tekst-/font-/atlas-pad,
+scriptcache- en OnUpdate-staleness, transient-bufferbudget, stale framebuffer, diepte-only wipe door
+de model-pass, globale alpha, de tekenorde vóór de model-pass (de segmentverdeling was `1/N` in
+beide toestanden), de zes stille `return false`-paden in `UiRenderer`, en vernietigde GPU-handles.
+Het ras is geen discriminator: in de goede referentie stond de Tauren óók geselecteerd.
 
 ---
 
