@@ -37,7 +37,8 @@ public:
       std::optional<int> blend_source_animation_index = std::nullopt,
       std::uint32_t blend_source_time_ms = 0u, float blend_factor = 1.0f,
       const std::optional<RenderMatrix4x4View> &camera_inverse_view = std::nullopt,
-      std::span<const M2BoneBasisOverride> bone_basis_overrides = {}) const;
+      std::span<const M2BoneBasisOverride> bone_basis_overrides = {},
+      const M2WoundSample *wound_sample = nullptr) const;
 
   [[nodiscard]] bool ComputeLayeredBoneMatricesInto(
       std::vector<float> *out, int animation_index, std::uint32_t time_ms,
@@ -45,7 +46,8 @@ public:
       std::optional<int> blend_source_animation_index = std::nullopt,
       std::uint32_t blend_source_time_ms = 0u, float blend_factor = 1.0f,
       const std::optional<RenderMatrix4x4View> &camera_inverse_view = std::nullopt,
-      std::span<const M2BoneBasisOverride> bone_basis_overrides = {}) const;
+      std::span<const M2BoneBasisOverride> bone_basis_overrides = {},
+      const M2WoundSample *wound_sample = nullptr) const;
 
   [[nodiscard]] std::optional<RenderMatrix4x4> ComputeSingleBoneMatrix(
       std::size_t bone_index, int animation_index, std::uint32_t time_ms,
@@ -53,7 +55,8 @@ public:
       std::optional<int> blend_source_animation_index = std::nullopt,
       std::uint32_t blend_source_time_ms = 0u, float blend_factor = 1.0f,
       const std::optional<RenderMatrix4x4View> &camera_inverse_view = std::nullopt,
-      std::span<const M2BoneBasisOverride> bone_basis_overrides = {}) const;
+      std::span<const M2BoneBasisOverride> bone_basis_overrides = {},
+      const M2WoundSample *wound_sample = nullptr) const;
 
   std::optional<M2CameraPose> SampleCamera(int camera_index, int animation_index,
                                            std::uint32_t time_ms) const;

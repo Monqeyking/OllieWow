@@ -387,10 +387,15 @@ struct SpellVisualEffectNameEntry {
   std::uint32_t id;
   std::string_view name;
   std::string_view file_path;
-  float area_effect_size;
-  float scale;
-  float min_allowed_scale;
-  float max_allowed_scale;
+  // Classic/Turtle: SpellVisualEffectName has 5 columns and only field 2 (the
+  // model path) is consumed. Fields 3/4 are dead in this build, so the emitter
+  // scale comes from the kit's CharProc params x quality tier, never from this
+  // table (Benilla formats/src/spell_visual/mod.rs:53-61). These defaults keep
+  // an effect model at its own authored scale instead of collapsing it to 0.
+  float area_effect_size{0.0f};
+  float scale{1.0f};
+  float min_allowed_scale{1.0f};
+  float max_allowed_scale{1.0f};
 
   static SpellVisualEffectNameEntry Load(const DbcFile &f, std::uint32_t row);
 };

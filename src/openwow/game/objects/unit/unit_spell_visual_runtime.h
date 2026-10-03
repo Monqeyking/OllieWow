@@ -2,6 +2,7 @@
 
 #include "openwow/game/delayed_spell_visual_kit.h"
 #include "openwow/game/object_guid.h"
+#include "openwow/game/missile_release_clock.h"
 #include "openwow/game/object_presentation_snapshot.h"
 
 #include <array>
@@ -11,6 +12,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace openwow::data::dbc {
@@ -112,7 +114,14 @@ public:
     std::uint8_t missile_cast_count{0};
     std::uint64_t missile_target_guid{0};
     std::array<float, 3> missile_target_position{};
+    std::array<float, 3> missile_target_fallback_offset{};
+    ObjectHandle missile_target_handle{};
     float missile_speed{0.0f};
+    std::uint32_t missile_go_tick{0};
+    std::uint32_t missile_queue_tick{0};
+    std::uint32_t missile_release_tick{0};
+    std::uint32_t missile_deadline_tick{0};
+    bool missile_has_deadline{false};
     std::uint8_t missile_impact_result{0};
     std::uint8_t missile_reflect_result{0};
 
@@ -219,7 +228,17 @@ public:
                           float speed,
                           std::uint32_t impact_kit_id = 0,
                           std::uint8_t impact_result = 0,
-                          std::uint8_t reflect_result = 0);
+                          std::uint8_t reflect_result = 0,
+                          std::uint32_t go_tick = 0,
+                          bool awaits_release = false,
+                          std::optional<MissileReleaseClock> unit_go_clock = std::nullopt,
+                          std::optional<std::array<float, 3>> target_fallback_offset = std::nullopt);
+  void ReleasePendingMissiles(const WorldSession& session, std::uint32_t now_tick,
+      const std::array<float, 3>& event_origin, std::string_view kind,
+      std::uint64_t request_serial, std::uint16_t animation_id);
+  void FinishCastMissiles(const WorldSession& session, std::uint32_t now_tick,
+      std::uint64_t request_serial, std::uint16_t animation_id);
+  void CancelPendingMissiles(std::uint32_t spell_id = 0);
 
   [[nodiscard]] bool CreateFromKit(
       const WorldSession& session, std::uint32_t kit_id,
@@ -285,6 +304,14 @@ private:
   std::uint32_t creature_info_effect_id_{0};
   SpellNode* spell_node_list_head_{nullptr};
   std::vector<DispatchRecord> dispatches_{};
+  struct PendingMissile {
+    DispatchRecord dispatch;
+    ObjectHandle owner;
+    MissileReleaseGate gate;
+    bool playback_seen{false};
+  };
+  std::vector<PendingMissile> pending_missiles_{};
+  std::array<float, 3> SampleMissileReleaseOrigin(std::uint16_t animation_id) const;
   std::uint32_t next_chain_event_parameter_{0};
   std::array<float, 3> fixed_target_position_{};
   bool fixed_target_present_{false};

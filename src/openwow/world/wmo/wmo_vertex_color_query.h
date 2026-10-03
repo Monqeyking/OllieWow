@@ -31,6 +31,12 @@ struct WmoVertexColorPreparation {
     std::size_t vertex_index,
     const WmoVertexColorPreparation& preparation) noexcept;
 
+// GPU-only doorway fade: authored colors, full-scale white, nearest exterior portal.
+// CPU preparation/interpolation above deliberately retains its original contract.
+[[nodiscard]] data::wmo::WmoVertexColor PrepareWmoRenderPortalVertexColor(
+    const data::wmo::WmoRoot& root, const data::wmo::WmoGroup& group,
+    const data::wmo::Vec3f& position, data::wmo::WmoVertexColor color) noexcept;
+
 struct WmoVertexColorQueryResult {
   data::wmo::WmoVertexColor color{};
   bool outdoor{false};

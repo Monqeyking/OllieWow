@@ -22,9 +22,8 @@ void main()
 
     vec4 tex = texture2D(s_diffuse, v_texcoord0);
 
-    vec3 color = 2.0 * v_color0.rgb * tex.rgb * u_wmoGroupColor.rgb;
-    float alpha = u_wmoExtraParams.y > 0.5
-        ? v_color0.a : v_color0.a * tex.a;
+    vec3 color = wmoDiffuseColor(tex.rgb, v_color0) * u_wmoGroupColor.rgb;
+    float alpha = wmoCoverageAlpha(tex.a, v_color0.a);
     alpha *= u_wmoGroupColor.a;
 
     if (u_wmoExtraParams.w > 0.5 && alpha < (128.0 / 255.0)) {

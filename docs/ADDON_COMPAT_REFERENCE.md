@@ -3,13 +3,14 @@
 Status: read-only inventarisatie + voorstel
 Datum: 2026-09-12
 Bron-prioriteit volgens `AGENTS.md`: lokale `Client`/`Source` blijven het contract;
-`D:\OllieWoW\benilla` en de online repo zijn **gedragsreferentie**, geen vervanging.
+`D:\OllieWoW\Experiments\Benilla` en de online repo zijn **gedragsreferentie**, geen vervanging.
 
 ## 1. Bronnen en versieverschil
 
 | Bron | Versie / pad | Opmerking |
 |---|---|---|
-| Lokale benilla-checkout | `D:\OllieWoW\benilla`, HEAD `73826ca` (2026-08-25) | loopt ~2,5 week achter |
+| Actuele lokale Benilla-bron | `D:\OllieWoW\Experiments\Benilla` | door projectbeheerder opgegeven; beschikbaarheid en HEAD nog niet geverifieerd |
+| Historische lokale auditrevisie | HEAD `73826ca` (2026-08-25) | oorspronkelijke audit; geen versieclaim over de actuele checkout |
 | Online benilla | https://github.com/samwhosung/benilla, HEAD `3e92b4f` (2026-09-11) | hier staan de nieuwste contracten (issues 2163-2192) |
 | Lua-VM benilla | `third_party/lua-src/BENILLA.md` (lokaal aanwezig) | onderbouwt de dialectaanpak met corpusmetingen |
 | Onze VM | `third_party/wow_lua` = **Lua 5.1.1** (`lua.h`: `LUA_RELEASE "Lua 5.1.1"`) | let op: benilla gebruikt 5.1.5; hunk moet op 5.1.1 passen |

@@ -31,6 +31,7 @@ class GlueWidgetRuntime;
 namespace openwow::render {
 class RenderSubmitTrace;
 class TextureManager;
+struct GlueTextureStreamingStats;
 namespace m2 {
 class M2System;
 }
@@ -122,6 +123,8 @@ class GlueBgfxRenderer {
   void TickStreaming(openwow::ui::glue::GlueWidgetRuntime& widgets,
                      std::uint32_t step_budget = 4);
   [[nodiscard]] openwow::ui::glue::GlueStreamingCounters StreamingCounters() const;
+  [[nodiscard]] openwow::render::GlueTextureStreamingStats
+  TextureStreamingStats() const;
 
   [[nodiscard]] openwow::ui::TextureNaturalSizeSource& texture_natural_size_source();
 

@@ -20,7 +20,7 @@ selecteerbaar worden als in de vanilla client.
   `D:\OllieWoW\Client` of, wanneer die in MPQ zitten, de lokale VFS/MPQ-
   resolver en beschikbare bestandslijsten;
 - relevante serverbron onder `D:\OllieWoW\Source`;
-- overeenkomstige Benilla-code onder `D:\OllieWoW\benilla`;
+- overeenkomstige Benilla-code onder `D:\OllieWoW\Experiments\Benilla`;
 - bestaande offline scenario’s en de huidige worktree-diff.
 
 ## Bekende startpunten

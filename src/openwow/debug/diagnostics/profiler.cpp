@@ -163,6 +163,25 @@ void Profiler::EndScope() {
   }
 }
 
+void Profiler::AddSample(const std::string& name, const float milliseconds) {
+  if (!enabled_.load(std::memory_order_relaxed)) {
+    return;
+  }
+  std::lock_guard lock(mutex_);
+  auto found = scope_data_.find(name);
+  if (found == scope_data_.end()) {
+    if (scope_data_.size() >= kMaximumScopeNames || max_history_ == 0) {
+      return;
+    }
+    found = scope_data_.try_emplace(name).first;
+  }
+  auto& samples = found->second.samples;
+  samples.push_back(Duration(static_cast<std::int64_t>(milliseconds * 1.0e6f)));
+  while (samples.size() > max_history_) {
+    samples.pop_front();
+  }
+}
+
 ProfilerStats Profiler::GetScopeStats(const std::string& name) const {
   std::lock_guard lock(mutex_);
   const auto found = scope_data_.find(name);

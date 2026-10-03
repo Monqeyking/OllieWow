@@ -43,13 +43,10 @@ bool IsAuraCandidateEffect(const std::uint32_t effect_id) {
 
 std::uint32_t ResolveDispelTypeMask(
     const WorldSession& session, const std::uint32_t dispel_type) {
-  const auto* const dbc = session.GetDbcLoader();
-  const auto* const dispel =
-      dbc != nullptr ? dbc->spell_dispel_type().LookupEntry(dispel_type)
-                     : nullptr;
-  return dispel != nullptr && dispel->mask != 0u
-             ? dispel->mask
-             : 1u << (dispel_type & 31u);
+  // Classic/Turtle has no dispel-mask column in SpellDispelType, so the bit is
+  // reconstructed from the type id (unchanged from the old mask==0 fallback).
+  (void)session;
+  return 1u << (dispel_type & 31u);
 }
 
 bool TargetHasAuraCandidate(

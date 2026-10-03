@@ -171,6 +171,7 @@ extern "C" {
 #include <array>
 #include <cctype>
 #include <charconv>
+#include "openwow/debug/diagnostics/profiler.h"
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -309,15 +310,24 @@ ResolveMovementBindingLuaCall(const std::string_view command) {
   return std::nullopt;
 }
 
+// Hoofdschakelaar "Enable All Shaders" (CVar `pixelShaders`). In de Options-Lua
+// hangen glow, death effect, specular, M2- en weer-shaders hieronder; zet je hem
+// uit, dan staan die effecten ook uit. Eerder werd de CVar door niets gelezen.
+bool PixelShadersEnabled() {
+  const auto &cvars = openwow::ui::game::CVarSystem::Instance();
+  return !cvars.Exists("pixelShaders") || cvars.GetCVarBool("pixelShaders");
+}
+
 render::PostProcessSettings ReadPostProcessSettings() {
   const auto &cvars = openwow::ui::game::CVarSystem::Instance();
   const auto enabled = [&cvars](const char *name) {
     return !cvars.Exists(name) || cvars.GetCVarBool(name);
   };
+  const bool pixel_shaders = PixelShadersEnabled();
   return {
       .enabled = enabled("ffx"),
-      .glow_enabled = enabled("ffxGlow"),
-      .death_enabled = enabled("ffxDeath"),
+      .glow_enabled = enabled("ffxGlow") && pixel_shaders,
+      .death_enabled = enabled("ffxDeath") && pixel_shaders,
       .rectangle_textures = enabled("ffxRectangle"),
       .multisample =
           static_cast<std::uint8_t>(std::clamp(cvars.GetCVarInt("gxMultisample"), 1, 16)),
@@ -339,7 +349,8 @@ float ReadWeatherParticleDensity() {
 
 bool ReadUseWeatherShaders() {
   const auto &cvars = openwow::ui::game::CVarSystem::Instance();
-  return cvars.GetCVarInt("useWeatherShaders") != 0;
+  const bool m2_shaders = !cvars.Exists("M2UseShaders") || cvars.GetCVarBool("M2UseShaders");
+  return cvars.GetCVarInt("useWeatherShaders") != 0 && m2_shaders && PixelShadersEnabled();
 }
 
 bool DispatchMovementBindingThroughLua(lua_State *state, const std::string_view command,
@@ -2501,7 +2512,15 @@ void GameLoop::Tick(float dt) {
   if (!initialized_)
     return;
 
-  static_cast<void>(texture_manager_.PumpPreparedUploads(8u));
+  // Vast 8 per frame liet de wachtrij tijdens het laden vollopen (256/256) en
+  // iconen pas laat verschijnen. Nu een tijdsbudget: ruim in het laadscherm,
+  // krap in de wereld zodat de frametijd stabiel blijft.
+  {
+    const bool loading = state_ == SceneState::kLoading;
+    static_cast<void>(texture_manager_.PumpPreparedUploads(
+        64u, loading ? std::chrono::microseconds(8000)
+                     : std::chrono::microseconds(2000)));
+  }
 
   if (const auto *session = world_session(); session != nullptr) {
     VoiceChat_ScheduledUpdate(*session, sound_runtime_.sound_engine(),
@@ -4204,7 +4223,8 @@ void GameLoop::TickInWorld(float dt) {
     return;
   }
 
-  UpdateNetwork();
+  { OPENWOW_PROFILE_SCOPE("ow.tick.network");
+  UpdateNetwork(); }
   if (world_session() != nullptr) {
     (void)Player_C_TickAreaCheck(*world_session(), world_scene_.world_map());
   }
@@ -4221,18 +4241,22 @@ void GameLoop::TickInWorld(float dt) {
 
   cinematic_player_.Update(*world_session(), dt);
 
-  EventScheduler::Get().Update(dt);
+  { OPENWOW_PROFILE_SCOPE("ow.tick.event_scheduler");
+  EventScheduler::Get().Update(dt); }
 
   if (world_session()) {
     world_session()->objects().AdvanceTransportPathStates();
   }
 
   SyncWorldFrameCursorContext();
-  ProcessInput(dt);
+  { OPENWOW_PROFILE_SCOPE("ow.tick.input");
+  ProcessInput(dt); }
   SyncWorldSceneTimeFromState(&world_scene_, world_session());
-  HandlePerFrameWorldMaintenance(current_tick_ms);
+  { OPENWOW_PROFILE_SCOPE("ow.tick.maintenance");
+  HandlePerFrameWorldMaintenance(current_tick_ms); }
 
   if (world_session()) {
+    OPENWOW_PROFILE_SCOPE("ow.tick.visual_state");
     world_session()->objects().AdvanceVisualState(openwow::core::GameClock::GetTickCount32(), dt);
   }
   PublishMoverFramePose(dt, current_tick_ms);
@@ -4267,9 +4291,10 @@ void GameLoop::TickInWorld(float dt) {
     world_frame_.BindObjectPresentation(&world_scene_.object_presentation());
   }
 
+  { OPENWOW_PROFILE_SCOPE("ow.tick.mouseover");
   world_frame_.UpdateNameplateHover(targeting_.target_guid());
 
-  UpdateWorldFrameMouseover(dt);
+  UpdateWorldFrameMouseover(dt); }
 
   if (world_session()) {
     const auto mouseover_guid = world_frame_.GetMouseoverGuid();
@@ -4374,11 +4399,14 @@ void GameLoop::TickInWorld(float dt) {
       openwow::ui::game::ComputeGameUiRenderPixelScale(static_cast<float>(screen_height_),
                                                        game_ui_.root_scale()));
 
-  RenderWorld(dt);
+  { OPENWOW_PROFILE_SCOPE("ow.tick.render_world");
+  RenderWorld(dt); }
 
-  event_bridge_.Poll(dt);
+  { OPENWOW_PROFILE_SCOPE("ow.tick.event_bridge");
+  event_bridge_.Poll(dt); }
 
-  game_ui_.Update(dt);
+  { OPENWOW_PROFILE_SCOPE("ow.tick.game_ui_update");
+  game_ui_.Update(dt); }
 
   if (AccountData::Get().IsUploadDue()) {
     (void)PumpRuntimeAccountDataUpload(BuildAccountDataUploadContext(
@@ -4460,6 +4488,7 @@ void GameLoop::TickInWorld(float dt) {
   if (stock_frame_xml_loaded) {
     const std::uint64_t compositor_generation =
         renderer_context_ != nullptr ? renderer_context_->FinalCompositor().active_generation : 0u;
+    OPENWOW_PROFILE_SCOPE("ow.tick.game_ui_render");
     game_ui_.Render(ui_view, static_cast<float>(screen_width_), static_cast<float>(screen_height_),
                     compositor_generation, OffsetViewId(ui_offscreen_view, 1u),
                     kWorldUiOffscreenViewCount - 1u);
@@ -5337,7 +5366,7 @@ void GameLoop::RenderWorld(float dt) {
                                                 cvars.GetCVarBool("mapShadows"),
                                                 cvars.GetCVarBool("projectedTextures"));
   world_scene_.SetShadowPresentationSettings(shadow_settings);
-  world_scene_.SetSpecularEnabled(cvars.GetCVarBool("specular"));
+  world_scene_.SetSpecularEnabled(cvars.GetCVarBool("specular") && PixelShadersEnabled());
 
   if (auto *const session = world_session(); session != nullptr) {
     SpellVisuals_UpdateAll(*session, dt);

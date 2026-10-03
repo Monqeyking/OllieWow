@@ -262,6 +262,11 @@ struct CreatureFamilyEntry {
   std::uint32_t skill_line_0;
   std::uint32_t skill_line_1;
   std::uint32_t pet_food_mask;
+  // WotLK-only in this build: CreatureFamily has no petTalentType/category column
+  // (Source DBCfmt.h "nfifiiiissssssssxx" + Benilla creature_families.rs:84-95 pin
+  // Name at field 8 and iconFile at 17). These members are still consumed by the
+  // pet-talent UI, so they are kept until the Classic source for the pet talent
+  // tree is established -- see docs/CLASSIC_GAP_REGISTER.md.
   std::int32_t pet_talent_type;
   std::uint32_t category;
   std::string_view name;
@@ -321,12 +326,13 @@ struct SpellDifficultyEntry {
 };
 
 struct SpellDispelTypeEntry {
-
+  // Classic/Turtle: 12 columns -- ID@0, Name_Lang@1..8, NameFlags@9, the
+  // "named" gate @10 and a second string @11 (Benilla
+  // formats/src/spells/dispelt_types.rs:16-20, byte-pinned). There is no dispel
+  // mask or immunity column in this build, so the WotLK members are gone; the
+  // mask bit is reconstructed in ResolveDispelTypeMask.
   std::uint32_t id;
   std::string_view name;
-  std::uint32_t mask;
-  std::uint32_t immunity_possible;
-  std::string_view internal_name;
 
   static SpellDispelTypeEntry Load(const DbcFile &f, std::uint32_t row);
 };

@@ -860,6 +860,7 @@ M2ResultStatus M2AnimationRuntime::SetAnimationRequest(
             instance_it->second->model_id, selection.resolved_sequence_index,
             resume_pending_sequence_loads_);
         if (result == M2ResultStatus::kNotReady) {
+          pending_instances_by_model_[instance_it->second->model_id].insert(instance_it->first);
           instance_it->second->pending_base_animation =
               detail::M2Instance::PendingBaseAnimation{
                   .kind = detail::M2Instance::PendingBaseAnimation::Kind::kRequest,
@@ -1118,6 +1119,7 @@ M2ResultStatus M2AnimationRuntime::SetAnimationSequenceSample(
   const auto residency = sequence_streamer_.EnsureResidentLocked(
       instance_it->second->model_id, sequence_index, resume_pending_sequence_loads_);
   if (residency == M2ResultStatus::kNotReady) {
+    pending_instances_by_model_[instance_it->second->model_id].insert(instance_it->first);
     instance_it->second->pending_base_animation =
         detail::M2Instance::PendingBaseAnimation{
             .kind = detail::M2Instance::PendingBaseAnimation::Kind::kSequenceSample,
@@ -1167,6 +1169,7 @@ M2ResultStatus M2AnimationRuntime::SetAnimationSlotRequest(
         instance_it->second->model_id, selection.resolved_sequence_index,
         resume_pending_sequence_loads_);
     if (residency == M2ResultStatus::kNotReady) {
+      pending_instances_by_model_[instance_it->second->model_id].insert(instance_it->first);
       instance_it->second->pending_slot_animations[slot_index] =
           detail::M2Instance::PendingSlotAnimation{
               .request = request, .selection = selection, .speed = request.speed};
@@ -1185,6 +1188,79 @@ M2ResultStatus M2AnimationRuntime::SetAnimationSlotRequest(
   ++instance_it->second->animation_state_generation;
   return selection.resolved ? M2ResultStatus::kReady
                             : M2ResultStatus::kUnsupported;
+}
+
+M2ResultStatus M2AnimationRuntime::SetWoundSample(
+    const std::uint32_t instance_id, const std::uint32_t animation_id,
+    const std::uint32_t time_ms, const float weight,
+    const std::uint32_t keybone_slot) {
+  PumpSequenceLoads();
+  if (!std::isfinite(weight)) {
+    return M2ResultStatus::kFailed;
+  }
+  std::lock_guard lock(mutex_);
+  const auto it = instances_.find(instance_id);
+  if (it == instances_.end()) {
+    return M2ResultStatus::kFailed;
+  }
+  auto &instance = *it->second;
+  const auto clear = [&instance] {
+    instance.wound_sample = {};
+    instance.wound_sample_pending = false;
+    ++instance.animation_state_generation;
+  };
+  if (weight <= 0.0f) {
+    clear();
+    return M2ResultStatus::kReady;
+  }
+  const auto model_it = models_.find(instance.model_id);
+  if (model_it == models_.end() || !model_it->second->loaded) {
+    clear();
+    return M2ResultStatus::kNotReady;
+  }
+  const auto &model = model_it->second->model_data;
+  if (keybone_slot != kM2WoundFullBodyKeyBoneSlot &&
+      (keybone_slot >= model.key_bone_lookup.size() ||
+       model.key_bone_lookup[keybone_slot] < 0 ||
+       static_cast<std::size_t>(model.key_bone_lookup[keybone_slot]) >= model.bones.size())) {
+    clear();
+    return M2ResultStatus::kUnsupported;
+  }
+  auto sequence_index = instance.wound_sample.sequence_index;
+  if (instance.wound_sample.weight <= 0.0f ||
+      instance.wound_sample.animation_id != animation_id ||
+      sequence_index == kInvalidM2AnimationSequenceIndex) {
+    // Same alias + sub-animation-0 resolution as QueryAnimationSequenceLocked.
+    // Do not substitute Stand/first clip or consume the primary variant RNG.
+    const auto resolved_id = ResolveM2AnimationId(
+        model, animation_id,
+        [this](const auto id) { return LookupAnimationAliasInfo(id, dbc_); });
+    sequence_index = resolved_id < kInvalidM2AnimationBehaviorId
+                         ? FindM2AnimationSequenceIndex(model, resolved_id, 0u)
+                         : kInvalidM2AnimationSequenceIndex;
+    if (sequence_index == kInvalidM2AnimationSequenceIndex) {
+      clear();
+      return M2ResultStatus::kUnsupported;
+    }
+  }
+  const auto residency = sequence_streamer_.EnsureResidentLocked(
+      instance.model_id, sequence_index, resume_pending_sequence_loads_);
+  if (residency != M2ResultStatus::kReady && residency != M2ResultStatus::kNotReady) {
+    clear();
+    return residency;
+  }
+  instance.wound_sample = {.animation_id = animation_id,
+                           .sequence_index = sequence_index,
+                           .time_ms = time_ms,
+                           .weight = std::clamp(weight, 0.0f, 1.0f),
+                           .keybone_slot = keybone_slot};
+  instance.wound_sample_pending = residency == M2ResultStatus::kNotReady;
+  ++instance.animation_state_generation;
+  if (instance.wound_sample_pending) {
+    pending_instances_by_model_[instance.model_id].insert(instance_id);
+  }
+  // No animation request, completion, event scan or primary clock changes.
+  return residency;
 }
 
 M2ResultStatus M2AnimationRuntime::SetAnimationSlotSample(
@@ -1654,12 +1730,17 @@ void M2AnimationRuntime::ResumePendingAnimationsLocked(
     return;
   }
   auto &resource = *model_it->second;
-  for (auto &[instance_id, instance_ptr] : instances_) {
-    static_cast<void>(instance_id);
-    auto &instance = *instance_ptr;
-    if (instance.model_id != model_id) {
+  // Alleen de instanties die voor dit model op een sequentie wachten, niet alle
+  // instanties in de wereld.
+  auto &waiting = pending_instances_by_model_[model_id];
+  const std::vector<std::uint32_t> candidates(waiting.begin(), waiting.end());
+  for (const std::uint32_t candidate_id : candidates) {
+    const auto found = instances_.find(candidate_id);
+    if (found == instances_.end() || found->second->model_id != model_id) {
+      waiting.erase(candidate_id);
       continue;
     }
+    auto &instance = *found->second;
     if (instance.pending_base_animation.has_value()) {
       auto &pending = *instance.pending_base_animation;
       const std::uint16_t sequence_index =
@@ -1726,6 +1807,30 @@ void M2AnimationRuntime::ResumePendingAnimationsLocked(
         pending.reset();
       }
     }
+    if (instance.wound_sample_pending) {
+      const auto residency = sequence_streamer_.PendingResidencyStatusLocked(
+          model_id, instance.wound_sample.sequence_index);
+      if (residency == M2ResultStatus::kReady) {
+        instance.wound_sample_pending = false;
+        ++instance.animation_state_generation;
+      } else if (residency != M2ResultStatus::kNotReady) {
+        instance.wound_sample = {};
+        instance.wound_sample_pending = false;
+        ++instance.animation_state_generation;
+      }
+    }
+    const bool still_waiting =
+        instance.wound_sample_pending ||
+        instance.pending_base_animation.has_value() ||
+        std::any_of(instance.pending_slot_animations.begin(),
+                    instance.pending_slot_animations.end(),
+                    [](const auto &slot) { return slot.has_value(); });
+    if (!still_waiting) {
+      waiting.erase(candidate_id);
+    }
+  }
+  if (waiting.empty()) {
+    pending_instances_by_model_.erase(model_id);
   }
 }
 

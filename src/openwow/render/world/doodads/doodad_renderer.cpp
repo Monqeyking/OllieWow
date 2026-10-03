@@ -9,6 +9,9 @@
 #include "openwow/world/coordinates/map_placement.h"
 #include "openwow/world/environment/environment_detail.h"
 
+#include <cstdlib>
+#include <tuple>
+#include <set>
 #include <algorithm>
 #include <cctype>
 #include <cmath>
@@ -1332,6 +1335,7 @@ void DoodadRenderer::ClearM2Instance(DoodadInstance &inst) {
 
   inst.header_local_bounds = {};
   inst.collision_ready = false;
+  ++doodad_index_epoch_;
 
   inst.m2_load_attempted = false;
 
@@ -1544,6 +1548,7 @@ void DoodadRenderer::SynchronizeTransportAnimation(DoodadInstance& inst,
 }
 
 void DoodadRenderer::RefreshSpatialBounds(DoodadInstance& inst) {
+  ++doodad_index_epoch_;
 
   inst.admission_cache_epoch = 0u;
   if (inst.collision_geometry && inst.collision_geometry->radius > 0.0f) {
@@ -2329,6 +2334,53 @@ void DoodadRenderer::VisitCollisionTriangles(
     return;
   }
 
+  // OPENWOW_DOODAD_INDEX_VERIFY=1: draai index en volledige scan en vergelijk de
+  // driehoeken. Alleen voor het aantonen dat de index niets mist.
+  static const bool verify_index = [] {
+    const char* v = std::getenv("OPENWOW_DOODAD_INDEX_VERIFY");
+    return v != nullptr && *v != '\0' && *v != '0';
+  }();
+  static std::uint64_t verify_calls = 0u;
+  if (verify_index && !collision_index_bypass_ && (++verify_calls % 20u) == 0u) {
+    using Key = std::tuple<std::uint64_t, std::uint64_t, std::uint64_t>;
+    std::vector<DoodadCollisionTriangle> via_index;
+    std::set<Key> from_index;
+    std::set<Key> from_scan;
+    VisitCollisionTriangles(
+        world_bounds,
+        [&](const DoodadCollisionTriangle& t) {
+          via_index.push_back(t);
+          from_index.insert({t.owner_id, t.facet_id, t.owner_guid});
+        },
+        include_object_owned);
+    collision_index_bypass_ = true;
+    VisitCollisionTriangles(
+        world_bounds,
+        [&](const DoodadCollisionTriangle& t) {
+          from_scan.insert({t.owner_id, t.facet_id, t.owner_guid});
+        },
+        include_object_owned);
+    collision_index_bypass_ = false;
+    static std::uint64_t checks = 0u, mismatches = 0u;
+    ++checks;
+    if (from_index != from_scan) {
+      ++mismatches;
+      openwow::diagnostics::Log(
+          openwow::diagnostics::LogLevel::kError,
+          "DoodadIndexVerify: MISMATCH index=" + std::to_string(from_index.size()) +
+              " scan=" + std::to_string(from_scan.size()) +
+              " checks=" + std::to_string(checks) + " mismatches=" + std::to_string(mismatches));
+    } else if (checks == 1u || checks % 100u == 0u) {
+      openwow::diagnostics::Log(
+          openwow::diagnostics::LogLevel::kInfo,
+          "DoodadIndexVerify: ok checks=" + std::to_string(checks) +
+              " mismatches=" + std::to_string(mismatches) +
+              " last_tris=" + std::to_string(from_scan.size()));
+    }
+    for (const auto& t : via_index) visitor(t);
+    return;
+  }
+
   const auto overlaps_query = [&world_bounds](const RenderAabb& bounds) {
     return bounds[0] <= world_bounds[3] && bounds[3] >= world_bounds[0] &&
            bounds[1] <= world_bounds[4] && bounds[4] >= world_bounds[1] &&
@@ -2395,6 +2447,14 @@ void DoodadRenderer::VisitCollisionTriangles(
     }
 
     const RenderMatrix4x4View transform{instance.model_matrix};
+    // Elk punt een keer naar wereldruimte, niet drie keer per driehoek.
+    using WorldPoint =
+        decltype(TransformAffinePoint4x4(RenderVec3View{geometry->vertices[0]}, transform));
+    std::vector<WorldPoint> world_vertices;
+    world_vertices.reserve(geometry->vertices.size());
+    for (const auto& vertex : geometry->vertices) {
+      world_vertices.push_back(TransformAffinePoint4x4(RenderVec3View{vertex}, transform));
+    }
     for (std::size_t index = 0u; index + 2u < geometry->triangles.size(); index += 3u) {
       const std::uint16_t i0 = geometry->triangles[index];
       const std::uint16_t i1 = geometry->triangles[index + 1u];
@@ -2405,12 +2465,9 @@ void DoodadRenderer::VisitCollisionTriangles(
       }
 
       DoodadCollisionTriangle triangle;
-      triangle.vertices[0] =
-          TransformAffinePoint4x4(RenderVec3View{geometry->vertices[i0]}, transform);
-      triangle.vertices[1] =
-          TransformAffinePoint4x4(RenderVec3View{geometry->vertices[i1]}, transform);
-      triangle.vertices[2] =
-          TransformAffinePoint4x4(RenderVec3View{geometry->vertices[i2]}, transform);
+      triangle.vertices[0] = world_vertices[i0];
+      triangle.vertices[1] = world_vertices[i1];
+      triangle.vertices[2] = world_vertices[i2];
       if (reject_outside_query(triangle)) {
         continue;
       }
@@ -2420,6 +2477,66 @@ void DoodadRenderer::VisitCollisionTriangles(
       visitor(triangle);
     }
   };
+
+  // Kandidaten uit de ruimtelijke index. Valt de zoekruimte te groot uit, dan is de
+  // index zinloos en lopen we zoals voorheen alle instanties langs.
+  constexpr float kCell = 64.0f;
+  constexpr std::int64_t kMaxCells = 900;
+  const auto cell_of = [](const float v) {
+    return static_cast<std::int64_t>(std::floor(v / kCell));
+  };
+  const std::int64_t cx0 = cell_of(world_bounds[0]);
+  const std::int64_t cx1 = cell_of(world_bounds[3]);
+  const std::int64_t cy0 = cell_of(world_bounds[1]);
+  const std::int64_t cy1 = cell_of(world_bounds[4]);
+  const bool indexable = std::isfinite(world_bounds[0]) && std::isfinite(world_bounds[1]) &&
+                         std::isfinite(world_bounds[3]) && std::isfinite(world_bounds[4]) &&
+                         cx1 >= cx0 && cy1 >= cy0 &&
+                         (cx1 - cx0 + 1) * (cy1 - cy0 + 1) <= kMaxCells;
+  if (indexable && !collision_index_bypass_) {
+    std::vector<CollisionIndexEntry> candidates;
+    {
+      const std::uint64_t fingerprint = CollisionIndexFingerprint();
+      std::lock_guard lock(collision_index_mutex_);
+      const auto now = std::chrono::steady_clock::now();
+      // De tijdsgrens is een vangnet voor wijzigingen die geen teller ophogen.
+      if (!collision_index_.valid || collision_index_.fingerprint != fingerprint ||
+          now - collision_index_.built > std::chrono::seconds(2)) {
+        RebuildCollisionIndexLocked(fingerprint);
+      }
+      candidates = collision_index_.always;
+      for (std::int64_t cy = cy0; cy <= cy1; ++cy) {
+        for (std::int64_t cx = cx0; cx <= cx1; ++cx) {
+          const std::uint64_t key = (static_cast<std::uint64_t>(cx) << 32u) ^
+                                    static_cast<std::uint64_t>(static_cast<std::uint32_t>(cy));
+          if (const auto found = collision_index_.cells.find(key);
+              found != collision_index_.cells.end()) {
+            candidates.insert(candidates.end(), found->second.begin(), found->second.end());
+          }
+        }
+      }
+    }
+    std::sort(candidates.begin(), candidates.end());
+    candidates.erase(std::unique(candidates.begin(), candidates.end()), candidates.end());
+    for (const CollisionIndexEntry& entry : candidates) {
+      if (!entry.wmo) {
+        const auto owner = tile_doodads_.find(entry.owner_key);
+        if (owner != tile_doodads_.end() && entry.index < owner->second.instances.size()) {
+          visit_instance(owner->second.instances[entry.index]);
+        }
+      } else {
+        const auto owner = wmo_doodads_.find(entry.owner_key);
+        if (owner != wmo_doodads_.end() && owner->second.enabled &&
+            entry.index < owner->second.instances.size()) {
+          const auto& instance = owner->second.instances[entry.index];
+          if (IsWmoDoodadSetSelected(instance, owner->second.active_wmo_doodad_sets)) {
+            visit_instance(instance);
+          }
+        }
+      }
+    }
+    return;
+  }
 
   for (const auto& [tile, owner] : tile_doodads_) {
     static_cast<void>(tile);
@@ -2436,6 +2553,83 @@ void DoodadRenderer::VisitCollisionTriangles(
       if (IsWmoDoodadSetSelected(instance, owner.active_wmo_doodad_sets)) {
         visit_instance(instance);
       }
+    }
+  }
+}
+
+std::uint64_t DoodadRenderer::CollisionIndexFingerprint() const {
+  const auto mix = [](std::uint64_t h, const std::uint64_t v) {
+    return (h ^ (v + 0x9e3779b97f4a7c15ull + (h << 6u) + (h >> 2u))) * 0xff51afd7ed558ccdull;
+  };
+  std::uint64_t h = 0x1234567u;
+  h = mix(h, collision_revision_);
+  h = mix(h, doodad_index_epoch_);
+  h = mix(h, next_model_matrix_revision_);
+  h = mix(h, tile_doodads_.size());
+  for (const auto& [key, owner] : tile_doodads_) {
+    h += mix(mix(key, owner.instances.size()),
+             reinterpret_cast<std::uintptr_t>(owner.instances.data()));
+  }
+  h = mix(h, wmo_doodads_.size());
+  for (const auto& [key, owner] : wmo_doodads_) {
+    h += mix(mix(key ^ 0xabcdull, owner.instances.size()),
+             reinterpret_cast<std::uintptr_t>(owner.instances.data()));
+  }
+  return h;
+}
+
+void DoodadRenderer::RebuildCollisionIndexLocked(const std::uint64_t fingerprint) const {
+  constexpr float kCell = 64.0f;
+  constexpr std::int64_t kMaxSpanCells = 24;
+  constexpr float kPad = 1.0f;
+  collision_index_.cells.clear();
+  collision_index_.always.clear();
+  collision_index_.fingerprint = fingerprint;
+  collision_index_.built = std::chrono::steady_clock::now();
+  collision_index_.valid = true;
+
+  const auto add = [&](const DoodadInstance& instance, const bool wmo,
+                       const std::uint64_t owner_key, const std::uint32_t index) {
+    const CollisionIndexEntry entry{wmo, owner_key, index};
+    RenderAabb bounds{};
+    bool have_bounds = instance.has_bounding_bounds;
+    if (have_bounds) {
+      bounds = instance.bounding_bounds;
+    } else if (HasPositiveVolume(instance.header_local_bounds)) {
+      have_bounds = TryTransformDoodadRenderBounds(instance.header_local_bounds,
+                                                   instance.model_matrix, &bounds);
+    }
+    // Zonder bruikbare bounds slaat de exacte controle de instantie nooit over; hier ook niet.
+    if (!have_bounds || !std::isfinite(bounds[0]) || !std::isfinite(bounds[1]) ||
+        !std::isfinite(bounds[3]) || !std::isfinite(bounds[4])) {
+      collision_index_.always.push_back(entry);
+      return;
+    }
+    const auto cell_of = [](const float v) {
+      return static_cast<std::int64_t>(std::floor(v / kCell));
+    };
+    const std::int64_t x0 = cell_of(bounds[0] - kPad), x1 = cell_of(bounds[3] + kPad);
+    const std::int64_t y0 = cell_of(bounds[1] - kPad), y1 = cell_of(bounds[4] + kPad);
+    if (x1 < x0 || y1 < y0 || x1 - x0 >= kMaxSpanCells || y1 - y0 >= kMaxSpanCells) {
+      collision_index_.always.push_back(entry);
+      return;
+    }
+    for (std::int64_t cy = y0; cy <= y1; ++cy) {
+      for (std::int64_t cx = x0; cx <= x1; ++cx) {
+        const std::uint64_t key = (static_cast<std::uint64_t>(cx) << 32u) ^
+                                  static_cast<std::uint64_t>(static_cast<std::uint32_t>(cy));
+        collision_index_.cells[key].push_back(entry);
+      }
+    }
+  };
+  for (const auto& [key, owner] : tile_doodads_) {
+    for (std::size_t i = 0u; i < owner.instances.size(); ++i) {
+      add(owner.instances[i], false, key, static_cast<std::uint32_t>(i));
+    }
+  }
+  for (const auto& [key, owner] : wmo_doodads_) {
+    for (std::size_t i = 0u; i < owner.instances.size(); ++i) {
+      add(owner.instances[i], true, key, static_cast<std::uint32_t>(i));
     }
   }
 }

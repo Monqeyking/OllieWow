@@ -227,14 +227,13 @@ struct SpellDelayedData {
   std::uint32_t     delay_time = 0;
 };
 
+// Classic channel packets are self-only; the session supplies the local caster.
 struct ChannelStartData {
-  game::ObjectGuid  caster_guid;
   std::uint32_t     spell_id   = 0;
   std::uint32_t     duration   = 0;
 };
 
 struct ChannelUpdateData {
-  game::ObjectGuid  caster_guid;
   std::uint32_t     remaining  = 0;
 };
 

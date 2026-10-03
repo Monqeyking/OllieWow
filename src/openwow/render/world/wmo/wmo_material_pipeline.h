@@ -57,9 +57,9 @@ EvaluateRetailWmoVertexColor(const WmoVertexLightingInput &input) noexcept {
   RenderVec3 output{};
   for (std::size_t channel = 0; channel < output.size(); ++channel) {
     const float light = SaturateWmo(input.ambient[channel] + input.diffuse[channel] * ndl);
-    const float base = input.unified_render_path
-                           ? light * input.material_color[channel] + input.vertex_color[channel]
-                           : input.vertex_color[channel] * light;
+    // Match vs_wmo.sc: MOHD unified-render does not add a fullbright bake
+    // to the Classic lit lane. Keep the input fields for caller compatibility.
+    const float base = input.vertex_color[channel] * light;
     output[channel] = SaturateWmo(base + input.emissive[channel]);
   }
   return output;
@@ -75,24 +75,13 @@ EvaluateRetailWmoVertexColor(const WmoVertexLightingInput &input) noexcept {
     const std::uint32_t material_ambient_argb,
     const std::uint32_t sidn_argb, const float intensity,
     const bool sidn_enabled) noexcept {
-  const auto half_sum = [=](const std::uint32_t shift) {
-    const std::uint32_t ambient =
-        (material_ambient_argb >> shift) & 0xffu;
-    const std::uint32_t sidn = sidn_enabled
-                                   ? ScaleRetailWmoNightGlowChannel(
-                                         static_cast<std::uint8_t>(
-                                             (sidn_argb >> shift) & 0xffu),
-                                         intensity)
-                                   : 0u;
-    return static_cast<float>((std::min(ambient + sidn, 255u)) >> 1u) /
-           255.0f;
-  };
-  return {
-      half_sum(16u),
-      half_sum(8u),
-      half_sum(0u),
-      0.0f,
-  };
+  // Full-scale SIDN only: outdoor ambient is already present in the light sum.
+  // CPU query bakes keep their independent half-scale contract.
+  (void)material_ambient_argb;
+  const float scale = sidn_enabled ? SaturateWmo(intensity) / 255.0f : 0.0f;
+  return {((sidn_argb >> 16u) & 0xffu) * scale,
+          ((sidn_argb >> 8u) & 0xffu) * scale,
+          (sidn_argb & 0xffu) * scale, 0.0f};
 }
 
 struct WmoPixelMaterialInput {
@@ -103,6 +92,8 @@ struct WmoPixelMaterialInput {
   RenderVec3 separate_vertex_color{};
   RenderVec3 separate_specular_color{};
   float vertex_alpha{1.0f};
+  bool interior_self_illumination{false};
+  bool transition_blend{false};
   data::wmo::WmoShaderType shader{data::wmo::kShaderDiffuse};
 };
 
@@ -116,7 +107,9 @@ EvaluateRetailWmoPixelMaterial(const WmoPixelMaterialInput &input) noexcept {
                                            input.diffuse_texture[channel]) *
                                               input.vertex_alpha
                                     : input.diffuse_texture[channel];
-    const float diffuse = 2.0f * input.lit_vertex_color[channel] * texture_color;
+    const float base = input.lit_vertex_color[channel] * texture_color;
+    const float diffuse = input.interior_self_illumination
+        ? SaturateWmo(base * (1.0f + 4.0f * input.vertex_alpha)) : base;
     float environment = 0.0f;
     if (input.shader == data::wmo::kShaderEnv) {
       environment = input.diffuse_texture[3] * input.environment_texture[channel];
@@ -134,9 +127,9 @@ EvaluateRetailWmoPixelMaterial(const WmoPixelMaterialInput &input) noexcept {
     output[channel] = diffuse + environment + separate;
   }
 
-  output[3] = input.shader == data::wmo::kShaderDiffuse
-                  ? input.vertex_alpha * input.diffuse_texture[3]
-                  : input.vertex_alpha;
+  const float coverage = input.shader == data::wmo::kShaderOpaque
+      ? 1.0f : input.diffuse_texture[3];
+  output[3] = coverage * (input.transition_blend ? input.vertex_alpha : 1.0f);
   return output;
 }
 

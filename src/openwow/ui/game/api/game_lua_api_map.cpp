@@ -568,39 +568,28 @@ int LuaGetZoneText(lua_State* L) {
 int LuaGetZonePVPInfo(lua_State* L) {
   const auto* const dbc = GetDbcLoader(L);
   auto* const session = GetWorldSession(L);
-  if (dbc == nullptr || session == nullptr) {
-    return 0;
+  openwow::game::ZonePvPInfo result;
+  if (dbc != nullptr && session != nullptr) {
+    result = openwow::game::ResolveClassicZonePvpInfo(
+        *dbc, session->objects().GetActivePlayer(),
+        session->objects().GetZoneId(), session->objects().GetAreaId());
   }
 
-  const auto selected_realm =
-      openwow::net::ClientServices::Instance().GetSelectedRealmScriptMetadata();
-  const auto result = openwow::game::ResolveRetailZonePvpInfo(
-      *dbc,
-      session->objects().GetActivePlayer(),
-      session->objects().GetZoneId(),
-      session->objects().GetAreaId(),
-      selected_realm.has_value() && selected_realm->is_pvp_flag);
-  if (!result.available) {
-    return 0;
+  // Vanilla/Turtle ABI: pvpType, factionName, isArena (always three slots).
+  if (result.available) {
+    const char* type = "contested";
+    if (result.type == openwow::game::ZonePvPType::Friendly) type = "friendly";
+    if (result.type == openwow::game::ZonePvPType::Hostile) type = "hostile";
+    lua_pushstring(L, type);
+  } else {
+    lua_pushnil(L);
   }
-
-  const char* type = "contested";
-  switch (result.type) {
-    case openwow::game::ZonePvPType::Friendly: type = "friendly"; break;
-    case openwow::game::ZonePvPType::Hostile: type = "hostile"; break;
-    case openwow::game::ZonePvPType::Contested: break;
-    case openwow::game::ZonePvPType::Sanctuary: type = "sanctuary"; break;
-    case openwow::game::ZonePvPType::FFA: type = "arena"; break;
-    case openwow::game::ZonePvPType::Combat: type = "combat"; break;
+  if (result.available && result.has_faction_name) {
+    lua_pushlstring(L, result.faction_name.data(), result.faction_name.size());
+  } else {
+    lua_pushnil(L);
   }
-
-  lua_pushstring(L, type);
-  lua_pushwowbool(L, result.is_sub_zone_pvp);
-  if (!result.has_faction_name) {
-    return 2;
-  }
-
-  lua_pushlstring(L, result.faction_name.data(), result.faction_name.size());
+  lua_pushwowbool(L, result.is_arena);
   return 3;
 }
 

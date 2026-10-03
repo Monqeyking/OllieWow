@@ -58,7 +58,8 @@ public:
     static std::optional<DecodedTexture> LoadFromVFS(
         const openwow::vfs::VirtualFileSystem& vfs, const std::string& path);
 
-    static DecodedTexture DecompressToRGBA8(const DecodedTexture& tex);
+    // max_mips == 0 decodeert alle mips; anders alleen de eerste max_mips.
+    static DecodedTexture DecompressToRGBA8(const DecodedTexture& tex, size_t max_mips = 0);
 
 private:
     static bool DecodePalettized(const BLPHeader& header, const uint8_t* data,

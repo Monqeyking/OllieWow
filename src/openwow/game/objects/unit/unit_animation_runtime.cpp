@@ -77,6 +77,50 @@ bool MoveTraceEnabled() {
   return enabled;
 }
 
+bool AnimationTraceEnabled() {
+  static const bool enabled = [] {
+    const char *value = std::getenv("OPENWOW_ANIMATION_TRACE");
+    return value != nullptr && value[0] != '\0' && std::strcmp(value, "0") != 0;
+  }();
+  return enabled || MoveTraceEnabled();
+}
+
+void TraceCastPlayback(const CGUnit_C &unit, const std::uint16_t requested,
+                       const char *phase) {
+  static std::uint32_t budget = 0u;
+  if (!AnimationTraceEnabled() || budget >= 96u || requested < 51u || requested > 54u) return;
+  ++budget;
+  const auto &request = unit.Animation().GetPlaybackRequest();
+  diagnostics::Log(diagnostics::LogLevel::kInfo,
+      "AnimationTrace: cast owner=" + std::to_string(unit.GetGuid().GetRawValue()) +
+      " phase=" + phase + " requested=" + std::to_string(requested) +
+      " resolved=" + std::to_string(unit.Animation().ResolveAnimationId(requested)) +
+      " primary=" + std::to_string(request.animation_id) +
+      " base=" + std::to_string(request.base_animation_id) +
+      " serial=" + std::to_string(request.serial) +
+      " binding=" + std::to_string(unit.GetPrimaryM2InstanceId()));
+}
+
+void TraceWoundState(const CGUnit_C &unit, const char *reason) {
+  static std::uint32_t budget = 0u;
+  if (!AnimationTraceEnabled() || budget >= 96u) return;
+  ++budget;
+  const auto &primary = unit.Animation().GetPlaybackRequest();
+  const auto &secondary = unit.Animation().GetWoundRequest();
+  diagnostics::Log(diagnostics::LogLevel::kInfo,
+      "WoundTrace: owner=" + std::to_string(unit.GetGuid().GetRawValue()) +
+      " reason=" + reason + " base=" + std::to_string(primary.base_animation_id) +
+      " primary=" + std::to_string(primary.animation_id) +
+      " resolved=" + std::to_string(unit.Animation().GetResolvedPlaybackAnimationId()) +
+      " serial=" + std::to_string(primary.serial) +
+      " secondary=" + std::to_string(secondary.animation_id) +
+      " secondary_serial=" + std::to_string(secondary.serial) +
+      " active=" + std::to_string(secondary.active) +
+      " masked=" + std::to_string(secondary.masked) +
+      " binding=" + std::to_string(unit.GetPrimaryM2InstanceId()) +
+      " completion=primary-only");
+}
+
 void TraceMovementSelection(const CGUnit_C &unit, const std::uint32_t previous_flags,
                             const std::uint32_t current_flags,
                             const std::uint16_t requested_animation,
@@ -211,7 +255,8 @@ constexpr std::uint32_t kBaseAnimationStateMask = 0x70u;
 constexpr std::uint32_t kStandAnimationCustomRequestId = 15u;
 constexpr std::uint8_t kTransitionStandStateId = 9u;
 
-constexpr std::uint32_t kUnitFieldFlagsInCombat = 0x00000800u;
+// Local Vanilla Source/src/game/Objects/UnitDefines.h: UNIT_FLAG_IN_COMBAT.
+constexpr std::uint32_t kUnitFieldFlagsInCombat = 0x00080000u;
 
 constexpr std::uint8_t kStandStateSitGround = 1u;
 constexpr std::uint8_t kStandStateSleep = 3u;
@@ -855,6 +900,14 @@ void UnitAnimationRuntime::ProcessGroundContactAnimationEvent(
   (void)CEffect_C::AddEffect(session, create_info);
 }
 
+bool UnitAnimationRuntime::IsRenderedPlaybackSource(const std::uint32_t instance_id,
+    const std::uint64_t serial, const std::uint16_t animation_id) const noexcept {
+  return rendered_playback_serial_ != 0u && serial == rendered_playback_serial_ &&
+      instance_id != 0u && instance_id == rendered_playback_instance_ &&
+      instance_id == owner_.GetPrimaryM2InstanceId() &&
+      animation_id == rendered_playback_animation_;
+}
+
 void UnitAnimationRuntime::HandleAnimationEvent(WorldSession& session,
                                     std::uint32_t event_type,
                                     std::uint32_t fourcc,
@@ -919,6 +972,14 @@ void UnitAnimationRuntime::HandleAnimationEvent(WorldSession& session,
 
   if (event.route == UnitAnimationEventRoute::kSpellContact) {
     owner_.SpellVisuals().RecordAnimHitPosition(position);
+    if (position != nullptr && rendered_playback_serial_ != 0u &&
+        rendered_playback_instance_ == owner_.GetPrimaryM2InstanceId()) {
+      owner_.SpellVisuals().ReleasePendingMissiles(session, core::GameClock::GetTickCount32(),
+          {position[0], position[1], position[2]},
+          fourcc == 0x4C534324u ? "$CSL" :
+          (fourcc == 0x52534324u ? "$CSR" : "$CST"),
+          rendered_playback_serial_, rendered_playback_animation_);
+    }
     return;
   }
 
@@ -970,6 +1031,12 @@ void UnitAnimationRuntime::HandleAnimationEvent(WorldSession& session,
     }
     const auto resolved_position = ResolveWeaponContactPosition(owner_, position);
     owner_.SpellVisuals().RecordAnimHitPosition(resolved_position.data());
+    if (rendered_playback_serial_ != 0u &&
+        rendered_playback_instance_ == owner_.GetPrimaryM2InstanceId()) {
+      owner_.SpellVisuals().ReleasePendingMissiles(session, core::GameClock::GetTickCount32(),
+          resolved_position, "$BWR", rendered_playback_serial_,
+          rendered_playback_animation_);
+    }
     return;
   }
 
@@ -1789,6 +1856,10 @@ bool UnitAnimationRuntime::RequestPlayback(const std::uint16_t animation_id,
   // swing as soon as the next movement update arrives.
   if (!rider_substituted && playback_request_.upper_body_only &&
       IsLocomotionAnimationId(submit_row)) {
+    if (playback_request_.base_animation_id != submit_row &&
+        wound_request_.EvictForPrimaryRearm(false, false)) {
+      TraceWoundState(owner_, "base-rearm");
+    }
     playback_request_.base_animation_id = submit_row;
     playback_request_.base_looping = looping;
     playback_request_.base_bypass_alias_resolution = bypass_alias_resolution;
@@ -1828,6 +1899,9 @@ void UnitAnimationRuntime::CommitPlaybackRequest(
     const bool upper_body_only, const bool bypass_alias_resolution,
     const bool zero_blend) {
 
+  if (wound_request_.EvictForPrimaryRearm(upper_body_only, zero_blend)) {
+    TraceWoundState(owner_, "same-bone-rearm");
+  }
   const std::uint16_t previous_base_row = playback_request_.base_animation_id;
   const bool previous_base_looping = playback_request_.base_looping;
   const std::uint16_t previous_row = playback_request_.animation_id;
@@ -1865,6 +1939,7 @@ void UnitAnimationRuntime::CommitPlaybackRequest(
   }
 
   current_anim_group_ = animation_id;
+  TraceCastPlayback(owner_, animation_id, "commit");
 }
 
 void UnitAnimationRuntime::ApplySubmitFunnelFlagBits(
@@ -2167,57 +2242,41 @@ void UnitAnimationRuntime::ApplyAttackerStateRecordToVictim(
 
 void UnitAnimationRuntime::PlayWoundReaction(const WorldSession &session,
                                              const bool critical) {
-  if (IsEmoteAnimationStateBlocked() || !IsPrimaryM2ModelStreamedFor(owner_) ||
-      IsAnimationUpdateSuppressed()) {
-    return;
-  }
-  const bool has_key_bone_channel = animation_bone_index_ != -1;
-  std::uint16_t group = render::AnimId::kStandWound;
-  bool upper_channel = has_key_bone_channel;
-  if (critical) {
-    group = render::AnimId::kCombatCritical;
-  } else if (owner_.Interaction().HasCachedUpdateTarget()) {
-    group = render::AnimId::kCombatWound;
-  } else {
-    const auto &movement_info = owner_.GetMovementInfo();
-    const std::uint8_t stand_state = GetStandState();
-    const bool idle_standing =
-        owner_.GetUInt32(UNIT_FIELD_MOUNTDISPLAYID) == 0u &&
-        (movement_info.flags & kWoundIdleStandingMovementMask) == 0u &&
-        !MatchesSplineAwareMovementGate(
-            movement_info, GetActiveMovementSpline(session, owner_),
-            kMoveFlagHover) &&
-        stand_state != kStandStateSitGround &&
-        (stand_state < kStandStateSitChairLow ||
-         stand_state > kStandStateSitChairHigh) &&
-        ResolveAnimationBehaviorId(owner_, playback_request_.base_animation_id) !=
-            kSitGroundUpBehaviorId;
-    if (idle_standing) {
-      upper_channel = false;
-    }
-  }
-
-  if (upper_channel == has_key_bone_channel) {
-    const std::uint16_t base_row = playback_request_.base_animation_id;
-    const std::uint32_t base_behavior =
-        base_row == kNoAnimationRow ? kInvalidAnimationBehaviorId
-                                    : ResolveAnimationBehaviorId(owner_, base_row);
-    if (base_row == render::AnimId::kStand ||
-        (base_behavior >= 0x19u && base_behavior <= 0x1Du)) {
-      upper_channel = false;
-    }
-  }
-  const std::uint32_t resolved =
-      ResolveAnimationId(group, owner_.GetPrimaryM2InstanceId());
-  if (resolved >= kInvalidUnitAnimationId ||
-      !PrimaryM2ModelContainsAnimation(owner_, resolved)) {
-    return;
-  }
-  SubmitRawPlayback(static_cast<std::uint16_t>(resolved), false,
-                    upper_channel && has_key_bone_channel,
-                    true);
+  PlayWoundAnimation(session, render::SelectMeleeWound(
+      critical, owner_.Interaction().HasCachedUpdateTarget()));
 }
 
+void UnitAnimationRuntime::PlayWoundAnimation(const WorldSession &session,
+                                             const std::uint16_t group) {
+  if (owner_.State().IsDead() || GetStandState() == kStandStateDead ||
+      IsEmoteAnimationStateBlocked() || !IsPrimaryM2ModelStreamedFor(owner_) ||
+      IsAnimationUpdateSuppressed()) return;
+
+  const auto &movement_info = owner_.GetMovementInfo();
+  const auto stand_state = GetStandState();
+  const bool idle_standing =
+      owner_.GetUInt32(UNIT_FIELD_MOUNTDISPLAYID) == 0u &&
+      (movement_info.flags & kWoundIdleStandingMovementMask) == 0u &&
+      !MatchesSplineAwareMovementGate(movement_info,
+          GetActiveMovementSpline(session, owner_), kMoveFlagHover) &&
+      stand_state != kStandStateSitGround &&
+      (stand_state < kStandStateSitChairLow || stand_state > kStandStateSitChairHigh) &&
+      ResolveAnimationBehaviorId(owner_, playback_request_.base_animation_id) !=
+          kSitGroundUpBehaviorId;
+  const auto base_row = GetResolvedBasePlaybackAnimationId();
+  const auto base_behavior = base_row == kNoAnimationRow
+      ? kInvalidAnimationBehaviorId : ResolveAnimationBehaviorId(owner_, base_row);
+  const bool masked = animation_bone_index_ != -1 &&
+      !render::WoundFullBody(group, base_behavior, idle_standing);
+  const auto resolved = ResolveAnimationId(group, owner_.GetPrimaryM2InstanceId());
+  if (resolved >= kInvalidUnitAnimationId ||
+      !PrimaryM2ModelContainsAnimation(owner_, resolved)) return;
+  const auto duration = ResolveAnimationDurationMs(group);
+  // The secondary owns neither the primary serial nor its completion route.
+  if (wound_request_.Trigger(static_cast<std::uint16_t>(resolved), duration, masked, false)) {
+    TraceWoundState(owner_, "trigger");
+  }
+}
 void UnitAnimationRuntime::PlayMeleeContactReaction(
     const WorldSession &session, const std::uint8_t victim_state,
     const std::uint32_t damage, const std::uint32_t hit_info) {
@@ -2400,8 +2459,10 @@ void UnitAnimationRuntime::HandlePlaybackCompletion(
 
   if (playback_request_.serial != request_serial ||
       playback_request_.animation_id != animation_id) {
+    TraceWoundState(owner_, "stale-primary-completion");
     return;
   }
+  TraceWoundState(owner_, "accepted-primary-completion");
 
   if (pending_protected_playback_.has_value() &&
       !IsLoopingCombatAnimationBehavior(
@@ -2658,6 +2719,7 @@ void UnitAnimationRuntime::ApplySelectedStandAnimation(
 
   if (!IsPrimaryM2ModelStreamedFor(owner_)) {
     pending_deferred_animation_id_ = static_cast<std::int32_t>(animation_id);
+    TraceCastPlayback(owner_, animation_id, "pending-selected-stand");
     return;
   }
   pending_deferred_animation_id_ = -1;
@@ -3051,7 +3113,8 @@ void UnitAnimationRuntime::ApplySpellVisualKitAnimation(
 
   if (behavior >= 8u && behavior <= 10u) {
 
-    PlayWoundReaction(session, body_animation_id == 10u);
+    // The kit already selected its wound row; do not reselect melee severity.
+    PlayWoundAnimation(session, static_cast<std::uint16_t>(body_animation_id));
     return;
   }
 
@@ -3290,6 +3353,7 @@ void UnitAnimationRuntime::PlayEmoteAnimation(std::int32_t emote_anim_id,
 
   if (!IsPrimaryM2ModelStreamedFor(owner_)) {
     pending_deferred_animation_id_ = emote_anim_id;
+    TraceCastPlayback(owner_, static_cast<std::uint16_t>(emote_anim_id), "pending-model");
     return;
   }
 

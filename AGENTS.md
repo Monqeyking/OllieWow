@@ -12,6 +12,13 @@ de lokale Turtle-data.
 
 ## Doelruntime versus bestaande implementatie
 
+- Projectuitgangspunt, bevestigd door de projectbeheerder: de Turtle-server is
+  qua serverlogica identiek aan Vanilla. Turtle is een heavily modded
+  Vanilla-project, geen andere basisruntime. Custom content en uitbreidingen
+  zijn op zichzelf geen bewijs voor afwijkende Vanilla-serverlogica.
+  Gebruik Vanilla-logica als uitgangspunt en onderbouw concrete lokale
+  uitbreidingen met de lokale Client- en Source-bronnen; behoud de bestaande
+  bronprioriteit en neem geen WotLK-semantiek over.
 - De doelclient en doelserver zijn Vanilla/Classic/Turtle. De lokale Client-
   XML/Lua beschrijft daarom het gewenste gedrag; OpenWow's oorspronkelijke
   3.3.5/WotLK-gedrag is technische erfenis en geen nieuw contract.
@@ -30,6 +37,11 @@ de lokale Turtle-data.
 
 ## Bronprioriteit
 
+Actuele Benilla-bronlocatie, opgegeven door de projectbeheerder:
+`D:\OllieWoW\Experiments\Benilla`. Gebruik deze checkout voor nieuwe
+vergelijkingen. Controleer beschikbaarheid en revisie vóór bronclaims; als dit
+pad niet bereikbaar is, meld dat en val niet stilzwijgend terug op de oude checkout.
+
 Gebruik bij twijfel deze volgorde:
 
 1. Lokale client-XML en Lua onder `D:\OllieWoW\Client` voor UI-flow,
@@ -37,7 +49,7 @@ Gebruik bij twijfel deze volgorde:
    texcoords.
 2. Lokale serverbron onder `D:\OllieWoW\Source` voor DBC-schema’s,
    Classic-velden, packetstructuren, objecttypes en servergedrag.
-3. `D:\OllieWoW\benilla` als Vanilla/Turtle-referentie voor ontbrekende
+3. `D:\OllieWoW\Experiments\Benilla` als Vanilla/Turtle-referentie voor ontbrekende
    client-render- en glue-logica.
 4. Bestaande OpenWow-code als implementatiebasis, alleen waar die de lokale
    clientcontracten nog niet correct ondersteunt.
@@ -78,7 +90,7 @@ het waargenomen runtimegedrag:
    objecttypes, character-enumeratie en server-side validatie. Gebruik deze
    bron niet als bewijs voor een UI-widgetcontract wanneer de lokale client
    iets anders vraagt.
-3. `D:\OllieWoW\benilla` is de Vanilla/Turtle-referentie voor ontbrekende
+3. `D:\OllieWoW\Experiments\Benilla` is de Vanilla/Turtle-referentie voor ontbrekende
    client-side glue-, model- en renderlogica. Benoem expliciet wanneer Benilla
    als referentie wordt gebruikt en controleer daarna of het lokale XML/Lua- en
    servercontract ermee overeenkomt.

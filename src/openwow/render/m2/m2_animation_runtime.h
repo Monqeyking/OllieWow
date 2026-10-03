@@ -6,6 +6,8 @@
 #include "openwow/render/m2/m2_spatial_queries.h"
 #include "openwow/runtime/scheduling/frame_job_system.h"
 
+#include <unordered_map>
+#include <unordered_set>
 #include <cstdint>
 #include <functional>
 #include <mutex>
@@ -72,6 +74,9 @@ public:
       std::uint32_t instance_id, std::uint32_t slot_index,
       std::uint32_t animation_id, std::uint32_t time_ms, float speed,
       bool zero_blend = false);
+  [[nodiscard]] M2ResultStatus SetWoundSample(
+      std::uint32_t instance_id, std::uint32_t animation_id,
+      std::uint32_t time_ms, float weight, std::uint32_t keybone_slot);
   [[nodiscard]] M2ResultStatus SetAnimationSlotTimes(
       std::uint32_t instance_id, std::span<const std::uint32_t> slot_indices,
       std::uint32_t time_ms);
@@ -164,6 +169,12 @@ private:
   M2SequenceStreamer &sequence_streamer_;
 
   M2SequenceStreamer::ResumePending resume_pending_sequence_loads_;
+
+  // Per model: de instanties die op een nog niet geladen animatiesequentie wachten.
+  // ResumePendingAnimationsLocked liep voorheen bij elke afgeronde sequence-load over
+  // ALLE instanties (~27.000 in Stormwind, 48% van de main thread).
+  std::unordered_map<std::uint32_t, std::unordered_set<std::uint32_t>>
+      pending_instances_by_model_;
 
   core::FrameJobSystem *frame_job_system_{nullptr};
 

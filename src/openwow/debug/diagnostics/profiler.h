@@ -44,6 +44,8 @@ class Profiler {
 
   bool BeginScope(const std::string& name);
   void EndScope();
+  // Voegt een reeds gemeten duur toe (bijv. de som over een lus).
+  void AddSample(const std::string& name, float milliseconds);
 
   [[nodiscard]] ProfilerStats GetScopeStats(const std::string& name) const;
   [[nodiscard]] std::vector<std::string> GetScopeNames() const;

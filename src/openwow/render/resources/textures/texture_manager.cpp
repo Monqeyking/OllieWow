@@ -21,6 +21,7 @@
 #include <limits>
 #include <mutex>
 #include <optional>
+#include <thread>
 #include <type_traits>
 #include <utility>
 
@@ -1198,12 +1199,18 @@ void TextureManager::EnsureAsyncWorkersLocked() {
     return;
   }
   auto workers = std::make_unique<openwow::core::ThreadPoolSystem>();
-  workers->Initialize(2u);
+  // Vroeger vast 2. Op een machine met veel cores blijft de decode/MPQ-read
+  // dan een flessenhals zodra de wachtrij vol loopt (256 verzoeken).
+  const std::uint32_t hardware_threads = std::thread::hardware_concurrency();
+  workers->Initialize(std::clamp<std::uint32_t>(hardware_threads / 4u, 2u, 6u));
   async_workers_ = std::move(workers);
 }
 
 std::size_t TextureManager::PumpPreparedUploads(
-    const std::size_t max_uploads) {
+    const std::size_t max_uploads,
+    const std::chrono::microseconds time_budget) {
+  const auto pump_deadline = std::chrono::steady_clock::now() + time_budget;
+  const bool has_time_budget = time_budget > std::chrono::microseconds::zero();
   std::shared_ptr<AsyncState> state;
   {
     std::lock_guard lock(cache_mutex_);
@@ -1222,6 +1229,10 @@ std::size_t TextureManager::PumpPreparedUploads(
 
   std::size_t committed = 0u;
   for (std::size_t index = 0u; index < max_uploads; ++index) {
+    if (has_time_budget && index > 0u &&
+        std::chrono::steady_clock::now() >= pump_deadline) {
+      break;
+    }
     std::optional<PreparedTextureUpload> ready;
     TextureLoadFailurePolicy failure_policy =
         TextureLoadFailurePolicy::kStrict;
@@ -1281,9 +1292,17 @@ std::size_t TextureManager::PumpPreparedUploads(
 
 TextureManagerStreamingStats TextureManager::StreamingStats() const {
   std::shared_ptr<AsyncState> state;
+  std::uint32_t workers = 0u;
+  std::uint32_t running_workers = 0u;
+  std::uint32_t queued_workers = 0u;
   {
     std::lock_guard lock(cache_mutex_);
     state = async_state_;
+    if (async_workers_ != nullptr) {
+      workers = async_workers_->GetThreadCount();
+      running_workers = async_workers_->GetRunningCount();
+      queued_workers = async_workers_->GetQueueSize();
+    }
   }
   std::size_t pending = 0u;
   std::size_t prepared = 0u;
@@ -1298,6 +1317,9 @@ TextureManagerStreamingStats TextureManager::StreamingStats() const {
       .failed = source_rows_ != nullptr
                     ? source_rows_->TerminalFailureCount()
                     : 0u,
+      .workers = workers,
+      .running_workers = running_workers,
+      .queued_workers = queued_workers,
   };
 }
 

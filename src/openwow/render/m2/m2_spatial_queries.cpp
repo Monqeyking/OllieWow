@@ -364,7 +364,8 @@ const std::vector<float>* SampleM2InstanceBoneMatricesCached(
   if (!animator.ComputeLayeredBoneMatricesInto(
           &cache.bone_matrices, animation_index, animation_time_ms,
           instance.animation_slots, blend_source, blend_source_time_ms,
-          blend_factor, camera_inverse_view, instance.bone_basis_overrides)) {
+          blend_factor, camera_inverse_view, instance.bone_basis_overrides,
+          instance.wound_sample_pending ? nullptr : &instance.wound_sample)) {
     cache.valid = false;
     return nullptr;
   }
@@ -411,7 +412,8 @@ std::optional<RenderMatrix4x4> SampleM2InstanceAttachmentBoneMatrix(
   auto single = animator.ComputeSingleBoneMatrix(
       bone_index, animation_index, animation_time_ms, instance.animation_slots,
       blend_source, blend_source_time_ms, instance.PoseBlendFactor(),
-      std::nullopt, instance.bone_basis_overrides);
+      std::nullopt, instance.bone_basis_overrides,
+      instance.wound_sample_pending ? nullptr : &instance.wound_sample);
   if (single.has_value()) {
     return single;
   }

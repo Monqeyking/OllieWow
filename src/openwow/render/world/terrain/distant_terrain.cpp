@@ -1,6 +1,7 @@
 
 #include "openwow/render/world/terrain/distant_terrain.h"
 #include "openwow/render/resources/shaders/shader_registry.h"
+#include "openwow/debug/diagnostics/profiler.h"
 #include "openwow/foundation/diagnostics/logging.h"
 
 #include <algorithm>
@@ -161,6 +162,7 @@ void DistantTerrainRenderer::LoadWdl(const openwow::data::terrain::WdlFile &wdl)
   maho_indices.reserve(tile_count * 16u * 16u * 12u);
 
   int count = 0;
+  openwow::debug::Profiler::Get().BeginScope("ow.dt.wdl_mesh_build");
   for (int ty = 0; ty < 64; ++ty) {
     for (int tx = 0; tx < 64; ++tx) {
       const auto *heights = wdl.tile_heights[ty][tx];
@@ -200,6 +202,8 @@ void DistantTerrainRenderer::LoadWdl(const openwow::data::terrain::WdlFile &wdl)
       ++count;
     }
   }
+
+  openwow::debug::Profiler::Get().EndScope();
 
   if (positions.empty() || (indices.empty() && maho_indices.empty())) {
     openwow::diagnostics::Log(openwow::diagnostics::LogLevel::kInfo,

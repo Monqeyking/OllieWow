@@ -20,7 +20,9 @@
 #include <deque>
 #include <functional>
 #include <limits>
+#include <chrono>
 #include <map>
+#include <mutex>
 #include <memory>
 #include <queue>
 #include <span>
@@ -446,6 +448,37 @@ private:
   std::unordered_map<std::uint64_t, std::vector<std::uint32_t>>
       tile_referenced_uids_;
   std::uint64_t collision_revision_{1};
+
+  // Ruimtelijke voor-index voor VisitCollisionTriangles. Zonder index doorzocht elke
+  // grondvraag (tientallen per frame) ALLE instanties van alle geladen tiles. De index
+  // is alleen een kandidatenfilter: elke kandidaat gaat daarna door dezelfde exacte
+  // controle als voorheen, dus de index verandert nooit een uitkomst, alleen de snelheid.
+  struct CollisionIndexEntry {
+    bool wmo{false};
+    std::uint64_t owner_key{0u};
+    std::uint32_t index{0u};
+    [[nodiscard]] bool operator<(const CollisionIndexEntry &o) const noexcept {
+      if (wmo != o.wmo) return wmo < o.wmo;
+      if (owner_key != o.owner_key) return owner_key < o.owner_key;
+      return index < o.index;
+    }
+    [[nodiscard]] bool operator==(const CollisionIndexEntry &o) const noexcept {
+      return wmo == o.wmo && owner_key == o.owner_key && index == o.index;
+    }
+  };
+  struct CollisionIndex {
+    bool valid{false};
+    std::uint64_t fingerprint{0u};
+    std::chrono::steady_clock::time_point built{};
+    std::unordered_map<std::uint64_t, std::vector<CollisionIndexEntry>> cells;
+    std::vector<CollisionIndexEntry> always;
+  };
+  mutable std::mutex collision_index_mutex_;
+  mutable CollisionIndex collision_index_;
+  std::uint64_t doodad_index_epoch_{1};
+  mutable bool collision_index_bypass_{false};
+  [[nodiscard]] std::uint64_t CollisionIndexFingerprint() const;
+  void RebuildCollisionIndexLocked(std::uint64_t fingerprint) const;
   std::function<void(const WmoDoodadM2PresentationEvent&)>
       wmo_doodad_m2_event_sink_;
   std::array<std::vector<QueuedDoodadDraw>, 64> render_buckets_;

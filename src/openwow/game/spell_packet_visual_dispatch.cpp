@@ -12,6 +12,8 @@
 #include "openwow/game/spell_visual.h"
 #include "openwow/game/spell_visual_system.h"
 #include "openwow/game/world_session.h"
+#include "openwow/runtime/time/game_clock.h"
+#include "openwow/render/m2/m2_system.h"
 
 #include <algorithm>
 #include <limits>
@@ -322,7 +324,8 @@ std::array<float, 3> ResolveMissileLaunchPosition(
 }
 
 std::array<float, 3> ResolveMissileImpactPosition(
-    const CGUnit_C& target, const data::dbc::SpellVisualEntry& visual) {
+    const CGUnit_C& target, const data::dbc::SpellVisualEntry& visual,
+    std::array<float, 3>* fallback_offset) {
 
   const render::RenderVec3 offset{
       visual.missile_impact_offset_x,
@@ -337,22 +340,41 @@ std::array<float, 3> ResolveMissileImpactPosition(
   if (target.Presentation().GetMappedAttachmentPosition(
           position.data(), attachment, offset,
           (visual.flags & 0x200u) != 0u)) {
+    if (fallback_offset != nullptr) {
+      const auto base = target.GetPosition();
+      std::array<float, 3> sampled_root{base.x, base.y, base.z};
+      if (auto* m2 = target.m2_system(); m2 != nullptr) {
+        const auto root = m2->QueryModelWorldTransformMatrix(target.GetPrimaryM2InstanceId());
+        if (root.status == render::m2::M2ResultStatus::kReady)
+          sampled_root = {root.matrix[12], root.matrix[13], root.matrix[14]};
+      }
+      // Subtract the SAME stored root used to produce the attachment sample.
+      // Mixing that sample with an already-moved unit base would bake root
+      // translation lag into the retained target-relative fallback offset.
+      *fallback_offset = {position[0] - sampled_root[0], position[1] - sampled_root[1],
+                          position[2] - sampled_root[2]};
+    }
     return position;
   }
 
   const auto base = target.GetPosition();
-  return {base.x + offset[0], base.y + offset[1],
-          base.z + target.Presentation().ModelHeight() * 0.75f + offset[2]};
+  const std::array<float, 3> relative{offset[0], offset[1],
+      target.Presentation().ModelHeight() * 0.75f + offset[2]};
+  if (fallback_offset != nullptr) *fallback_offset = relative;
+  return {base.x + relative[0], base.y + relative[1], base.z + relative[2]};
 }
 
 std::array<float, 3> ResolveMissileImpactPosition(
-    const CGObject_C& target, const data::dbc::SpellVisualEntry& visual) {
+    const CGObject_C& target, const data::dbc::SpellVisualEntry& visual,
+    std::array<float, 3>* fallback_offset = nullptr) {
   if (target.IsUnit()) {
     return ResolveMissileImpactPosition(
-        static_cast<const CGUnit_C&>(target), visual);
+        static_cast<const CGUnit_C&>(target), visual, fallback_offset);
   }
 
   const auto base = target.GetPosition();
+  if (fallback_offset != nullptr) *fallback_offset = {visual.missile_impact_offset_x,
+      -visual.missile_impact_offset_y, visual.missile_impact_offset_z};
   return {
       base.x + visual.missile_impact_offset_x,
       base.y - visual.missile_impact_offset_y,
@@ -443,8 +465,16 @@ void QueueSpellGoVisual(
   }
   if (!resolved.visual.has_value()) return;
 
+  const auto go_tick = core::GameClock::GetTickCount32();
+  const auto prior_cast_request = caster_unit->Animation().GetPlaybackRequest();
   QueueKit(session, *caster_unit, spell_id, resolved.visual_id,
            resolved.visual->cast_kit, 0u);
+  const auto* cast_kit = caster_unit->dbc_loader() != nullptr
+      ? caster_unit->dbc_loader()->spell_visual_kit().LookupEntry(resolved.visual->cast_kit)
+      : nullptr;
+  const auto& cast_request = caster_unit->Animation().GetPlaybackRequest();
+  const bool awaits_release = cast_kit != nullptr && cast_kit->anim_id > 0 &&
+      !cast_request.looping && cast_request.serial != prior_cast_request.serial;
 
   std::vector<std::uint64_t> missile_target_guids;
   std::vector<std::array<float, 3>> missile_target_positions;
@@ -466,6 +496,14 @@ void QueueSpellGoVisual(
 
 
     const float speed = spell != nullptr ? spell->speed : 0.0f;
+    // Spell.cpp::AddUnitTarget bases unit travel delay on the affective object.
+    // The GO missile-caster GUID is the available packet identity: use it when
+    // it resolves to a unit, otherwise the visual caster. Server-only original/
+    // affective-object indirection is not exposed by this presentation context.
+    const auto* timing_caster = session.objects().GetUnit(ObjectGuid{visual_data.missile_caster_guid});
+    if (timing_caster == nullptr) timing_caster = caster_unit;
+    const auto go_caster_base = timing_caster->GetPosition();
+    const std::array<float, 3> go_timing_source{go_caster_base.x, go_caster_base.y, go_caster_base.z};
 
     const auto missile_source =
         ResolveMissileLaunchPosition(*caster_unit, *resolved.visual);
@@ -493,8 +531,26 @@ void QueueSpellGoVisual(
           session.objects().GetObjectByGUID(ObjectGuid{target_guid});
       if (target == nullptr) return false;
 
+      std::array<float, 3> target_fallback_offset{};
       const auto missile_target =
-          ResolveMissileImpactPosition(*target, *resolved.visual);
+          ResolveMissileImpactPosition(*target, *resolved.visual, &target_fallback_offset);
+      std::optional<MissileReleaseClock> unit_go_clock;
+      if (target->IsUnit()) {
+        const auto go_target_base = target->GetPosition();
+        unit_go_clock = MissileReleaseClock::FromUnitGo(go_tick, go_timing_source,
+            {go_target_base.x, go_target_base.y, go_target_base.z}, speed,
+            target->GetGuid() == timing_caster->GetGuid());
+        static unsigned unit_timing_diagnostics = 0;
+        if (unit_timing_diagnostics < 64u) {
+          ++unit_timing_diagnostics;
+          diagnostics::Log(diagnostics::LogLevel::kInfo,
+              "MissileGoTiming: policy=unit-center-min5-floor caster=" + std::to_string(timing_caster->GetGuid().GetRawValue()) +
+              " target=" + std::to_string(target_guid) + " spell=" + std::to_string(spell_id) +
+              " go=" + std::to_string(go_tick) + " deadline=" + std::to_string(unit_go_clock->deadline_tick) +
+              " source=" + std::to_string(go_timing_source[0]) + "," + std::to_string(go_timing_source[1]) + "," + std::to_string(go_timing_source[2]) +
+              " target_center=" + std::to_string(go_target_base.x) + "," + std::to_string(go_target_base.y) + "," + std::to_string(go_target_base.z));
+        }
+      }
       const auto* const miss = find_miss(target_guid);
       const bool reflected =
           miss != nullptr && miss->reason == kSpellMissReflect;
@@ -518,7 +574,8 @@ void QueueSpellGoVisual(
               ? successful_impact_kit
               : (reflected ? reflected_impact_kit : 0u),
           miss != nullptr ? miss->reason : 0u,
-          miss != nullptr ? miss->reflect_result : 0u);
+          miss != nullptr ? miss->reflect_result : 0u, go_tick, awaits_release,
+          unit_go_clock, target_fallback_offset);
       missile_target_guids.push_back(target_guid);
       return true;
     };
@@ -532,7 +589,8 @@ void QueueSpellGoVisual(
       caster_unit->SpellVisuals().QueueMissileVisual(
           spell_id, resolved.visual_id, *missile_definition,
           visual_data.missile_caster_guid, visual_data.cast_count, 0u,
-          missile_source, target_position, speed, resolved.visual->impact_kit);
+          missile_source, target_position, speed, resolved.visual->impact_kit,
+          0u, 0u, go_tick, awaits_release);
       missile_target_positions.push_back(target_position);
       return true;
     };
@@ -545,6 +603,12 @@ void QueueSpellGoVisual(
     for (const auto& extra : visual_data.extra_targets) {
       (void)queue_position_target(
           {extra.world_x, extra.world_y, extra.world_z});
+    }
+    for (const auto target : hit_targets) {
+      (void)queue_guid_target(target.GetRawValue());
+    }
+    for (const auto& miss : visual_data.miss_targets) {
+      (void)queue_guid_target(miss.guid);
     }
 
   }

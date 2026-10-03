@@ -3,6 +3,7 @@
 #include "openwow/render/m2/m2_public_types.h"
 #include "openwow/render/m2/m2_shaders.h"
 #include "openwow/render/m2/m2_skin_geometry.h"
+#include "openwow/render/resources/textures/world_sampler_quality.h"
 #include "openwow/foundation/diagnostics/logging.h"
 
 #include <algorithm>
@@ -351,10 +352,12 @@ M2ResultStatus M2SkinnedMesh::SubmitSkinnedBatch(
   UploadPackedBatchUniforms(draw, uniforms, selection.reads_lighting_uniforms);
 
   if (uniforms.combiner_mode[2] > 0.5f) {
-    draw.setTexture(0, shader.s_tex0, texture0, sampler_flags0);
+    draw.setTexture(0, shader.s_tex0, texture0,
+                   sampler_flags0 | WorldSamplerQualityFlags());
   }
   if (uniforms.combiner_mode[2] > 1.5f) {
-    draw.setTexture(1, shader.s_tex1, texture1, sampler_flags1);
+    draw.setTexture(1, shader.s_tex1, texture1,
+                   sampler_flags1 | WorldSamplerQualityFlags());
   }
 
   draw.setState(state);
@@ -402,10 +405,12 @@ M2ResultStatus M2SkinnedMesh::SubmitInstancedBatch(
   UploadPackedBatchUniforms(draw, uniforms, selection.reads_lighting_uniforms);
 
   if (uniforms.combiner_mode[2] > 0.5f) {
-    draw.setTexture(0, shader.s_tex0, texture0, sampler_flags0);
+    draw.setTexture(0, shader.s_tex0, texture0,
+                   sampler_flags0 | WorldSamplerQualityFlags());
   }
   if (uniforms.combiner_mode[2] > 1.5f) {
-    draw.setTexture(1, shader.s_tex1, texture1, sampler_flags1);
+    draw.setTexture(1, shader.s_tex1, texture1,
+                   sampler_flags1 | WorldSamplerQualityFlags());
   }
 
   draw.setState(state);

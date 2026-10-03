@@ -1,5 +1,6 @@
 
 #include "openwow/render/scene/object_renderer.h"
+#include "openwow/debug/diagnostics/profiler.h"
 
 #include "openwow/data/formats/m2/model_path.h"
 #include "openwow/foundation/diagnostics/logging.h"
@@ -27,6 +28,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <exception>
+#include <chrono>
 #include <string>
 #include <string_view>
 
@@ -77,6 +79,14 @@ bool MoveTraceEnabled() {
     return value != nullptr && value[0] != '\0' && std::strcmp(value, "0") != 0;
   }();
   return enabled;
+}
+
+bool AnimationTraceEnabled() {
+  static const bool enabled = [] {
+    const char *value = std::getenv("OPENWOW_ANIMATION_TRACE");
+    return value != nullptr && value[0] != '\0' && std::strcmp(value, "0") != 0;
+  }();
+  return enabled || MoveTraceEnabled();
 }
 
 bool M2DiagEnabled() {
@@ -650,21 +660,56 @@ void ObjectRenderer::ConsumePresentation(ObjectRenderPresentationSnapshot &prese
   mount_renderer_.SyncFromSnapshot(objects);
 }
 
+namespace {
+using UpdateClock = std::chrono::steady_clock;
+
+[[nodiscard]] float UpdateMilliseconds(const UpdateClock::duration span) {
+  return std::chrono::duration<float, std::milli>(span).count();
+}
+
+// Tellers voor de per-frame meting van ObjectRenderer::Update.
+struct UpdatePhaseStats {
+  UpdateClock::duration attachments{};
+  UpdateClock::duration animation_queries{};
+  UpdateClock::duration gameobject_request{};
+  std::size_t gameobject_active{0};
+  std::size_t gameobject_unapplied{0};
+  std::size_t total{0};
+  std::size_t bound{0};
+  std::size_t units{0};
+  std::size_t corpses{0};
+  std::size_t dynamic_objects{0};
+};
+}
+
 void ObjectRenderer::Update(float dt) {
   if (!initialized_)
     return;
 
+  const auto update_started = UpdateClock::now();
   static_cast<void>(m2_system_.PumpAsyncLoading());
 
   PumpCharacterAppearanceCompletions();
   CommitCharacterAppearanceUploads();
   PumpEquipmentTextureCompletions();
   CommitEquipmentTextures();
+  const auto pump_finished = UpdateClock::now();
 
+  UpdatePhaseStats phase;
+  // Gameobject-animaties worden verzameld en na de lus in een batch bijgewerkt,
+  // in plaats van serieel per object (dat nam de globale animatiemutex 100+ keer
+  // per frame en kon niet parallel lopen).
+  std::vector<std::pair<std::uint32_t, decltype(RenderInstance::handle)>>
+      deferred_gameobject_animation;
   int loads_this_frame = 0;
   std::size_t equipment_requests_this_frame = 0u;
-  const auto update_instance = [this, dt, &loads_this_frame,
+  const auto update_instance = [this, dt, &loads_this_frame, &phase, &deferred_gameobject_animation,
                                 &equipment_requests_this_frame](RenderInstance &inst) {
+    ++phase.total;
+    if (inst.m2_instance_id != 0u) ++phase.bound;
+    if (inst.type_id == game::TypeID::kUnit) ++phase.units;
+    else if (inst.type_id == game::TypeID::kCorpse) ++phase.corpses;
+    else if (inst.type_id == game::TypeID::kDynamicObject) ++phase.dynamic_objects;
 
     if (inst.needs_display_resolve &&
         (inst.type_id == game::TypeID::kCorpse || inst.type_id == game::TypeID::kDynamicObject ||
@@ -709,20 +754,26 @@ void ObjectRenderer::Update(float dt) {
         equipment_requests_this_frame < kMaxEquipmentRequestsPerFrame
             ? kMaxEquipmentRequestsPerFrame - equipment_requests_this_frame
             : 0u;
+    const auto attachments_started = UpdateClock::now();
     equipment_requests_this_frame += UpdateModelAttachments(inst, remaining_equipment_requests);
+    phase.attachments += UpdateClock::now() - attachments_started;
 
     ApplyCreatureDisplayOverrides(inst);
     ApplyCharacterAppearance(inst);
     ApplyVisibleSubmeshes(inst);
 
     if (UsesGameObjectM2Animation(inst)) {
+      const auto gameobject_started = UpdateClock::now();
+      ++phase.gameobject_active;
       ApplyGameObjectM2AnimationRequest(inst);
-      if (inst.m2_instance_id != 0u) {
-        const auto animation_status = m2_system_.UpdateAnimation(inst.m2_instance_id, dt);
-        if (m2::IsTerminalM2ResultStatus(animation_status)) {
-          ClearM2Binding(inst);
-        }
+      if (inst.game_object_m2_animation.applied_sync_serial !=
+          inst.game_object_m2_animation.sync_serial) {
+        ++phase.gameobject_unapplied;
       }
+      if (inst.m2_instance_id != 0u) {
+        deferred_gameobject_animation.emplace_back(inst.m2_instance_id, inst.handle);
+      }
+      phase.gameobject_request += UpdateClock::now() - gameobject_started;
       return;
     }
 
@@ -736,6 +787,7 @@ void ObjectRenderer::Update(float dt) {
       return;
     }
 
+    const auto animation_started = UpdateClock::now();
     inst.animation_playback_rate =
         ResolveLocomotionPlaybackRate(m2_system_, inst,
                                       inst.animation.current_anim(),
@@ -748,6 +800,7 @@ void ObjectRenderer::Update(float dt) {
     inst.animation.Update(dt * inst.animation_playback_rate, anim_duration_ms);
     const std::uint32_t animation_time_after =
         inst.animation.current_time_ms();
+    phase.animation_queries += UpdateClock::now() - animation_started;
     if (MoveTraceEnabled() &&
         (inst.type_id == game::TypeID::kPlayer ||
          inst.type_id == game::TypeID::kUnit) &&
@@ -765,6 +818,8 @@ void ObjectRenderer::Update(float dt) {
                   m2_system_, inst, inst.upper_animation.current_anim()));
     }
     ApplyUpperBodyAnimationChannel(inst);
+    inst.wound_secondary.Update(dt);
+    ApplyWoundAnimationChannel(inst);
 
     const bool request_animation_completed =
         inst.unit_animation.upper_body_only
@@ -786,6 +841,7 @@ void ObjectRenderer::Update(float dt) {
     }
   };
 
+  const auto loop_started = UpdateClock::now();
   if (!priority_instance_.guid.IsEmpty()) {
     if (auto priority = instances_.find(priority_instance_); priority != instances_.end()) {
       update_instance(priority->second);
@@ -798,13 +854,65 @@ void ObjectRenderer::Update(float dt) {
     }
     update_instance(inst);
   }
+  const auto loop_finished = UpdateClock::now();
+
+  if (!deferred_gameobject_animation.empty()) {
+    std::vector<std::uint32_t> gameobject_instance_ids;
+    gameobject_instance_ids.reserve(deferred_gameobject_animation.size());
+    for (const auto &entry : deferred_gameobject_animation) {
+      gameobject_instance_ids.push_back(entry.first);
+    }
+    std::vector<std::uint32_t> missing_instance_ids;
+    m2_system_.UpdateAnimations(gameobject_instance_ids, dt, &missing_instance_ids);
+    // Een instantie die niet meer bestaat was eerder een terminale status.
+    for (const std::uint32_t missing : missing_instance_ids) {
+      for (const auto &entry : deferred_gameobject_animation) {
+        if (entry.first != missing) {
+          continue;
+        }
+        if (const auto found = instances_.find(entry.second); found != instances_.end()) {
+          ClearM2Binding(found->second);
+        }
+        break;
+      }
+    }
+  }
+  const auto batch_finished = UpdateClock::now();
 
   if (!attachment_animation_batch_.empty()) {
     m2_system_.UpdateAnimations(attachment_animation_batch_, dt, nullptr);
     attachment_animation_batch_.clear();
   }
 
+  const auto mount_started = UpdateClock::now();
   mount_renderer_.Update(dt);
+  const auto update_finished = UpdateClock::now();
+
+  auto& profiler = openwow::debug::Profiler::Get();
+  profiler.AddSample("ow.obj.pump_loading", UpdateMilliseconds(pump_finished - update_started));
+  profiler.AddSample("ow.obj.instance_loop", UpdateMilliseconds(loop_finished - loop_started));
+  profiler.AddSample("ow.obj.loop_attachments", UpdateMilliseconds(phase.attachments));
+  profiler.AddSample("ow.obj.loop_anim_queries", UpdateMilliseconds(phase.animation_queries));
+  profiler.AddSample("ow.obj.go_request", UpdateMilliseconds(phase.gameobject_request));
+  profiler.AddSample("ow.obj.go_batch_update", UpdateMilliseconds(batch_finished - loop_finished));
+  profiler.AddSample("ow.obj.attachment_batch_mount",
+                     UpdateMilliseconds(update_finished - batch_finished));
+  (void)mount_started;
+
+  static std::uint32_t update_frame_counter = 0u;
+  if (++update_frame_counter % 240u == 0u) {
+    openwow::diagnostics::Log(
+        openwow::diagnostics::LogLevel::kInfo,
+        "ObjectRenderer: instances=" + std::to_string(phase.total) +
+            " model_bound=" + std::to_string(phase.bound) +
+            " units=" + std::to_string(phase.units) +
+            " corpses=" + std::to_string(phase.corpses) +
+            " dynamic=" + std::to_string(phase.dynamic_objects) +
+            " go_active=" + std::to_string(phase.gameobject_active) +
+            " go_unapplied=" + std::to_string(phase.gameobject_unapplied) +
+            " other=" + std::to_string(phase.total - phase.units - phase.corpses -
+                                       phase.dynamic_objects));
+  }
 }
 
 void ObjectRenderer::PrepareVisibleInstances(
@@ -2080,6 +2188,10 @@ void ObjectRenderer::ApplyProjection(RenderInstance &inst, ObjectProjection &&pr
     inst.hand_pose_body_instance_id = 0u;
   }
 
+  // Secondary publication must not enter the primary/base restart funnel.
+  inst.wound_secondary.Synchronize(projection.unit_animation.wound);
+  inst.unit_animation.wound = projection.unit_animation.wound;
+
   inst.handle = projection.handle;
   inst.type_id = projection.type_id;
   std::copy(std::begin(projection.position), std::end(projection.position),
@@ -2365,6 +2477,26 @@ ObjectRenderer::ResolveGameObjectM2AnimationSubstitution(
 }
 
 void ObjectRenderer::ApplyGameObjectM2AnimationRequest(RenderInstance &inst) {
+  // Een verzoek dat niet slaagt (bijv. animatie nog niet resident) werd elke frame
+  // opnieuw aangevraagd: in Crossroads ~86 objecten x ~80 us = ~7 ms per frame.
+  // Na een mislukte poging nu 30 frames wachten; een nieuw verzoek (ander
+  // sync_serial) wordt meteen weer geprobeerd.
+  constexpr std::uint64_t kRetryFrames = 30u;
+  auto &state = inst.game_object_m2_animation;
+  if (state.applied_sync_serial != state.sync_serial &&
+      state.backoff_serial == state.sync_serial &&
+      animation_sample_frame_ < state.next_attempt_frame) {
+    return;
+  }
+  ApplyGameObjectM2AnimationRequestImpl(inst);
+  if (state.active && inst.m2_instance_id != 0u &&
+      state.applied_sync_serial != state.sync_serial) {
+    state.backoff_serial = state.sync_serial;
+    state.next_attempt_frame = animation_sample_frame_ + kRetryFrames;
+  }
+}
+
+void ObjectRenderer::ApplyGameObjectM2AnimationRequestImpl(RenderInstance &inst) {
   auto &state = inst.game_object_m2_animation;
   if (inst.m2_instance_id == 0u) {
     return;
@@ -2408,13 +2540,20 @@ void ObjectRenderer::ApplyGameObjectM2AnimationRequest(RenderInstance &inst) {
                                                         : kGameObjectM2DefaultRepeatCount,
           .speed = selection.speed,
       });
-  if (status != m2::M2ResultStatus::kReady) {
+  // Alleen kNotReady is tijdelijk (de animatiesequentie wordt nog geladen): dan
+  // opnieuw proberen. kUnsupported/kFailed zijn definitieve antwoorden, bijvoorbeeld
+  // een model dat het gevraagde animatie-ID niet heeft. Die werden vroeger niet als
+  // toegepast gezien, waardoor ~80 gameobjects in Crossroads het verzoek elke
+  // frame opnieuw deden (en de runtime elke keer dezelfde reset uitvoerde), goed
+  // voor ~7 ms per frame. Zo'n instantie blijft in zijn standaardpose, net als
+  // voorheen; alleen de eindeloze herhaling vervalt.
+  if (status == m2::M2ResultStatus::kNotReady) {
     return;
   }
   state.applied_sync_serial = state.sync_serial;
   state.resolved_animation_id = selection.animation_id;
   state.resolved_playback_speed = selection.speed;
-  state.suppress_completion_schedule = false;
+  state.suppress_completion_schedule = status != m2::M2ResultStatus::kReady;
 }
 
 void ObjectRenderer::ApplyGameObjectM2AnimationRequestCallback(
@@ -3091,6 +3230,10 @@ void ObjectRenderer::ClearM2Binding(RenderInstance &inst) {
 
   inst.m2_model_id = 0u;
   inst.m2_instance_id = 0u;
+  inst.wound_binding_instance_id = 0u;
+  inst.upper_body_slot_resolved = false;
+  inst.upper_body_slot_active = false;
+  inst.upper_body_animation_slot = kNoKeyBoneAnimationSlot;
   inst.game_object_m2_animation_callback_installed = false;
   inst.dynamic_object_visual_applied = false;
   inst.requested_model_path.clear();
@@ -3736,6 +3879,47 @@ void ObjectRenderer::ApplyUpperBodyAnimationChannel(RenderInstance &inst) {
           inst.unit_animation.zero_blend) ==
       m2::M2ResultStatus::kReady) {
     inst.upper_body_slot_active = true;
+  }
+}
+
+void ObjectRenderer::ApplyWoundAnimationChannel(RenderInstance &inst) {
+  if (inst.m2_instance_id == 0u) {
+    inst.wound_binding_instance_id = 0u;
+    return;
+  }
+  const auto &wound = inst.wound_secondary;
+  if (!wound.active && inst.wound_binding_instance_id != inst.m2_instance_id) return;
+  // Unsplit models degrade to a full-body secondary, never a replacement.
+  if (wound.active && wound.request.masked && !inst.upper_body_slot_resolved) return;
+  const auto slot = wound.request.masked ? inst.upper_body_animation_slot
+                                       : kNoKeyBoneAnimationSlot;
+  const auto status = m2_system_.SetWoundSample(inst.m2_instance_id,
+      wound.request.animation_id, wound.time_ms(), wound.weight(), slot);
+  if (status == m2::M2ResultStatus::kReady ||
+      (wound.active && status == m2::M2ResultStatus::kNotReady)) {
+    // Pending streamed samples are also owned: expiry must clear them before
+    // a late sequence load can display a stale wound.
+    inst.wound_binding_instance_id = wound.active ? inst.m2_instance_id : 0u;
+  }
+  static std::uint32_t budget = 0u;
+  if (AnimationTraceEnabled() && budget < 96u &&
+      (wound.time_ms() == 0u || !wound.active || animation_sample_frame_ % 30u == 0u)) {
+    ++budget;
+    diagnostics::Log(diagnostics::LogLevel::kInfo,
+        "WoundTrace: render owner=" + std::to_string(inst.guid.GetRawValue()) +
+        " base=" + std::to_string(inst.animation.current_anim()) +
+        " base_clock=" + std::to_string(inst.animation.current_time_ms()) +
+        " primary=" + std::to_string(inst.upper_animation.current_anim()) +
+        " primary_clock=" + std::to_string(inst.upper_animation.current_time_ms()) +
+        " serial=" + std::to_string(inst.unit_animation.serial) +
+        " secondary=" + std::to_string(wound.request.animation_id) +
+        " secondary_serial=" + std::to_string(wound.request.serial) +
+        " secondary_clock=" + std::to_string(wound.time_ms()) +
+        " weight=" + std::to_string(wound.weight()) +
+        " slot=" + std::to_string(slot) +
+        " binding=" + std::to_string(inst.m2_instance_id) +
+        " status=" + std::to_string(static_cast<unsigned>(status)) +
+        " completion=primary-only");
   }
 }
 

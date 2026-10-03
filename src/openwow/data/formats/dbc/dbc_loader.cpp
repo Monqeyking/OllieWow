@@ -60,8 +60,10 @@ bool IsClassicMvpDbc(const std::string_view filename) {
   // Keep this list tied to the current Classic world-entry MVP. The full
   // catalog remains available for later Classic feature work, but loading it
   // eagerly retains a large amount of data that the MVP never reads.
-  static constexpr std::array<std::string_view, 85> kClassicMvpTables = {
+  static constexpr std::array<std::string_view, 86> kClassicMvpTables = {
       "DBFilesClient\\AreaTable.dbc",
+      // World/minimap landmarks (including capital icons) need the POI store.
+      "DBFilesClient\\AreaPOI.dbc",
       "DBFilesClient\\AnimationData.dbc",
       "DBFilesClient\\CharBaseInfo.dbc",
       "DBFilesClient\\CharHairGeosets.dbc",

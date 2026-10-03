@@ -8,9 +8,6 @@ namespace openwow::game {
 
 namespace {
 
-constexpr std::uint32_t kAreaFlagPvERealmPvpOverride = 0x00000010u;
-constexpr std::uint32_t kAreaFlagCombat = 0x01000000u;
-
 std::string ResolveFactionGroupName(
     const openwow::data::dbc::DbcLoader& dbc,
     const std::uint32_t faction_group_mask) {
@@ -27,67 +24,30 @@ std::string ResolveFactionGroupName(
 
 }
 
-ZonePvPInfo ResolveRetailZonePvpInfo(
+ZonePvPInfo ResolveClassicZonePvpInfo(
     const openwow::data::dbc::DbcLoader& dbc,
     const CGPlayer_C* const active_player,
     const std::uint32_t zone_id,
-    const std::uint32_t sub_zone_id,
-    const bool is_pvp_realm) {
-  const auto* const sub_zone = dbc.area_table().LookupEntry(sub_zone_id);
+    const std::uint32_t sub_zone_id) {
+  const auto* const leaf = dbc.area_table().LookupEntry(sub_zone_id);
   const auto* const zone = dbc.area_table().LookupEntry(zone_id);
-  const auto* const pvp_area = sub_zone != nullptr ? sub_zone : zone;
-  const bool is_sub_zone_pvp = sub_zone != nullptr;
+  const auto* const arena_area = leaf != nullptr ? leaf : zone;
+  ZonePvPInfo result;
+  result.is_arena = arena_area != nullptr &&
+      (arena_area->flags & openwow::data::dbc::kAreaFlagArena) != 0u;
+  if (active_player == nullptr || zone == nullptr) return result;
+  const auto* const faction_template = dbc.faction_template().LookupEntry(
+      active_player->State().GetFactionTemplate());
+  if (faction_template == nullptr) return result;
 
-  const std::uint32_t flags = pvp_area != nullptr ? pvp_area->flags : 0u;
-  if ((flags & openwow::data::dbc::kAreaFlagSanctuary) != 0u) {
-    return {
-        .available = true,
-        .type = ZonePvPType::Sanctuary,
-        .is_sub_zone_pvp = is_sub_zone_pvp,
-    };
-  }
-  if ((flags & openwow::data::dbc::kAreaFlagArena) != 0u) {
-    return {
-        .available = true,
-        .type = ZonePvPType::FFA,
-        .is_sub_zone_pvp = is_sub_zone_pvp,
-    };
-  }
-  if ((flags & kAreaFlagCombat) != 0u) {
-    return {
-        .available = true,
-        .type = ZonePvPType::Combat,
-        .is_sub_zone_pvp = is_sub_zone_pvp,
-    };
-  }
-
-  if (active_player == nullptr || zone == nullptr ||
-      (!is_pvp_realm &&
-       (zone->flags & kAreaFlagPvERealmPvpOverride) == 0u)) {
-    return {};
-  }
-
-  ZonePvPType type = ZonePvPType::Contested;
-  if ((flags & openwow::data::dbc::kAreaFlagSubZone) == 0u) {
-    const auto* const faction_template = dbc.faction_template().LookupEntry(
-        active_player->State().GetFactionTemplate());
-    if (faction_template == nullptr ||
-        (faction_template->friend_group & zone->faction_group_mask) != 0u) {
-      type = ZonePvPType::Friendly;
-    } else if ((faction_template->enemy_group &
-                zone->faction_group_mask) != 0u) {
-      type = ZonePvPType::Hostile;
-    }
-  }
-
-  return {
-      .available = true,
-      .type = type,
-      .is_sub_zone_pvp = false,
-      .has_faction_name = true,
-      .faction_name =
-          ResolveFactionGroupName(dbc, zone->faction_group_mask),
-  };
+  result.type = ResolveClassicZonePvpType(zone->faction_group_mask,
+      faction_template->friend_group, faction_template->enemy_group);
+  result.faction_name = ResolveFactionGroupName(dbc, zone->faction_group_mask);
+  result.has_faction_name = !result.faction_name.empty();
+  // A friendly/hostile result without its DBC faction name cannot satisfy
+  // ZoneText.xml format(..., factionName). Do not manufacture a fallback name.
+  result.available = result.type == ZonePvPType::Contested || result.has_faction_name;
+  return result;
 }
 
 void ContestedAreaTracker::RegisterZone(std::uint32_t zoneId,

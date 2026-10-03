@@ -3,6 +3,7 @@
 #include "openwow/game/character_animation.h"
 #include "openwow/game/objects/unit/unit_dance.h"
 #include "openwow/render/m2/m2_public_types.h"
+#include "openwow/render/models/animation/wound_secondary_state.h"
 
 #include <array>
 #include <cstddef>
@@ -80,6 +81,15 @@ public:
   void ProcessGroundContactAnimationEvent(const WorldSession &session,
                                           const float *position,
                                           bool right_side);
+  // Tag the renderer projection, not the mutable simulation request.
+  void SetRenderedPlaybackSource(std::uint32_t instance_id, std::uint64_t serial,
+                                 std::uint16_t animation_id) noexcept {
+    rendered_playback_instance_ = instance_id;
+    rendered_playback_serial_ = instance_id != 0u ? serial : 0u;
+    rendered_playback_animation_ = animation_id;
+  }
+  [[nodiscard]] bool IsRenderedPlaybackSource(std::uint32_t instance_id,
+      std::uint64_t serial, std::uint16_t animation_id) const noexcept;
   void HandleAnimationEvent(WorldSession &session, std::uint32_t event_type,
                             std::uint32_t fourcc, std::int32_t event_data,
                             const float *position, std::int32_t bone_index);
@@ -145,6 +155,10 @@ public:
                                bool streamed_in_corpse = false);
 
   void PlayWoundReaction(const WorldSession &session, bool critical);
+  void PlayWoundAnimation(const WorldSession &session, std::uint16_t animation_id);
+  [[nodiscard]] const render::WoundSecondaryRequest &GetWoundRequest() const noexcept {
+    return wound_request_;
+  }
 
   void ApplyAttackerStateRecordToVictim(const WorldSession &session,
                                         std::uint32_t hit_info);
@@ -437,6 +451,10 @@ private:
   std::uint32_t selected_stand_animation_flags_{0};
   std::int32_t spell_visual_persist_anim_id_{-1};
   PlaybackRequest playback_request_{};
+  render::WoundSecondaryRequest wound_request_{};
+  std::uint32_t rendered_playback_instance_{0u};
+  std::uint64_t rendered_playback_serial_{0u};
+  std::uint16_t rendered_playback_animation_{0u};
   std::optional<PendingProtectedPlayback> pending_protected_playback_{};
   std::uint32_t playback_movement_flags_{0};
 

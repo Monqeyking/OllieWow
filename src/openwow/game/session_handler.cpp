@@ -5,6 +5,7 @@
 #include "openwow/foundation/diagnostics/logging.h"
 #include "openwow/network/protocol/wotlk/world_packet.h"
 
+#include <cmath>
 #include <utility>
 
 namespace openwow::game {
@@ -109,17 +110,19 @@ void SessionHandler::BindWorldPacketHandlers(
 
 bool SessionHandler::HandleLoginSetTimeSpeed(const std::uint8_t* data,
                                                std::size_t len) {
+  // Classic sends only packed time and game minutes per real second.
+  // There is no trailing timezone field (Player::SendInitialPacketsBeforeAddToMap).
+  if (data == nullptr || len != 8) return false;
   PacketReader r(data, len);
 
   std::uint32_t packed_time = 0;
   float new_speed = 0.0f;
-  std::uint32_t timezone_hint = 0;
   if (!r.ReadU32(packed_time)) return false;
   if (!r.ReadFloat(new_speed)) return false;
-  if (!r.ReadU32(timezone_hint)) return false;
   if (r.Remaining() != 0) return false;
+  if (!std::isfinite(new_speed) || new_speed <= 0.0f) return false;
 
-  SetPackedGameTime(packed_time, timezone_hint, true);
+  SetPackedGameTime(packed_time, 0, true);
   (void)openwow::core::ida::GameTime_SetSpeed(*game_time_, new_speed);
 
   return true;

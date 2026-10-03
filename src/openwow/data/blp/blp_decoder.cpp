@@ -3,6 +3,7 @@
 
 #include <filesystem>
 #include <fstream>
+#include <utility>
 
 namespace openwow::data::blp {
 
@@ -15,17 +16,17 @@ RgbaImage DecodeBlp(const std::vector<std::uint8_t>& bytes) {
     return out;
   }
 
-  auto rgba = openwow::data::BLPLoader::DecompressToRGBA8(*decoded);
+  auto rgba = openwow::data::BLPLoader::DecompressToRGBA8(*decoded, 1u);
   if (rgba.mips.empty()) {
     out.error = "no mip levels decoded";
     return out;
   }
 
-  const auto& mip0 = rgba.mips[0];
+  auto& mip0 = rgba.mips[0];
   out.ok = true;
   out.width = mip0.width;
   out.height = mip0.height;
-  out.pixels_rgba = mip0.data;
+  out.pixels_rgba = std::move(mip0.data);
   return out;
 }
 

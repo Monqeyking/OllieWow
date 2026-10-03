@@ -817,6 +817,16 @@ struct M2ResourceStreamerBackend {
   std::function<M2InstanceCreateResult(std::uint32_t)> create_instance;
 };
 
+// One independent sample-driven secondary; never a primary animation slot.
+inline constexpr std::uint32_t kM2WoundFullBodyKeyBoneSlot = 0xFFFFFFFFu;
+struct M2WoundSample {
+  std::uint32_t animation_id = 0;
+  std::uint16_t sequence_index = kInvalidM2AnimationSequenceIndex;
+  std::uint32_t time_ms = 0;
+  float weight = 0.0f;
+  std::uint32_t keybone_slot = kM2WoundFullBodyKeyBoneSlot;
+};
+
 struct M2ModelAnimationListEntry {
   std::uint16_t sequence_index = kInvalidM2AnimationSequenceIndex;
   std::uint32_t animation_id = 0;

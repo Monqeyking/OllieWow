@@ -27,20 +27,16 @@ void main()
                          || u_wmoMaterialParams.x > 0.5;
     if (passthroughColor) {
 
+        // UNLIT and the INT/TRANS bake bypass daylight and SIDN alike.
         v_color0 = a_color0;
     } else {
         float ndl = clamp(dot(worldNormal, normalize(u_wmoSunDir.xyz)), 0.0, 1.0);
         vec3 lighting = clamp(u_wmoLightAmbient.rgb
                             + u_wmoLightDiffuse.rgb * ndl, 0.0, 1.0);
 
-        vec3 litColor;
-        if (u_wmoExtraParams.x > 0.5) {
-
-            litColor = lighting * (127.0 / 255.0) + a_color0.rgb;
-        } else {
-
-            litColor = a_color0.rgb * lighting;
-        }
+        // Classic EXT/TRANS lit pass: MOCV modulates light, it is not an
+        // additional fullbright term. INT and the TRANS bake pass bypass here.
+        vec3 litColor = a_color0.rgb * lighting;
         v_color0 = vec4(clamp(litColor + u_wmoEmissiveColor.rgb, 0.0, 1.0),
                         a_color0.a);
     }

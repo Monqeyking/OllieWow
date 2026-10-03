@@ -29,6 +29,7 @@
 #include "openwow/data/login_resource_validator.h"
 #include "openwow/data/startup_filesystem_state.h"
 #include "openwow/debug/client_error_display_cvars.h"
+#include "openwow/debug/diagnostics/profiler.h"
 #include "openwow/debug/control/debug_control_json_codec.h"
 #include "openwow/debug/control/debug_control_server.h"
 #include "openwow/foundation/diagnostics/logging.h"
@@ -61,6 +62,8 @@
 #include "openwow/platform/window/system_mouse_speed.h"
 #include "openwow/platform/window/window_manager.h"
 #include "openwow/render/backend/bgfx/renderer_context_services.h"
+#include "openwow/render/glue/glue_texture_stream.h"
+#include "openwow/render/resources/textures/texture_mip_upload.h"
 #include "openwow/render/m2/m2_cvar_callbacks.h"
 #include "openwow/render/m2/m2_resource_streamer.h"
 #include "openwow/render/m2/m2_system.h"
@@ -68,6 +71,7 @@
 #include "openwow/render/platform/renderer_backend_selection.h"
 #include "openwow/render/resources/textures/texture_cache_budget.h"
 #include "openwow/render/resources/textures/texture_filtering_mode.h"
+#include "openwow/render/resources/textures/world_sampler_quality.h"
 #include "openwow/render/scene/nameplate_renderer.h"
 #include "openwow/render/scene/object_renderer.h"
 #include "openwow/render/ui/ui_acceleration.h"
@@ -111,10 +115,13 @@
 #include <limits>
 #include <mutex>
 #include <string>
+#include <atomic>
+#include <cwchar>
 #include <system_error>
 #include <thread>
 #include <type_traits>
 #include <utility>
+#include <vector>
 
 #ifdef _WIN32
 #include <fcntl.h>
@@ -126,6 +133,111 @@
 #include <unistd.h>
 #endif
 
+#ifdef _WIN32
+// Opt-in sampling profiler (OPENWOW_SAMPLER_OUT=<bestand>): pauzeert elke ~2 ms de
+// thread die de statische initialisatie draaide (de main thread), loopt de stack af
+// met de PE-unwinddata en schrijft per sample "t_ms adres adres ..." weg. Exe-adressen
+// komen als RVA (te vertalen met de linker-.map); andere modules als naam+RVA.
+// Zonder de omgevingsvariabele gebeurt er niets.
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#ifdef DrawText
+#undef DrawText
+#endif
+namespace {
+struct MainThreadSampler {
+  HANDLE thread_handle{nullptr};
+  std::atomic<bool> stop{false};
+  std::thread worker;
+  FILE* out{nullptr};
+
+  MainThreadSampler() {
+    const char* path = std::getenv("OPENWOW_SAMPLER_OUT");
+    if (path == nullptr || *path == '\0') return;
+    out = std::fopen(path, "w");
+    if (out == nullptr) return;
+    if (!DuplicateHandle(GetCurrentProcess(), GetCurrentThread(), GetCurrentProcess(),
+                         &thread_handle, THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT |
+                                             THREAD_QUERY_INFORMATION,
+                         FALSE, 0)) {
+      return;
+    }
+    worker = std::thread([this] { Run(); });
+  }
+  ~MainThreadSampler() {
+    stop = true;
+    if (worker.joinable()) worker.join();
+    if (out != nullptr) std::fclose(out);
+  }
+
+  void Run() {
+    HANDLE timer = CreateWaitableTimerExW(nullptr, nullptr, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION,
+                                          TIMER_ALL_ACCESS);
+    const auto exe = reinterpret_cast<std::uintptr_t>(GetModuleHandleW(nullptr));
+    const auto t0 = GetTickCount64();
+    std::uint64_t frames[32];
+    while (!stop.load(std::memory_order_relaxed)) {
+      if (timer != nullptr) {
+        LARGE_INTEGER due;
+        due.QuadPart = -20000;  // 2 ms
+        SetWaitableTimer(timer, &due, 0, nullptr, nullptr, FALSE);
+        WaitForSingleObject(timer, 50);
+      } else {
+        Sleep(2);
+      }
+      std::size_t count = 0;
+      if (SuspendThread(thread_handle) == static_cast<DWORD>(-1)) continue;
+      CONTEXT ctx{};
+      ctx.ContextFlags = CONTEXT_CONTROL | CONTEXT_INTEGER;
+      if (GetThreadContext(thread_handle, &ctx)) {
+        for (; count < 32 && ctx.Rip != 0; ++count) {
+          frames[count] = ctx.Rip;
+          DWORD64 base = 0;
+          UNWIND_HISTORY_TABLE history{};
+          PRUNTIME_FUNCTION fn = RtlLookupFunctionEntry(ctx.Rip, &base, &history);
+          if (fn == nullptr) {
+            ctx.Rip = *reinterpret_cast<DWORD64*>(ctx.Rsp);
+            ctx.Rsp += 8;
+          } else {
+            void* handler_data = nullptr;
+            DWORD64 frame = 0;
+            RtlVirtualUnwind(UNW_FLAG_NHANDLER, base, ctx.Rip, fn, &ctx, &handler_data, &frame,
+                             nullptr);
+          }
+        }
+      }
+      ResumeThread(thread_handle);
+      if (count == 0) continue;
+      std::fprintf(out, "%llu", static_cast<unsigned long long>(GetTickCount64() - t0));
+      for (std::size_t i = 0; i < count; ++i) {
+        HMODULE module = nullptr;
+        GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                               GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                           reinterpret_cast<LPCWSTR>(frames[i]), &module);
+        const auto module_base = reinterpret_cast<std::uintptr_t>(module);
+        if (module_base == exe) {
+          std::fprintf(out, " %llx", static_cast<unsigned long long>(frames[i] - exe));
+        } else {
+          wchar_t name[128] = L"?";
+          if (module != nullptr) GetModuleFileNameW(module, name, 128);
+          const wchar_t* base_name = std::wcsrchr(name, L'\\');
+          std::fprintf(out, " %ls+%llx", base_name != nullptr ? base_name + 1 : name,
+                       static_cast<unsigned long long>(frames[i] - module_base));
+        }
+      }
+      std::fputc('\n', out);
+    }
+  }
+};
+const MainThreadSampler g_main_thread_sampler;
+}  // namespace
+#endif
+
 #include <lua.hpp>
 
 namespace openwow::client {
@@ -135,6 +247,61 @@ namespace {
 constexpr float kGlueFrameDepthBaseline = 1.0F;
 constexpr auto kDebugScreenshotTimeout = std::chrono::seconds(10);
 constexpr auto kDebugScreenshotPollInterval = std::chrono::milliseconds(10);
+
+struct RenderPerfFrameSample {
+  double frame_ms{0.0};
+  double pre_render_ms{0.0};
+  double render_ms{0.0};
+  double pacing_ms{0.0};
+  double present_ms{0.0};
+};
+
+struct RenderPerfMetricSummary {
+  double mean_ms{0.0};
+  double p95_ms{0.0};
+};
+
+bool IsRenderPerfTraceEnabled() {
+  static const bool enabled = [] {
+    const char* const value = std::getenv("OPENWOW_RENDER_PERF_TRACE");
+    return value != nullptr &&
+           (std::string(value) == "1" || std::string(value) == "true");
+  }();
+  return enabled;
+}
+
+RenderPerfMetricSummary SummarizeRenderPerfMetric(
+    const std::vector<RenderPerfFrameSample>& samples,
+    const double RenderPerfFrameSample::* const metric) {
+  if (samples.empty()) return {};
+  std::vector<double> values;
+  values.reserve(samples.size());
+  double total = 0.0;
+  for (const auto& sample : samples) {
+    values.push_back(sample.*metric);
+    total += sample.*metric;
+  }
+  std::sort(values.begin(), values.end());
+  const std::size_t p95_index = static_cast<std::size_t>(
+      0.95 * static_cast<double>(values.size() - 1u));
+  return {
+      .mean_ms = total / static_cast<double>(values.size()),
+      .p95_ms = values[p95_index],
+  };
+}
+
+std::string FormatRenderPerfMetric(const RenderPerfMetricSummary summary) {
+  char buffer[64]{};
+  std::snprintf(buffer, sizeof(buffer), "%.2f/%.2f", summary.mean_ms,
+                summary.p95_ms);
+  return buffer;
+}
+
+std::string FormatRenderPerfValue(const double value) {
+  char buffer[64]{};
+  std::snprintf(buffer, sizeof(buffer), "%.2f", value);
+  return buffer;
+}
 
 using openwow::debug::control::CapabilityResult;
 using openwow::debug::control::DebugControlError;
@@ -288,6 +455,25 @@ void RegisterTextureCacheBudget(openwow::ui::game::CVarSystem &cvars) {
     openwow::core::ida::ConsoleAddLine(result.console_message, openwow::core::ida::COLOR_DEFAULT);
     return result.accepted;
   });
+}
+
+// De Vanilla-opties "Trilinear Filtering" en "Anisotropic Filtering" schrijven
+// naar de CVars `trilinear` en `anisotropic`. Deze callbacks zetten die om naar
+// de sampler-toestand die terrein, M2 en WMO lezen, zodat een wijziging direct
+// zichtbaar is (zonder herstart).
+void RegisterWorldSamplerQualityCVars(openwow::ui::game::CVarSystem &cvars) {
+  cvars.SetValidationCallback(
+      "anisotropic", [](const std::string &, const std::string &, const std::string &value) {
+        openwow::render::WorldSamplerQuality().anisotropic.store(
+            std::atoi(value.c_str()) > 1, std::memory_order_relaxed);
+        return true;
+      });
+  cvars.SetValidationCallback(
+      "trilinear", [](const std::string &, const std::string &, const std::string &value) {
+        openwow::render::WorldSamplerQuality().trilinear.store(
+            std::atoi(value.c_str()) != 0, std::memory_order_relaxed);
+        return true;
+      });
 }
 
 struct LogoutCountdownSnapshot {
@@ -1526,6 +1712,7 @@ bool GlueClient::InitCVars() {
   openwow::core::MemoryStorm_RegisterConsoleCommands();
   gamma_controller_.Register(cvar_sys, window_);
   openwow::render::RegisterTextureFilteringModeCVarCallback(cvar_sys);
+  RegisterWorldSamplerQualityCVars(cvar_sys);
   openwow::render::RegisterUiFasterCVarCallback(cvar_sys);
   RegisterTextureCacheBudget(cvar_sys);
   openwow::core::ida::RegisterWindowResizeLockCVarCallback(cvar_sys, window_);
@@ -1538,6 +1725,8 @@ bool GlueClient::InitCVars() {
   (void)openwow::core::AsyncIO_RegisterCVars();
 
   (void)cvar_sys.ReconcileValueAgainstValidationCallback("textureFilteringMode");
+  (void)cvar_sys.ReconcileValueAgainstValidationCallback("anisotropic");
+  (void)cvar_sys.ReconcileValueAgainstValidationCallback("trilinear");
   (void)cvar_sys.ReconcileValueAgainstValidationCallback("processAffinityMask");
   openwow::ui::game::detail::SyncCameraMotionSettings(game_loop_.world_scene().camera());
   openwow::ui::game::detail::SyncCameraViewPresets(game_loop_.world_scene().camera());
@@ -2699,8 +2888,8 @@ void GlueClient::Render(std::uint32_t now_ms, std::uint32_t frame_delta_ms,
                                 frame_delta_ms,
                                 {
                                     .effects_enabled = enabled("ffx"),
-                                    .glow_enabled = enabled("ffxGlow"),
-                                    .death_effect_enabled = enabled("ffxDeath"),
+                                    .glow_enabled = enabled("ffxGlow") && enabled("pixelShaders"),
+                                    .death_effect_enabled = enabled("ffxDeath") && enabled("pixelShaders"),
                                     .rectangle_textures = enabled("ffxRectangle"),
                                     .widescreen = cvars.GetCVarBool("widescreen"),
                                     .particle_density = cvars.GetCVarFloat("particleDensity"),
@@ -3058,7 +3247,14 @@ int GlueClient::Run() {
   text_input_reactivation_pending_ = true;
   UpdateTextInputState();
 
+  const bool render_perf_trace = IsRenderPerfTraceEnabled();
+  std::vector<RenderPerfFrameSample> render_perf_samples;
+  if (render_perf_trace) render_perf_samples.reserve(512u);
+  auto render_perf_window_start = std::chrono::steady_clock::now();
+  if (render_perf_trace) openwow::debug::Profiler::Get().Reset();
+
   while (running_) {
+    const auto perf_frame_start = std::chrono::steady_clock::now();
 
     const double elapsed_sec = clock.Tick();
     const std::uint32_t now_ms =
@@ -3141,7 +3337,9 @@ int GlueClient::Run() {
         layout_width_, layout_height_);
     DispatchPendingScrollRangeChangedEvents();
 
+    const auto perf_pre_render_end = std::chrono::steady_clock::now();
     Render(now_ms, frame_delta_ms, elapsed_sec);
+    const auto perf_render_end = std::chrono::steady_clock::now();
 
     const bool scenario_should_continue = TickScenario(ScenarioRunner::Stage::kPostRender, now_ms);
 
@@ -3162,10 +3360,131 @@ int GlueClient::Run() {
       }
     }
 
+    const auto perf_present_start = std::chrono::steady_clock::now();
     if (renderer_context_ != nullptr) {
       renderer_context_->EndFrame();
     }
+    const auto perf_present_end = std::chrono::steady_clock::now();
     DrainScreenshotNotifications();
+
+    const auto perf_frame_end = std::chrono::steady_clock::now();
+    if (render_perf_trace) {
+      const auto to_ms = [](const auto duration) {
+        return std::chrono::duration<double, std::milli>(duration).count();
+      };
+      render_perf_samples.push_back({
+          .frame_ms = to_ms(perf_frame_end - perf_frame_start),
+          .pre_render_ms = to_ms(perf_pre_render_end - perf_frame_start),
+          .render_ms = to_ms(perf_render_end - perf_pre_render_end),
+          .pacing_ms = to_ms(perf_present_start - perf_render_end),
+          .present_ms = to_ms(perf_present_end - perf_present_start),
+      });
+
+      if (perf_frame_end - render_perf_window_start >=
+          std::chrono::seconds(5)) {
+        const auto frame = SummarizeRenderPerfMetric(
+            render_perf_samples, &RenderPerfFrameSample::frame_ms);
+        const auto pre_render = SummarizeRenderPerfMetric(
+            render_perf_samples, &RenderPerfFrameSample::pre_render_ms);
+        const auto render = SummarizeRenderPerfMetric(
+            render_perf_samples, &RenderPerfFrameSample::render_ms);
+        const auto pacing = SummarizeRenderPerfMetric(
+            render_perf_samples, &RenderPerfFrameSample::pacing_ms);
+        const auto present = SummarizeRenderPerfMetric(
+            render_perf_samples, &RenderPerfFrameSample::present_ms);
+        std::string profile_scopes;
+        if (openwow::debug::Profiler::Get().IsEnabled()) {
+          const auto top_scopes =
+              openwow::debug::Profiler::Get().GetTopScopes(24u);
+          for (const auto& scope : top_scopes) {
+            if (scope.name.rfind("ow.", 0u) != 0u) {
+              continue;
+            }
+            profile_scopes += " " + scope.name + "=" +
+                              FormatRenderPerfValue(scope.duration_ms);
+          }
+        }
+        const auto texture_stats = texture_manager_.StreamingStats();
+        const auto glue_texture_stats = glue_renderer_.TextureStreamingStats();
+        const auto glue_model_stats = glue_renderer_.StreamingCounters();
+        const std::size_t working_set_bytes =
+            openwow::debug::Profiler::Get().GetMemoryUsage();
+
+        std::string backend = "Unknown";
+        std::string device = "unknown";
+        std::string renderer_stats = "renderer=unavailable";
+        if (renderer_context_ != nullptr) {
+          backend = openwow::render::api::RendererBackendName(
+              renderer_context_->ActiveBackend());
+          const auto& capabilities = renderer_context_->Capabilities();
+          device = std::to_string(capabilities.vendor_id) + ":" +
+                   std::to_string(capabilities.device_id);
+          const auto& stats = renderer_context_->Stats();
+          renderer_stats =
+              "draw=" + std::to_string(stats.draw_calls) +
+              " batches=" + std::to_string(stats.submitted_scene_batches) +
+              " bgfx_cpu_ms=" + FormatRenderPerfValue(stats.cpu_time_ms) +
+              " bgfx_gpu_ms=" + FormatRenderPerfValue(stats.gpu_time_ms) +
+              " gpu_mem_mb=" + FormatRenderPerfValue(
+                  static_cast<double>(stats.gpu_memory_used) / (1024.0 * 1024.0)) +
+              " tex_mem_mb=" + FormatRenderPerfValue(
+                  static_cast<double>(stats.texture_memory_used) / (1024.0 * 1024.0)) +
+              " backbuffer=" + std::to_string(stats.backbuffer.width) + "x" +
+              std::to_string(stats.backbuffer.height);
+        }
+
+        const auto& cvars = openwow::ui::game::CVarSystem::Instance();
+        const auto block_compression =
+            openwow::render::QueryBlockCompressionSupport();
+        const double average_fps = frame.mean_ms > 0.0
+                                       ? 1000.0 / frame.mean_ms
+                                       : 0.0;
+        openwow::diagnostics::Log(
+            openwow::diagnostics::LogLevel::kInfo,
+            "RenderPerf: frames=" + std::to_string(render_perf_samples.size()) +
+                " fps_mean=" + FormatRenderPerfValue(average_fps) +
+                " frame_ms_mean_p95=" + FormatRenderPerfMetric(frame) +
+                " pre_render_ms_mean_p95=" + FormatRenderPerfMetric(pre_render) +
+                " render_ms_mean_p95=" + FormatRenderPerfMetric(render) +
+                " pacing_ms_mean_p95=" + FormatRenderPerfMetric(pacing) +
+                " present_ms_mean_p95=" + FormatRenderPerfMetric(present) +
+                " backend=" + backend + " device=" + device +
+                " bc=" + std::to_string(block_compression.bc1) + "/" +
+                std::to_string(block_compression.bc2) + "/" +
+                std::to_string(block_compression.bc3) +
+                " vsync=" + std::to_string(cvars.GetCVarBool("gxVSync")) +
+                " max_fps=" + std::to_string(cvars.GetCVarInt("maxFPS")) +
+                " " + renderer_stats + " texture_queue=" + std::to_string(texture_stats.pending) + "/" +
+                std::to_string(texture_stats.prepared) + "/" +
+                std::to_string(texture_stats.failed) +
+                " texture_workers=" + std::to_string(texture_stats.running_workers) +
+                "/" + std::to_string(texture_stats.workers) +
+                " texture_work_queue=" +
+                std::to_string(texture_stats.queued_workers) +
+                " glue_texture_queue=" + std::to_string(glue_texture_stats.pending) +
+                "/" + std::to_string(glue_texture_stats.prepared) + "/" +
+                std::to_string(glue_texture_stats.failed) +
+                " glue_texture_workers=" +
+                std::to_string(glue_texture_stats.running_workers) + "/" +
+                std::to_string(glue_texture_stats.workers) +
+                " glue_texture_work_queue=" +
+                std::to_string(glue_texture_stats.queued_workers) +
+                " glue_models=" + std::to_string(glue_model_stats.current) + "/" +
+                std::to_string(glue_model_stats.total) +
+                " m2_models=" + std::to_string(m2_system_.GetLoadedModelCount()) +
+                " m2_instances=" + std::to_string(m2_system_.GetInstanceCount()) +
+                " m2_visible=" +
+                std::to_string(m2_system_.GetVisibleInstanceCount()) +
+                " frame_workers=" + std::to_string(frame_job_system_.WorkerCount()) +
+                " working_set_mb=" + FormatRenderPerfValue(
+                    static_cast<double>(working_set_bytes) / (1024.0 * 1024.0)) +
+                " profile_avg_ms:" + profile_scopes);
+        render_perf_samples.clear();
+        render_perf_window_start = perf_frame_end;
+        openwow::debug::Profiler::Get().Reset();
+      }
+    }
+
     if (!scenario_should_continue) {
       running_ = false;
       break;

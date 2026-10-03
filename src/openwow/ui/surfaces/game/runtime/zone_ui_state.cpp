@@ -41,6 +41,9 @@ void ZoneUiState::Apply(const ZoneUiUpdate &update, openwow::game::WorldSession 
     (void)world_map_.UpdatePlayerPosition(*session);
   }
 
+  // The minimap uses subzone-or-zone, independently of the splash zone events.
+  const std::string previous_minimap_text =
+      subzone_text_.empty() ? zone_text_ : subzone_text_;
   const bool zone_text_changed = AssignZoneText(zone_text_, update.text.zone);
   const bool subzone_text_changed = AssignZoneText(subzone_text_, update.text.subzone);
   const bool text_changed = zone_text_changed || subzone_text_changed;
@@ -70,6 +73,10 @@ void ZoneUiState::Apply(const ZoneUiUpdate &update, openwow::game::WorldSession 
   minimap_.SetZoneText(zone_text_, subzone_text_);
 
   auto &dispatch = ScriptEventDispatch::Get();
+  // State must be visible to GetMinimapZoneText before FrameXML handles the event.
+  if (previous_minimap_text != minimap_text) {
+    dispatch.FireEvent(events::MINIMAP_ZONE_CHANGED);
+  }
   if (area_changed) {
     dispatch.FireZoneChangedNewArea();
   } else if (text_changed) {

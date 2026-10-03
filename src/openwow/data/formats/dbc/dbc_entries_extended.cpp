@@ -82,18 +82,20 @@ OPENWOW_DBC_SCHEMA(AchievementCriteriaEntry,
 )
 
 OPENWOW_DBC_SCHEMA(WorldMapAreaEntry,
+  // Client-side map/overlay identity is the row ID, not AreaTable ID.
+  // Continent rows all have AreaID zero.
+  DBC_U32(id, 0)
   DBC_U32(map_id, 1)
   DBC_U32(area_id, 2)
-  // Classic's first column is unused; AreaID is the logical key consumed by
-  // WorldMapOverlay and the world-map runtime.
-  e.id = e.area_id;
   DBC_STRING(name, 3)
   DBC_F32(loc_left, 4)
   DBC_F32(loc_right, 5)
   DBC_F32(loc_top, 6)
   DBC_F32(loc_bottom, 7)
-  DBC_I32(display_map_id, 8)
-  DBC_I32(default_dungeon_map_id, 9)
+  // The eight-column Classic schema has no display-map/dungeon override.
+  // An out-of-range GetInt32 returns zero, which would redirect map 1 to map 0.
+  e.display_map_id = f.field_count() > 8 ? f.GetInt32(row, 8) : -1;
+  e.default_dungeon_map_id = f.field_count() > 9 ? f.GetInt32(row, 9) : -1;
   DBC_U32(parent_world_map_id, 10)
 )
 
@@ -204,7 +206,9 @@ OPENWOW_DBC_SCHEMA(ExhaustionEntry,
   DBC_F32(outdoor_hours, 3)
   DBC_F32(inn_hours, 4)
   DBC_LOCALIZED(name, 5)
-  DBC_F32(threshold, 22)
+  // Classic/Turtle: 15 columns -- the localized Name block runs 5..13, so the
+  // threshold is the last column (14), not the WotLK position 22.
+  DBC_F32(threshold, 14)
 )
 
 OPENWOW_DBC_SCHEMA(StartupStringsEntry,
@@ -334,23 +338,21 @@ OPENWOW_DBC_SCHEMA(AreaGroupEntry,
 )
 
 OPENWOW_DBC_SCHEMA(AreaPOIEntry,
-    e.id         = f.GetUInt32(row, 0);
-    e.importance = f.GetUInt32(row, 1);
-
-    for (std::size_t index = 0; index < e.texture_indices.size(); ++index) {
-      e.texture_indices[index] = f.GetUInt32(row, static_cast<std::uint32_t>(index + 2));
-    }
-    e.faction_id     = f.GetUInt32(row, 11);
-    e.x              = f.GetFloat(row, 12);
-    e.y              = f.GetFloat(row, 13);
-    e.z              = f.GetFloat(row, 14);
-    e.map_id         = f.GetUInt32(row, 15);
-    e.flags          = f.GetUInt32(row, 16);
-    e.area_id        = f.GetUInt32(row, 17);
-    e.name           = f.GetLocalizedString(row, 18);
-    e.description    = f.GetLocalizedString(row, 35);
-    e.world_state_id = f.GetUInt32(row, 52);
-    e.map_link_id    = f.GetUInt32(row, 53);
+    // Classic/Turtle: one icon, XYZ at 4..6, eight-locale name blocks.
+    DBC_U32(id, 0)
+    DBC_U32(importance, 1)
+    e.texture_indices[0] = f.GetUInt32(row, 2);
+    DBC_U32(faction_id, 3)
+    DBC_F32(x, 4)
+    DBC_F32(y, 5)
+    DBC_F32(z, 6)
+    DBC_U32(map_id, 7)
+    DBC_U32(flags, 8)
+    DBC_U32(area_id, 9)
+    e.name = f.GetLocalizedString(row, 10, 8);
+    e.description = f.GetLocalizedString(row, 19, 8);
+    DBC_U32(world_state_id, 28)
+    // No map-link column; remaining texture slots and map_link_id stay zero.
 )
 
 OPENWOW_DBC_SCHEMA(FactionGroupEntry,

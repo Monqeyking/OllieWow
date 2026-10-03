@@ -5,7 +5,11 @@ Laatste update: 2026-09-15 (NPC-interactionflags, tooltip-ownership).
 
 Dit document is de werkvoorraad voor het gelijktrekken van onze client met de
 Vanilla/Turtle-referentie. Het is opgesteld met acht parallelle read-only audits
-die per domein `D:\OllieWoW\benilla` (referentie) naast deze worktree legden.
+die per domein `D:\OllieWoW\Experiments\Benilla` (referentie) naast deze worktree legden.
+
+Actuele bronverwijzingen zijn bijgewerkt naar `D:\OllieWoW\Experiments\Benilla`.
+Bestaande auditbevindingen, regelnummers en revisies zijn hiermee niet opnieuw
+gevalideerd tegen die checkout.
 
 ## Bronprioriteit en werkwijze
 
@@ -13,7 +17,7 @@ die per domein `D:\OllieWoW\benilla` (referentie) naast deze worktree legden.
    eventnamen, enumeraties, texturen.
 2. `D:\OllieWoW\Source` — lokale server: leidend voor packetbodies,
    update-fieldindices en opcodewaarden.
-3. `D:\OllieWoW\benilla` — referentie voor ontbrekende clientlogica
+3. `D:\OllieWoW\Experiments\Benilla` — referentie voor ontbrekende clientlogica
    (binary-geverifieerd waar het dat zegt).
 4. Deze worktree — implementatiebasis; bestaande 3.3.5-aannames zijn géén
    contract.
@@ -854,6 +858,111 @@ kandidaten, beide bron-toetsbaar:
    wereld op een donkerder uur. Dit is met één meting te scheiden
    (`GetGameTime()` in de client naast de servertijd) en dat is de eerstvolgende stap
    vóór er iets aan de lichtwaarden verandert.
+
+### Batch 12 — Classic channel-pakketten en cast-pushback (gebouwd, parserfixtures geslaagd; pushback ingame bevestigd, channels onbevestigd)
+
+Scope: uitsluitend protocol-audit B1/B2/B3. Geen andere spell-, aura- of renderinggaten gesloten.
+
+| Aspect | Benilla/Vanilla | OpenWow 3.3.5-erfenis | Lokale Classic/Turtle-variant |
+|---|---|---|---|
+| Channel start/update | `D:/OllieWoW/benilla/crates/benilla-protocol/src/messages/spells.rs`: read_channel_start/read_channel_update; self-only, geen GUID | ParseChannelStart/ParseChannelUpdate lazen een packed GUID; handlers zochten die unit | `D:/OllieWoW/Source/src/game/Spells/Spell.cpp`:5086-5087,5132-5134 schrijft u32 remaining / u32 spell + duration direct naar speler |
+| Pushback | hetzelfde Benilla-bestand: read_spell_delayed, raw u64 + u32 | ParseSpellDelayed las packed GUID | `D:/OllieWoW/Source/src/game/Spells/Spell.cpp`:7714-7716 schrijft ObjectGuid + u32 delay |
+
+Kleinste correctie:
+- `src/openwow/net/wotlk/spell_packets.cpp`: drie parsers accepteren exact 8/4/12 bytes;
+  pushback gebruikt ReadFullGuid. Null, truncatie en trailing bytes worden afgewezen.
+- `src/openwow/net/wotlk/spell_packets.h`: channel-resultaten bevatten geen fictieve wire-caster meer.
+- `src/openwow/game/world_session_combat.cpp`: HandleChannelStart/HandleChannelUpdate gebruiken
+  GetLocalPlayerGuid en negeren berichten zonder geldige lokale speler. Bestaande cast-state,
+  visual- en eventroutes blijven behouden, inclusief SPELLCAST_CHANNEL_START/UPDATE/STOP en SPELLCAST_DELAYED.
+- `tools/classic_spell_packets_regression.cpp`: standalone fixture die de echte parsers aanroept;
+  start, update, zero-stop, sparse/full raw GUIDs, null/truncatie/trailing en GUID-prefixed channel bodies.
+  Standalone gebouwd en uitgevoerd; niet aan een CMake/CTest-target gekoppeld.
+
+Impact: de eerder verkeerd gelezen pakketten bereiken nu de bestaande runtime-consumers.
+Wijzigingen zijn lokaal terugdraaibaar; geen Source, Client, Benilla, assets of actieve processen gewijzigd.
+Geen aanpassing van Lua-eventargumenten: het lokale CastingBar-XML/Lua-contract is in deze slice
+niet opnieuw uit MPQ geëxtraheerd of runtime-gevalideerd. Parserfixtures bewijzen niet de volledige UI-flow.
+
+Benodigde ingame controle na afzonderlijk goedgekeurde build/test:
+1. Een beschikbare channel (bijv. Arcane Missiles, Mind Flay of Drain Life) volledig laten aflopen:
+   eigen balk start met spellnaam/duur, telt af en verdwijnt aan het einde.
+2. De channel door bewegen of annuleren onderbreken: balk stopt en blijft niet hangen;
+   een volgende channel start opnieuw normaal.
+3. Tijdens een pushback-gevoelige normale cast (bijv. shaman Lightning Bolt) schade nemen:
+   alleen wanneer de server
+   SMSG_SPELL_DELAYED stuurt moet de eigen castbalk de vertraging overnemen. Geen vaste delay beloven;
+   talents/spellregels kunnen pushback verminderen of voorkomen.
+4. Channelverkorting bij schade volgt MSG_CHANNEL_UPDATE; remote units mogen door deze
+   self-only pakketten niet worden gewijzigd.
+
+Verificatie na toestemming: standalone fixture vanuit `build/release` met MSVC C++20
+gecompileerd en uitgevoerd (exit 0, `Classic spell packet fixtures passed`).
+Uitvoer: `build/release/classic_spell_packets_regression.exe`. Client via bestaand `dev.ps1`
+vanuit `build/release` herbouwd: 620 objecten, 19 links, exit 0, `DEV_BUILD_OK`, 391 s.
+`build/release/apps/client/OllieWoW.exe` is opnieuw geschreven (buildscript controleert dit
+als postconditie; gerapporteerde lokale bestandstijd 23:54:13). Bestaande lokale wijzigingen
+zijn meegebouwd, niet aangepast of teruggezet. Onafhankelijke read-only review vond geen
+gemiste channel-consumer of dispatcher-bypass. Een echte-clientcontrole is niet uitgevoerd
+en de client is niet gestart.
+Latere runtimebevestiging door de gebruiker: "ok dat werkt de pushback in ieder geval"
+(shaman Lightning Bolt-testcase). B3 heeft daarmee ingame gebruikersbevestiging;
+B1/B2 channel-start/update/stop en de overige spellflow blijven ingame-onbevestigd.
+De agent startte de client niet en heeft deze observatie niet onafhankelijk gemeten.
+
+## Wond- en projectielpresentatie (2026-10-02)
+
+Status: runtime gewijzigd, clientbuild geslaagd (`DEV_BUILD_OK`) en alle offline fixtures PASS; ingame niet bevestigd.
+
+| Aspect | Benilla/Vanilla | OpenWow-erfenis | Lokale Classic/Turtle-correctie / observatie |
+|---|---|---|---|
+| Wondreactie | `D:/OllieWoW/benilla/crates/benilla-app/src/creature_anim/driver/wound.rs::wound_trigger`: SECONDARY met .75 verval, base/swing intact. | `PlayWoundReaction` verving primaire playback. | Aparte request/klok/projectie en M2 TRS-blend vóór hiërarchiematrices. Ready25–29 en ontbrekende keybone blijven fullbody **blend**. Kit8/9/10 behouden kitkeuze. |
+| Release | `D:/OllieWoW/benilla/crates/benilla-app/src/entities/missile.rs`: CSL/CSR/CST/BWR live marker, finish-flush, .25s nooit-started vangnet. | `QueueSpellGoVisual` bevroor oorsprong bij GO en verzond direct. | Owner/generatie/cast-queue, gerenderde serial/id voor vier markers, geaccepteerde completion-flush. Live origin/target, onzichtbare geplande vlucht bij missende visual, reset/unload annuleert ook die vlucht. |
+| Timing | Lokale `Source/src/game/Spells/Spell.cpp::AddUnitTarget`1061–1072: centerafstand, minimum5yd en floor-ms. Benilla `launch_go`415 berekent **live** release-afstand/speed minus queued; modulecommentaar overschrijft die nuance. | Eigen speed*dt-klok vanaf rendererstart; geen GO-ankering. | GO-deadline/homing; een aanvullende broncorrectie moet timing loskoppelen van mogelijk oude M2-attachmentcoördinaten. Geen claim dat serverdamage/reflecttiming al exact gelijk is. |
+| Combat-bit | `D:/OllieWoW/Source/src/game/Objects/UnitDefines.h:421`:0x80000. | Animatie/interaction testten0x800. | Twee smalle controles gecorrigeerd; Ready blijft engagement-gebaseerd, niet op UI-target geforceerd. |
+
+Deze wijziging raakt gedeelde unit/model/projectielpresentatie, niet een imp-specifiek pad. Terugdraaibaar per runtime-seam, met bestaande lokale wijzigingen behouden. Geen Client/Source/Benilla/MPQ/DBC/protocol/accountwijzigingen of clientstart.
+
+Controle vanuit bestaande `build/release`:
+- `tools/wound_secondary_regression.cpp` + echte `AnimationState`: PASS voor Ready/swing/run, botmasker, no-keybone, retrigger, eviction, death, kitkeuze, zero-span en stabiele serial na expiry. Primitive-/klokdekking, geen bewezen echte M2-pose.
+- `tools/missile_release_regression.cpp`: PASS voor gedeelde deadline/homing/gate, wrap, stalls, expiry, moving-target, reset en dubbele release. Geen CGUnit- of attachment-integratieclaim.
+- Bestaande Classic-spellpacketfixture en terrain-budgetfixture opnieuw PASS. Opgeloste packetbatch niet heropend.
+- `tools/missile_renderer_regression.cpp` linkt tegen de productielibs en PASS (echte `SpellVisualRenderer`; vcpkg-DLL's via `build/release/missile-renderer-check.cmd`). Dekt expiry, live target-offset, generatie-annulering, onzichtbare vlucht, caster/target-unload, expired reflection en return-miss. Geen GPU/server/assets.
+- Onafhankelijke bronreview vond en hercontroleerde drie herstelde integratiefouten: marker-label mismatch, expired-reflect bypass en onzichtbare-flight owner-cleanup. Broncontrole, geen ingame bevestiging.
+- Eerste compilepoging (620 objecten) stopte op private `FindInstance` vanuit WorldScene. Hersteld met een generation-checked **waardequery** (`QueryUnitAnimationRequest`) zonder interne rendererpointer te exporteren. Definitieve rebuild daarna `DEV_BUILD_OK`, exit 0, 470 s, `build/release/apps/client/OllieWoW.exe` herschreven (lokaal 14:39:58).
+
+De oudere `build/release/apps/client/perf-crossroads.log` toont eerste imp-vluchtregistratie610ms na GO en later4–8ms; **geen bewijs** voor15s zichtbaarheid of verre vertrekpositie. Wond/completion/commit en caster/source/root-coördinaten ontbraken. Perf-launcher zet nu `OPENWOW_ANIMATION_TRACE=1` voor begrensde wond/cast/binding/completion-diagnostiek, zonder bewegingstracing aan te zetten.
+
+Benodigde ingamecontrole: Ready27 geraakt zonder eigen cast/beweging, dan mid-swing en tijdens lopen; imp hold/cast/release zichtbaar vanuit hand; bewegende caster/target; één impact en geen oude flight na unload/stall. Capture bewaren vóór volgende launch: launcher overschrijft perf-crossroads.log.
+
+### Spell- en DoT-wond: derde bron verwijderd (2026-10-02)
+
+OpenWow had naast melee en de kit-kolom een derde wondbron:
+`world_session_combat.cpp::ApplySpellVictimReaction` riep `PlayWoundReaction`
+(melee-selectie) op `kSpellDamage` **en** `kPeriodicDamage`. Die aanroep is verwijderd;
+het letselgeluid blijft, want dat hoort net als bij Benilla bij de log.
+
+Bron (echte DBC-rijen, niet aangenomen):
+- `artifacts/dbc-audit/DBFilesClient_SpellVisual.dbc` rij 67 (spell 3110 Fireball):
+  `cast_kit=38`, `impact_kit=286`.
+- `DBFilesClient_SpellVisualKit.dbc` kit 286: `start_anim=1`, **`anim_id=9`** (CombatWound).
+- De kit-route past die ook echt toe: `world_scene.cpp:1668` `CreateFromKit(kit_id, dispatch_type=1)`
+  → `ApplySpellVisualKitAnimation` (`unit_animation_runtime.cpp:3114`) → `PlayWoundAnimation(9)`.
+- Breedte: 115 `SpellVisual`-rijen hebben hun `impact_kit` in de wondset (anim 8-10);
+  precast 0, channel 0, cast 4, state 6.
+- Benilla: `creature_anim/spell_visual.rs:507-509` (`play_kit` → `WoundAnim`) en
+  `creature_anim/driver.rs:390-392`; de damage- en periodic-pakketten gaan in
+  `net/apply.rs:1155-1188` alleen naar chat, floating combat text en geluid.
+- `source/.../UnitDefines.h:192` `HITINFO_AFFECTS_VICTIM = 0x2`; OpenWow's melee-tak
+  (`victim_state==1 && damage!=0`) komt daar in de door de server geproduceerde gevallen
+  mee overeen.
+
+Effect: de flinch gebruikt nu de kit-rij (9 bij fireball, ook op een crit, waar de oude
+log-route 10 doorgaf) en DoT-ticks flinchen niet meer. Eén regel, terugdraaibaar; geen
+Client/Source/Benilla/DBC-wijziging.
+
+Controle: rebuild vanuit `build/release` `DEV_BUILD_OK`, exit 0, 383 s, exe herschreven.
+Ingame niet bevestigd.
 
 ## Werkvoorraad: pariteit met het origineel
 

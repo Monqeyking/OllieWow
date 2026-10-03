@@ -36,6 +36,22 @@ uniform vec4 u_wmoFsParams[6];
 
 #define u_wmoExtraParams    u_wmoFsParams[5]
 
+// x: -1 colorless INT, 0 ordinary color, 1 authored interior INT, 2 TRANS blend.
+// MOCV alpha is self-illumination / blend data, never ordinary opacity.
+vec3 wmoDiffuseColor(vec3 textureColor, vec4 vertexColor)
+{
+    vec3 color = textureColor * vertexColor.rgb;
+    if (u_wmoExtraParams.x > 0.5 && u_wmoExtraParams.x < 1.5) {
+        color = clamp(color * (1.0 + 4.0 * vertexColor.a), 0.0, 1.0);
+    }
+    return color;
+}
+float wmoCoverageAlpha(float textureAlpha, float vertexAlpha)
+{
+    float coverage = u_wmoExtraParams.y > 0.5 ? 1.0 : textureAlpha;
+    return coverage * (u_wmoExtraParams.x > 1.5 ? vertexAlpha : 1.0);
+}
+
 #endif
 
 #endif

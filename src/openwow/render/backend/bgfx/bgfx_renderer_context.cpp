@@ -54,6 +54,9 @@ void *s_metal_view = nullptr;
 std::uint32_t ResetFlags(const api::RendererCreateInfo::PresentationConfig config,
                          const api::RendererBackend backend) {
   std::uint32_t flags = config.vsync ? BGFX_RESET_VSYNC : BGFX_RESET_NONE;
+  // Zonder deze vlag begrenst bgfx elke anisotrope sampler op 1x. Of een
+  // texture anisotroop wordt gesampled, bepaalt de sampler-vlag per draw.
+  flags |= BGFX_RESET_MAXANISOTROPY;
   if (config.flush_after_render) {
     flags |= BGFX_RESET_FLUSH_AFTER_RENDER;
   }

@@ -13,14 +13,14 @@ void main()
     vec4 tex = texture2D(s_diffuse, v_texcoord0);
     vec3 environment = texture2D(s_envMap, v_envTexcoord).rgb;
 
-    vec3 color = 2.0 * v_color0.rgb * tex.rgb * u_wmoGroupColor.rgb;
+    vec3 color = wmoDiffuseColor(tex.rgb, v_color0) * u_wmoGroupColor.rgb;
     vec3 reflection = tex.a * environment;
     if (u_wmoExtraParams.z > 0.5) {
 
         reflection *= tex.rgb;
     }
     color += reflection;
-    float alpha = v_color0.a * u_wmoGroupColor.a;
+    float alpha = wmoCoverageAlpha(tex.a, v_color0.a) * u_wmoGroupColor.a;
 
     if (u_wmoExtraParams.w > 0.5 && alpha < (128.0 / 255.0)) {
         discard;

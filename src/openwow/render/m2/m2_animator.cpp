@@ -2,6 +2,8 @@
 
 #include "openwow/render/api/math/render_matrix_math.h"
 #include "openwow/render/m2/m2_animation_simd.h"
+#include "openwow/render/m2/m2_wound_mask.h"
+#include "openwow/render/models/animation/wound_secondary_state.h"
 
 #include <bx/math.h>
 
@@ -820,6 +822,7 @@ struct BonePoseEvaluationInputs {
   const std::optional<RenderMatrix4x4View> &camera_inverse_view;
 
   std::span<const openwow::render::m2::M2BoneBasisOverride> bone_basis_overrides{};
+  const M2WoundSample *wound_sample = nullptr;
 };
 
 class BoneChannelClockResolver {
@@ -858,6 +861,19 @@ private:
   return nullptr;
 }
 
+// Match a keyed subtree independently of the selected/inherited primary slot.
+[[nodiscard]] bool WoundAppliesToBone(const BonePoseEvaluationInputs &in,
+                                     const std::size_t bone_index) {
+  const auto *wound = in.wound_sample;
+  if (wound == nullptr || !std::isfinite(wound->weight) || wound->weight <= 0.0f ||
+      wound->sequence_index == kInvalidM2AnimationSequenceIndex ||
+      wound->sequence_index >= in.model.animation_durations_ms.size()) {
+    return false;
+  }
+  return M2WoundMaskAffectsBone(in.model.bones, in.model.key_bone_lookup,
+                               wound->keybone_slot, bone_index);
+}
+
 void EvaluateBoneMatrix(
     const BonePoseEvaluationInputs &in, const std::size_t bone_index,
     const BoneChannelClocks &clocks,
@@ -870,7 +886,8 @@ void EvaluateBoneMatrix(
   const RenderMatrix4x4 *const basis_override =
       FindBoneBasisOverride(in.bone_basis_overrides, bone_index);
 
-  if (keyless.AllThree() && !clocks.has_blend_source && basis_override == nullptr &&
+  const bool has_wound = WoundAppliesToBone(in, bone_index);
+  if (keyless.AllThree() && !clocks.has_blend_source && !has_wound && basis_override == nullptr &&
       pose_index.HasFinitePivot(bone_index)) {
     if (parent_matrix != nullptr) {
       Kernels::MultiplyMatrix(kRenderIdentityMatrix4x4.data(), parent_matrix, out);
@@ -890,6 +907,28 @@ void EvaluateBoneMatrix(
         SampleBonePose(in.model, bone, clocks.blend_source,
                        ResolveBoneTrackKeyless(pose_index, clocks.blend_source, bone_index));
     pose = BlendBonePose(source_pose, pose, clocks.blend_factor);
+  }
+
+  if (has_wound) {
+    const auto &wound = *in.wound_sample;
+    const auto duration = AnimationDurationMs(in.model, wound.sequence_index);
+    // Secondary samples never loop back to frame zero at the clip's endpoint.
+    const auto sample_time = duration > 0u ? std::min(wound.time_ms, duration - 1u) : 0u;
+    const auto wound_clock = MakeChannelClock(in.model, wound.sequence_index, sample_time);
+    const auto wound_pose = SampleBonePose(
+        in.model, bone, wound_clock,
+        ResolveBoneTrackKeyless(pose_index, wound_clock, bone_index));
+    // Translation/scale lerp + hemisphere-correct quaternion slerp;
+    // this runs after all primary pose selection, before any hierarchy matrix.
+    const auto weight = std::clamp(wound.weight, 0.0f, 1.0f);
+    for (std::size_t component = 0; component < 4u; ++component) {
+      pose.translation.lane[component] = WoundBlendComponent(
+          pose.translation.lane[component], wound_pose.translation.lane[component], weight);
+      pose.scale.lane[component] = WoundBlendComponent(
+          pose.scale.lane[component], wound_pose.scale.lane[component], weight);
+    }
+    pose.rotation = math::SlerpQuaternion<math::kM2AnimationMathBackend>(
+        pose.rotation, wound_pose.rotation, weight);
   }
 
   const float *const basis_override_rows =
@@ -915,7 +954,8 @@ void EvaluateBoneMatrix(
     const std::optional<RenderMatrix4x4View> &camera_inverse_view,
     const std::span<const M2AnimationSlotState> animation_slots,
     const std::span<const openwow::render::m2::M2BoneBasisOverride>
-        bone_basis_overrides = {}) {
+        bone_basis_overrides = {},
+    const M2WoundSample *wound_sample = nullptr) {
   if (bone_index >= model.bones.size()) {
     return std::nullopt;
   }
@@ -963,7 +1003,7 @@ void EvaluateBoneMatrix(
       MakeBaseChannelClocks(model, animation_index, time_ms,
                             blend_source_animation_index, blend_source_time_ms,
                             blend_factor),
-      camera_inverse_view, bone_basis_overrides};
+      camera_inverse_view, bone_basis_overrides, wound_sample};
   BoneChannelClockResolver clocks(model, inputs.base_clocks);
 
   M2Matrix4x4 parent{};
@@ -992,7 +1032,8 @@ void EvaluateBoneMatrix(
     const std::optional<RenderMatrix4x4View> &camera_inverse_view,
     const std::span<const M2AnimationSlotState> animation_slots = {},
     const std::span<const openwow::render::m2::M2BoneBasisOverride>
-        bone_basis_overrides = {}) {
+        bone_basis_overrides = {},
+    const M2WoundSample *wound_sample = nullptr) {
   if (out == nullptr || model.bones.empty()) {
     return false;
   }
@@ -1043,7 +1084,7 @@ void EvaluateBoneMatrix(
       MakeBaseChannelClocks(model, animation_index, time_ms,
                             blend_source_animation_index, blend_source_time_ms,
                             blend_factor),
-      camera_inverse_view, bone_basis_overrides};
+      camera_inverse_view, bone_basis_overrides, wound_sample};
   BoneChannelClockResolver clocks(model, inputs.base_clocks);
   const bool inherit_slots = !slot_by_bone.empty();
   for (std::size_t i = 0; i < bone_count; ++i) {
@@ -1077,12 +1118,13 @@ void EvaluateBoneMatrix(
     const std::optional<RenderMatrix4x4View> &camera_inverse_view,
     const std::span<const M2AnimationSlotState> animation_slots = {},
     const std::span<const openwow::render::m2::M2BoneBasisOverride>
-        bone_basis_overrides = {}) {
+        bone_basis_overrides = {},
+    const M2WoundSample *wound_sample = nullptr) {
   std::vector<float> matrices;
   if (!ComputeBoneMatricesIntoInternal(
           &matrices, model, animation_index, time_ms, blend_source_animation_index,
           blend_source_time_ms, blend_factor, camera_inverse_view, animation_slots,
-          bone_basis_overrides)) {
+          bone_basis_overrides, wound_sample)) {
     return std::nullopt;
   }
   return matrices;
@@ -1122,7 +1164,8 @@ bool M2Animator::ComputeLayeredBoneMatricesInto(
     const std::optional<int> blend_source_animation_index,
     const std::uint32_t blend_source_time_ms, const float blend_factor,
     const std::optional<RenderMatrix4x4View> &camera_inverse_view,
-    const std::span<const M2BoneBasisOverride> bone_basis_overrides) const {
+    const std::span<const M2BoneBasisOverride> bone_basis_overrides,
+    const M2WoundSample *wound_sample) const {
   if (model_ == nullptr) {
     return false;
   }
@@ -1130,7 +1173,7 @@ bool M2Animator::ComputeLayeredBoneMatricesInto(
   return ComputeBoneMatricesIntoInternal(
       out, *model_, animation_index, time_ms, blend_source_animation_index,
       blend_source_time_ms, blend_factor, camera_inverse_view, animation_slots,
-      bone_basis_overrides);
+      bone_basis_overrides, wound_sample);
 }
 
 std::optional<std::vector<float>> M2Animator::ComputeLayeredBoneMatrices(
@@ -1139,12 +1182,13 @@ std::optional<std::vector<float>> M2Animator::ComputeLayeredBoneMatrices(
     const std::optional<int> blend_source_animation_index,
     const std::uint32_t blend_source_time_ms, const float blend_factor,
     const std::optional<RenderMatrix4x4View> &camera_inverse_view,
-    const std::span<const M2BoneBasisOverride> bone_basis_overrides) const {
+    const std::span<const M2BoneBasisOverride> bone_basis_overrides,
+    const M2WoundSample *wound_sample) const {
   std::vector<float> matrices;
   if (!ComputeLayeredBoneMatricesInto(
           &matrices, animation_index, time_ms, animation_slots,
           blend_source_animation_index, blend_source_time_ms, blend_factor,
-          camera_inverse_view, bone_basis_overrides)) {
+          camera_inverse_view, bone_basis_overrides, wound_sample)) {
     return std::nullopt;
   }
   return matrices;
@@ -1156,14 +1200,15 @@ std::optional<RenderMatrix4x4> M2Animator::ComputeSingleBoneMatrix(
     const std::optional<int> blend_source_animation_index,
     const std::uint32_t blend_source_time_ms, const float blend_factor,
     const std::optional<RenderMatrix4x4View> &camera_inverse_view,
-    const std::span<const M2BoneBasisOverride> bone_basis_overrides) const {
+    const std::span<const M2BoneBasisOverride> bone_basis_overrides,
+    const M2WoundSample *wound_sample) const {
   if (model_ == nullptr) {
     return std::nullopt;
   }
   return EvaluateBoneChainMatrix(*model_, bone_index, animation_index, time_ms,
                                  blend_source_animation_index, blend_source_time_ms,
                                  blend_factor, camera_inverse_view, animation_slots,
-                                 bone_basis_overrides);
+                                 bone_basis_overrides, wound_sample);
 }
 
 std::optional<M2CameraPose> M2Animator::SampleCamera(int camera_index, int animation_index,

@@ -583,6 +583,7 @@ void WorldPresentationPublisher::SelectAnimation(ObjectProjection &instance,
       .upper_body_only = upper_body_only,
 
       .zero_blend = request.zero_blend,
+      .wound = unit.Animation().GetWoundRequest(),
   };
 }
 
@@ -1379,8 +1380,15 @@ void WorldPresentationPublisher::PublishSpellVisuals(
           .missile_source_position = dispatch.missile_source_position,
           .missile_caster_guid = dispatch.missile_caster_guid,
           .missile_cast_count = dispatch.missile_cast_count,
+          .missile_go_tick = dispatch.missile_go_tick,
+          .missile_queue_tick = dispatch.missile_queue_tick,
+          .missile_release_tick = dispatch.missile_release_tick,
+          .missile_deadline_tick = dispatch.missile_deadline_tick,
+          .missile_has_deadline = dispatch.missile_has_deadline,
           .missile_target_guid = dispatch.missile_target_guid,
           .missile_target_position = dispatch.missile_target_position,
+          .missile_target_fallback_offset = dispatch.missile_target_fallback_offset,
+          .missile_target_handle = dispatch.missile_target_handle,
           .missile_speed = dispatch.missile_speed,
           .missile_impact_result = dispatch.missile_impact_result,
           .missile_reflect_result = dispatch.missile_reflect_result,

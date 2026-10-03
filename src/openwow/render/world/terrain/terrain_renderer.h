@@ -1,9 +1,11 @@
 #pragma once
 
 #include <array>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <utility>
 #include <vector>
 
@@ -24,6 +26,8 @@
 namespace openwow::render {
 
 class ShadowRenderData;
+struct PendingTerrainUpload;
+enum class TerrainUploadStatus { kPending, kComplete, kFailed };
 
 struct TerrainChunkGpu {
 
@@ -103,6 +107,19 @@ public:
       const PreparedTerrainTile &prepared,
       const std::function<std::vector<std::uint8_t>(const std::string &)> &loader);
 
+  // Render-thread API, including pending destruction. Null Begin result means invalid input
+  // or an uninitialized renderer. Drop the pending shared_ptr to cancel; ClearTerrain/Shutdown
+  // also cancel outstanding uploads. kComplete means the complete tile was inserted/replaced.
+  // No partial tile is published. Deadline is checked BETWEEN units, not inside driver ops;
+  // per-tile vertex/index copies and buffer creation are indivisible soft-budget residuals.
+  [[nodiscard]] std::shared_ptr<PendingTerrainUpload> BeginPreparedAdtUpload(
+      std::shared_ptr<const PreparedTerrainTile> prepared,
+      std::shared_ptr<const PreparedTerrainMaterialTextures> materials, int32_t tile_x,
+      int32_t tile_y);
+  TerrainUploadStatus PumpPreparedAdtUpload(PendingTerrainUpload &pending,
+      std::chrono::steady_clock::time_point deadline, std::size_t max_units = 16u);
+
+  // Compatibility wrapper: drains the same staged path synchronously.
   void UploadPreparedAdt(const PreparedTerrainTile &prepared,
                          const PreparedTerrainMaterialTextures &materials, int32_t tile_x,
                          int32_t tile_y);
@@ -174,6 +191,8 @@ public:
   static constexpr std::size_t kMaxTerrainDrawPointLights = 3u;
 
 private:
+  friend struct PendingTerrainUpload;
+
   static constexpr std::uint32_t kInvalidPointLightIndex = UINT32_MAX;
 
   enum class TerrainProgramKind : std::uint8_t {
@@ -235,6 +254,8 @@ private:
 
   bgfx::VertexLayout layout_{};
   std::vector<TerrainTileGpu> loaded_tiles_;
+  // Weak tracking lets ClearTerrain/Shutdown cancel caller-owned uploads safely.
+  std::vector<std::weak_ptr<PendingTerrainUpload>> pending_uploads_;
   std::vector<TerrainBatchItem> batch_items_;
   bool initialized_{false};
   uint32_t view_distance_{4};

@@ -1348,7 +1348,8 @@ bool UnitInteractionRuntime::CanAttackSpellTarget(const CGUnit_C &target,
 }
 
 bool UnitInteractionRuntime::IsAttackingOrLatched() const {
-  return (owner_.State().GetUnitFlags() & 0x800u) != 0u ||
+  // Vanilla UNIT_FLAG_IN_COMBAT (Source/src/game/Objects/UnitDefines.h).
+  return (owner_.State().GetUnitFlags() & 0x80000u) != 0u ||
          !cached_update_target_guid_.IsEmpty();
 }
 

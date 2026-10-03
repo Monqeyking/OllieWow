@@ -8,6 +8,7 @@
 
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -70,6 +71,9 @@ struct TextureManagerStreamingStats {
   std::size_t pending{0};
   std::size_t prepared{0};
   std::size_t failed{0};
+  std::uint32_t workers{0};
+  std::uint32_t running_workers{0};
+  std::uint32_t queued_workers{0};
 };
 
 class TextureManager final : public api::RendererDeviceLifecycleObserver {
@@ -110,7 +114,12 @@ class TextureManager final : public api::RendererDeviceLifecycleObserver {
           TextureLoadFailurePolicy::kStrict,
       TextureLoadPriority priority = TextureLoadPriority::kDemand);
 
-  std::size_t PumpPreparedUploads(std::size_t max_uploads = 8u);
+  // time_budget == 0 betekent geen tijdslimiet. Met een budget stopt de pomp
+  // zodra het is verbruikt (na minimaal een upload), zodat een achterstand snel
+  // wegwerkt zonder dat een frame ontspoort.
+  std::size_t PumpPreparedUploads(
+      std::size_t max_uploads = 8u,
+      std::chrono::microseconds time_budget = std::chrono::microseconds::zero());
   [[nodiscard]] TextureManagerStreamingStats StreamingStats() const;
 
   [[nodiscard]] static PreparedTextureUpload PrepareTextureUpload(

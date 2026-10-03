@@ -10,6 +10,7 @@
 #include "openwow/game/object_manager.h"
 #include "openwow/game/object_effect_system.h"
 #include "openwow/game/query_cache.h"
+#include "openwow/game/world_session.h"
 #include "openwow/game/objects/cggameobject.h"
 #include "openwow/game/objects/cgplayer.h"
 #include "openwow/game/spell_c_internals.h"
@@ -462,6 +463,7 @@ void UnitSpellVisualRuntime::RemoveEffectsBySpellId(
   if (spell_id == 0u) {
     return;
   }
+  CancelPendingMissiles(spell_id);
   TeardownAttachedEffects(
        session, owner_,
       [spell_id, force_remove_persistent](const CEffect_C &,
@@ -476,6 +478,7 @@ void UnitSpellVisualRuntime::RemoveEffectsBySpellId(
 void UnitSpellVisualRuntime::ResetMatchingNodes(
     const WorldSession &, const std::uint32_t spell_id,
     const std::uint32_t visual_kit_param) {
+  CancelPendingMissiles(spell_id);
   for (auto *node = *owner_.GetEffectNodeListHeadSlot(); node != nullptr;
        node = node->GetNextAttachedEffect()) {
     const auto state = node->Snapshot();
@@ -722,7 +725,9 @@ void UnitSpellVisualRuntime::QueueMissileVisual(
     const std::array<float, 3>& source_position,
     const std::array<float, 3>& target_position, const float speed,
     const std::uint32_t impact_kit_id, const std::uint8_t impact_result,
-    const std::uint8_t reflect_result) {
+    const std::uint8_t reflect_result, const std::uint32_t go_tick,
+    const bool awaits_release, const std::optional<MissileReleaseClock> unit_go_clock,
+    const std::optional<std::array<float, 3>> target_fallback_offset) {
   DispatchRecord dispatch;
   dispatch.spell_id = spell_id;
   dispatch.spell_visual_id = spell_visual_id;
@@ -733,11 +738,123 @@ void UnitSpellVisualRuntime::QueueMissileVisual(
   dispatch.missile_cast_count = missile_cast_count;
   dispatch.missile_target_guid = target_guid;
   dispatch.missile_target_position = target_position;
+  if (const auto* objects = owner_.object_manager(); objects != nullptr && target_guid != 0u) {
+    const auto target_handle = objects->GetObjectHandle(ObjectGuid{target_guid});
+    if (target_handle.has_value()) {
+      dispatch.missile_target_handle = *target_handle;
+      if (const auto* target = objects->ResolveObjectHandle(*target_handle); target != nullptr) {
+        const auto base = target->GetPosition();
+        dispatch.missile_target_fallback_offset = {target_position[0] - base.x,
+            target_position[1] - base.y, target_position[2] - base.z};
+      }
+    }
+  }
+  if (target_fallback_offset.has_value())
+    dispatch.missile_target_fallback_offset = *target_fallback_offset;
   dispatch.missile_speed = speed;
   dispatch.missile_impact_result = impact_result;
   dispatch.missile_reflect_result = reflect_result;
   dispatch.deferred_impact_kit_id = impact_kit_id;
-  dispatches_.push_back(std::move(dispatch));
+  const auto clock = unit_go_clock.value_or(
+      MissileReleaseClock::FromGo(go_tick, source_position, target_position, speed));
+  dispatch.missile_go_tick = clock.go_tick;
+  dispatch.missile_queue_tick = core::GameClock::GetTickCount32();
+  dispatch.missile_deadline_tick = clock.deadline_tick;
+  dispatch.missile_has_deadline = true;
+  const auto& request = owner_.Animation().GetPlaybackRequest();
+  const auto* objects = owner_.object_manager();
+  const auto handle = objects != nullptr ? objects->GetObjectHandle(owner_.GetGuid())
+                                         : std::optional<ObjectHandle>{};
+  // A body kit that did not arm a one-shot cannot ever emit its release marker.
+  // Never associate a queued missile with an unrelated Ready/wound request.
+  if (awaits_release && !request.looping && handle.has_value()) {
+    pending_missiles_.push_back({std::move(dispatch), *handle,
+                                {request.serial, request.animation_id}});
+  } else {
+    // No body animation: immediate flush does not require an armed serial.
+    dispatch.missile_source_position = SampleMissileReleaseOrigin(request.animation_id);
+    dispatch.missile_release_tick = core::GameClock::GetTickCount32();
+    dispatches_.push_back(std::move(dispatch));
+  }
+}
+
+std::array<float, 3> UnitSpellVisualRuntime::SampleMissileReleaseOrigin(
+    const std::uint16_t animation_id) const {
+  const auto instance = owner_.GetPrimaryM2InstanceId();
+  auto* m2 = owner_.m2_system();
+  if (instance != 0u && m2 != nullptr) {
+    // Vanilla no-marker flush cascade: CSL, CSR, CST, then unit base.
+    for (const auto ident : {0x4c534324u, 0x52534324u, 0x54534324u}) {
+      const auto marker = m2->QueryInstanceEvent(instance, animation_id, ident);
+      if (marker.status == render::m2::M2ResultStatus::kReady && marker.has_event)
+        return marker.event.world_position;
+    }
+  }
+  const auto position = owner_.GetPosition();
+  return {position.x, position.y, position.z};
+}
+
+void UnitSpellVisualRuntime::ReleasePendingMissiles(
+    const WorldSession& session, const std::uint32_t now_tick,
+    const std::array<float, 3>& event_origin, const std::string_view kind,
+    const std::uint64_t request_serial, const std::uint16_t animation_id) {
+  if (kind != "$CSL" && kind != "$CSR" && kind != "$CST" && kind != "$BWR" &&
+      kind != "cast-completion") return;
+  for (auto& pending : pending_missiles_) {
+    if (session.objects().ResolveObjectHandle(pending.owner) != &owner_) {
+      pending.gate.cancelled = true;
+      continue;
+    }
+    if (!pending.gate.TryRelease(request_serial, animation_id)) continue;
+    auto& dispatch = pending.dispatch;
+    dispatch.missile_source_position = event_origin;
+    dispatch.missile_release_tick = now_tick;
+    static unsigned diagnostic_count = 0;
+    if (diagnostic_count++ < 64u) {
+      const auto unit = owner_.GetPosition();
+      const auto instance = owner_.GetPrimaryM2InstanceId();
+      auto* m2 = owner_.m2_system();
+      const auto root = m2 != nullptr ? m2->QueryModelWorldTransformMatrix(instance)
+                                     : render::m2::M2ModelWorldTransformMatrixQuery{};
+      const auto ready = m2 != nullptr ? m2->QueryInstanceReadiness(instance)
+                                      : render::m2::M2InstanceReadinessQuery{};
+      diagnostics::Log(diagnostics::LogLevel::kInfo,
+          "MissileRelease: caster=" + std::to_string(owner_.GetGuid().GetRawValue()) +
+          " target=" + std::to_string(dispatch.missile_target_guid) +
+          " spell=" + std::to_string(dispatch.spell_id) + " kind=" + std::string(kind) +
+          " go=" + std::to_string(dispatch.missile_go_tick) +
+          " queue=" + std::to_string(dispatch.missile_queue_tick) +
+          " release=" + std::to_string(now_tick) +
+          " deadline=" + std::to_string(dispatch.missile_deadline_tick) +
+          " instance=" + std::to_string(owner_.GetPrimaryM2InstanceId()) +
+          " source=" + std::to_string(event_origin[0]) + "," + std::to_string(event_origin[1]) + "," + std::to_string(event_origin[2]) +
+          " unit=" + std::to_string(unit.x) + "," + std::to_string(unit.y) + "," + std::to_string(unit.z) +
+          " root=" + std::to_string(root.matrix[12]) + "," + std::to_string(root.matrix[13]) + "," + std::to_string(root.matrix[14]) +
+          " root_ready=" + std::to_string(static_cast<unsigned>(root.status)) +
+          " ready=" + std::to_string(static_cast<unsigned>(ready.status)));
+    }
+    dispatches_.push_back(std::move(dispatch));
+  }
+  std::erase_if(pending_missiles_, [](const PendingMissile& pending) {
+    return pending.gate.released || pending.gate.cancelled;
+  });
+}
+
+void UnitSpellVisualRuntime::FinishCastMissiles(
+    const WorldSession& session, const std::uint32_t now_tick,
+    const std::uint64_t request_serial, const std::uint16_t animation_id) {
+  ReleasePendingMissiles(session, now_tick, SampleMissileReleaseOrigin(animation_id),
+                         "cast-completion", request_serial, animation_id);
+}
+
+void UnitSpellVisualRuntime::CancelPendingMissiles(const std::uint32_t spell_id) {
+  std::erase_if(pending_missiles_, [spell_id](const PendingMissile& pending) {
+    return spell_id == 0u || pending.dispatch.spell_id == spell_id;
+  });
+  std::erase_if(dispatches_, [spell_id](const DispatchRecord& dispatch) {
+    return dispatch.missile.has_value() &&
+           (spell_id == 0u || dispatch.spell_id == spell_id);
+  });
 }
 
 void UnitSpellVisualRuntime::QueueAuraVisualStop(
@@ -1218,6 +1335,41 @@ void UnitSpellVisualRuntime::RecordAnimHitPosition(const float *const position) 
 }
 
 void UnitSpellVisualRuntime::AdvanceFrame(const std::uint32_t tick_count) {
+  const auto& request = owner_.Animation().GetPlaybackRequest();
+  const auto* objects = owner_.object_manager();
+  for (auto& pending : pending_missiles_) {
+    if (objects == nullptr || objects->ResolveObjectHandle(pending.owner) != &owner_) {
+      pending.gate.cancelled = true;
+      continue;
+    }
+    const auto instance = owner_.GetPrimaryM2InstanceId();
+    auto* m2 = owner_.m2_system();
+    const auto animation = m2 != nullptr ? m2->QueryInstanceAnimationInfo(instance)
+                                        : render::m2::M2InstanceAnimationInfoQuery{};
+    const bool playback_matches = owner_.Animation().IsRenderedPlaybackSource(
+        instance, pending.gate.serial, pending.gate.animation) &&
+        animation.status == render::m2::M2ResultStatus::kReady &&
+        animation.info.requested_animation_id == pending.gate.animation;
+    pending.playback_seen = pending.playback_seen || playback_matches;
+    const bool finished = playback_matches && animation.info.duration_ms > 0u &&
+        animation.info.time_ms >= animation.info.duration_ms;
+    // Benilla's RELEASE_WAIT_MAX covers only a one-shot which never starts;
+    // it is not a dt cap or a timer substitute for a live release marker.
+    const bool never_started = !pending.playback_seen &&
+        tick_count - pending.dispatch.missile_queue_tick >= 250u;
+    // GO is already committed: a superseding/finished/unstarted playback cannot
+    // leave its missile parked forever. Flush with the ORIGINAL gate identity.
+    if (finished || never_started || request.serial != pending.gate.serial ||
+        request.animation_id != pending.gate.animation) {
+      if (!pending.gate.TryRelease(pending.gate.serial, pending.gate.animation)) continue;
+      pending.dispatch.missile_source_position = SampleMissileReleaseOrigin(pending.gate.animation);
+      pending.dispatch.missile_release_tick = tick_count;
+      dispatches_.push_back(std::move(pending.dispatch));
+    }
+  }
+  std::erase_if(pending_missiles_, [](const PendingMissile& pending) {
+    return pending.gate.released || pending.gate.cancelled;
+  });
   if (*owner_.GetEffectNodeListHeadSlot() != nullptr) {
     if ((owner_.State().GetSpellStateFlags() & 0x80000000u) != 0u) {
       for (auto* node = *owner_.GetEffectNodeListHeadSlot(); node != nullptr;
@@ -1285,6 +1437,7 @@ void UnitSpellVisualRuntime::CreateFromCreatureInfo() {
 
 void UnitSpellVisualRuntime::Cleanup() {
   ClearCreatureInfo();
+  CancelPendingMissiles();
   ClearDispatches();
 
   alpha_fade_effect_nodes_.clear();

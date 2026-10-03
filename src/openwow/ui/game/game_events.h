@@ -575,6 +575,7 @@ inline constexpr const char* UPDATE_INSTANCE_INFO               = "UPDATE_INSTAN
 inline constexpr const char* CLOSE_WORLD_MAP                    = "CLOSE_WORLD_MAP";
 inline constexpr const char* MINIMAP_PING                       = "MINIMAP_PING";
 inline constexpr const char* MINIMAP_UPDATE_TRACKING            = "MINIMAP_UPDATE_TRACKING";
+inline constexpr const char* MINIMAP_ZONE_CHANGED               = "MINIMAP_ZONE_CHANGED";
 inline constexpr const char* MINIMAP_UPDATE_ZOOM                = "MINIMAP_UPDATE_ZOOM";
 inline constexpr const char* WORLD_MAP_UPDATE                   = "WORLD_MAP_UPDATE";
 inline constexpr const char* ZONE_CHANGED                       = "ZONE_CHANGED";

@@ -13,14 +13,18 @@
 #include "openwow/render/world/water/water_renderer.h"
 #include "openwow/render/world/environment/weather_renderer.h"
 #include "openwow/render/world/wmo/wmo_renderer.h"
+#include "openwow/world/wmo/wmo_vertex_color_query.h"
 #include "openwow/render/world/wmo/wmo_portal_fill_renderer.h"
 #include "openwow/world/liquid/wmo_liquid_surface.h"
 #include "openwow/world/world_render_pipeline.h"
 #include "openwow/render/api/math/view_projection.h"
 #include "openwow/foundation/diagnostics/logging.h"
 #include "openwow/runtime/scheduling/frame_job_system.h"
+#include "openwow/runtime/scheduling/thread_pool_system.h"
+#include "openwow/debug/diagnostics/profiler.h"
 
 #include <algorithm>
+#include <atomic>
 #include <bgfx/bgfx.h>
 #include <chrono>
 #include <cmath>
@@ -43,6 +47,8 @@ struct WorldPresentationScene::ModelResource {
   std::unique_ptr<WmoRenderer> renderer;
   std::shared_ptr<const data::wmo::WmoRoot> root;
   std::size_t group_count{};
+  // Temporary, bounded diagnostics: one record per actually submitted group.
+  std::unordered_set<std::uint32_t> lighting_traced_groups;
   std::unordered_map<std::uint32_t,
                      std::shared_ptr<const data::wmo::WmoGroup>> groups;
 };
@@ -58,6 +64,20 @@ struct WorldPresentationScene::PendingWmoGroup {
   std::optional<Prepared> prepared;
   world::PublishWorldModelGroupCommand command;
   bool started{false};
+};
+
+struct WorldPresentationScene::PendingTerrainTile {
+  struct Prepared {
+    std::shared_ptr<const PreparedTerrainTile> mesh;
+    std::shared_ptr<const PreparedTerrainMaterialTextures> materials;
+  };
+  world::PublishTerrainTileCommand command;
+  std::future<Prepared> future;
+  std::shared_ptr<PendingTerrainUpload> upload;
+  std::uint64_t sequence{};
+  std::uint32_t task_id{};
+  bool failed{false};
+  bool no_geometry{false};
 };
 
 WorldPresentationScene::WorldPresentationScene(
@@ -95,6 +115,8 @@ bool WorldPresentationScene::Initialize() {
     }
   }
 
+  terrain_workers_ = std::make_unique<core::ThreadPoolSystem>();
+  terrain_workers_->Initialize(2u);
   SetFileLoader(load_file_);
   SetPrefixFileLoader(load_file_prefix_);
   BindDbc(dbc_);
@@ -116,7 +138,8 @@ std::uint64_t WorldPresentationScene::DoodadCollisionRevision() const noexcept {
 }
 
 bool WorldPresentationScene::IsDoodadWorldEntryLoadDrained() const {
-  return !doodads_ || doodads_->IsWorldEntryLoadDrained();
+  return pending_terrain_tiles_.empty() &&
+         (!doodads_ || doodads_->IsWorldEntryLoadDrained());
 }
 
 void WorldPresentationScene::BindWmoDoodadM2EventSink(
@@ -128,6 +151,11 @@ void WorldPresentationScene::BindWmoDoodadM2EventSink(
 }
 
 void WorldPresentationScene::ResetMap() {
+  while (!pending_terrain_tiles_.empty()) {
+    const auto key = pending_terrain_tiles_.begin()->first;
+    CancelTerrainPreparation(key.first, key.second);
+  }
+  next_terrain_sequence_ = 1u;
   pending_wmo_groups_.clear();
   for (auto& [key, model] : models_) {
     (void)key;
@@ -143,6 +171,154 @@ void WorldPresentationScene::ResetMap() {
   if (sky_) sky_->Reset();
   if (weather_renderer_) weather_renderer_->Reset();
   world::ResetWeather(weather_);
+}
+
+void WorldPresentationScene::CancelTerrainPreparation(
+    const std::int32_t tile_x, const std::int32_t tile_y) {
+  const auto it = pending_terrain_tiles_.find({tile_x, tile_y});
+  if (it == pending_terrain_tiles_.end()) return;
+  if (terrain_workers_ && it->second->task_id != 0u) {
+    terrain_workers_->CancelTask(it->second->task_id);
+    // ForgetTask also forgets running tasks on completion, without a frame wait.
+    static_cast<void>(terrain_workers_->ForgetTask(it->second->task_id));
+  }
+  // future originates from a promise, NOT std::async: destruction does not join.
+  pending_terrain_tiles_.erase(it);
+}
+
+void WorldPresentationScene::QueueTerrainPreparation(
+    const world::PublishTerrainTileCommand& command) {
+  if (!command.adt) return;
+  CancelTerrainPreparation(command.tile_x, command.tile_y);
+  auto pending = std::make_unique<PendingTerrainTile>();
+  pending->command = command;
+  pending->sequence = next_terrain_sequence_++;
+  pending_terrain_tiles_.emplace(
+      std::pair{command.tile_x, command.tile_y}, std::move(pending));
+}
+
+void WorldPresentationScene::StartQueuedTerrainPreparations() {
+  if (!terrain_workers_) return;
+  constexpr std::size_t kMaxPreparedTiles = 2u;
+  std::size_t active = 0u;
+  std::vector<PendingTerrainTile*> queued;
+  for (auto& [key, pending] : pending_terrain_tiles_) {
+    (void)key;
+    if (pending->failed) continue;
+    if (pending->future.valid() || pending->upload || pending->no_geometry) ++active;
+    else queued.push_back(pending.get());
+  }
+  // Keep the nearest-first publication order inherited from WorldMap's queue.
+  std::sort(queued.begin(), queued.end(), [](const auto* a, const auto* b) {
+    if (a->command.publication_priority != b->command.publication_priority)
+      return a->command.publication_priority < b->command.publication_priority;
+    return a->sequence < b->sequence;
+  });
+  for (auto* pending : queued) {
+    if (active >= kMaxPreparedTiles) break;
+    const auto command = pending->command;
+    const auto loader = load_file_;
+    auto promise = std::make_shared<std::promise<PendingTerrainTile::Prepared>>();
+    pending->future = promise->get_future();
+    try {
+      pending->task_id = terrain_workers_->Submit(
+          "terrain-prepare:" + std::to_string(command.tile_x) + ":" +
+              std::to_string(command.tile_y), core::TaskPriority::Normal,
+          [command, loader, promise]() {
+            try {
+              OPENWOW_PROFILE_SCOPE("ow.terrain.cpu_prepare");
+              auto mesh = std::make_shared<PreparedTerrainTile>(PrepareAdtTerrainTile(
+                  *command.adt, static_cast<std::uint32_t>(command.tile_x),
+                  static_cast<std::uint32_t>(command.tile_y), command.big_alpha));
+              auto materials = std::make_shared<PreparedTerrainMaterialTextures>(
+                  PrepareTerrainMaterialTextures(*mesh, loader));
+              promise->set_value({std::move(mesh), std::move(materials)});
+            } catch (...) {
+              promise->set_exception(std::current_exception());
+            }
+          });
+      ++active;
+    } catch (...) {
+      // No synchronous fallback: retry submission on a later frame.
+      pending->future = {};
+      pending->task_id = 0u;
+    }
+  }
+}
+
+void WorldPresentationScene::PumpPreparedTerrainTiles() {
+  OPENWOW_PROFILE_SCOPE("ow.terrain.publish");
+  if (!terrain_) return;
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(2);
+  std::vector<std::pair<std::int32_t, std::int32_t>> ordered;
+  for (const auto& [key, pending] : pending_terrain_tiles_) {
+    (void)pending;
+    ordered.push_back(key);
+  }
+  std::sort(ordered.begin(), ordered.end(), [this](const auto& a, const auto& b) {
+    const auto& left = *pending_terrain_tiles_.at(a);
+    const auto& right = *pending_terrain_tiles_.at(b);
+    if (left.command.publication_priority != right.command.publication_priority)
+      return left.command.publication_priority < right.command.publication_priority;
+    return left.sequence < right.sequence;
+  });
+  for (const auto& key : ordered) {
+    auto& pending = *pending_terrain_tiles_.at(key);
+    if (pending.failed) continue;
+    if (!pending.upload && !pending.no_geometry) {
+      if (!pending.future.valid() ||
+          pending.future.wait_for(std::chrono::seconds(0)) != std::future_status::ready) {
+        continue;
+      }
+      try {
+        auto prepared = pending.future.get();
+        if (terrain_workers_) static_cast<void>(terrain_workers_->ForgetTask(pending.task_id));
+        pending.task_id = 0u;
+        // A fully holed tile legitimately has no drawable chunks, not a GPU failure.
+        pending.no_geometry = prepared.mesh && prepared.mesh->vertices.empty();
+        if (!pending.no_geometry) {
+          pending.upload = terrain_->BeginPreparedAdtUpload(
+              std::move(prepared.mesh), std::move(prepared.materials), key.first, key.second);
+        }
+      } catch (const std::exception& error) {
+        diagnostics::Log(diagnostics::LogLevel::kError,
+            std::string("Terrain preparation failed: ") + error.what());
+      } catch (...) {
+        diagnostics::Log(diagnostics::LogLevel::kError, "Terrain preparation failed");
+      }
+      if (!pending.upload && !pending.no_geometry) {
+        diagnostics::Log(diagnostics::LogLevel::kError,
+            "Terrain publication failed for (" + std::to_string(key.first) + "," +
+            std::to_string(key.second) + "); detailed terrain not activated");
+        if (terrain_workers_ && pending.task_id != 0u)
+          static_cast<void>(terrain_workers_->ForgetTask(pending.task_id));
+        pending.task_id = 0u;
+        pending.failed = true; // Do not release world-entry readiness on a missing tile.
+        continue;
+      }
+    }
+    const auto status = pending.no_geometry ? TerrainUploadStatus::kComplete :
+        terrain_->PumpPreparedAdtUpload(*pending.upload, deadline, 32u);
+    if (status == TerrainUploadStatus::kComplete) {
+      if (pending.no_geometry) terrain_->RemoveAdt(key.first, key.second);
+      const auto& command = pending.command;
+      // Publish dependent scene owners only after the WHOLE tile is drawable.
+      { OPENWOW_PROFILE_SCOPE("ow.terrain.doodad_activate");
+        if (doodads_) doodads_->LoadFromAdt(*command.adt, key.first, key.second); }
+      { OPENWOW_PROFILE_SCOPE("ow.terrain.water_activate");
+        if (water_ && command.liquids)
+          water_->ReplaceOwnedWaterHeightfields(command.owner, *command.liquids); }
+      if (distant_) distant_->SetDetailedTile(key.first, key.second, true);
+      CancelTerrainPreparation(key.first, key.second);
+    } else if (status == TerrainUploadStatus::kFailed) {
+      diagnostics::Log(diagnostics::LogLevel::kError,
+          "Terrain GPU upload failed; retaining existing tile/distant terrain");
+      pending.upload.reset();
+      pending.failed = true; // Unload/replay may retry; failure never means drawable-ready.
+    }
+    // One tile's bounded GPU steps per frame; other ready tiles stay parked.
+    break;
+  }
 }
 
 void WorldPresentationScene::QueueWmoGroupPreparation(
@@ -350,6 +526,9 @@ void WorldPresentationScene::PumpPreparedWmoGroups(
 void WorldPresentationScene::Shutdown() {
   if (!terrain_) return;
   ResetMap();
+  // CPU tasks never capture scene/GPU state; join before loader lifetimes end.
+  if (terrain_workers_) terrain_workers_->Shutdown();
+  terrain_workers_.reset();
 
   if (wmo_shader_warm_up_) {
     wmo_shader_warm_up_->Shutdown();
@@ -442,22 +621,9 @@ world::WorldPresentationAcknowledgment WorldPresentationScene::Consume(
       } else if constexpr (std::is_same_v<T, world::PublishDistantTerrainCommand>) {
         if (distant_ && value.wdl) distant_->LoadWdl(*value.wdl);
       } else if constexpr (std::is_same_v<T, world::PublishTerrainTileCommand>) {
-        if (terrain_ && value.adt) {
-
-          const auto prepared = PrepareAdtTerrainTile(
-              *value.adt, static_cast<std::uint32_t>(value.tile_x),
-              static_cast<std::uint32_t>(value.tile_y), value.big_alpha);
-          const auto materials =
-              PrepareTerrainMaterialTextures(prepared, load_file_);
-          terrain_->UploadPreparedAdt(prepared, materials, value.tile_x,
-                                      value.tile_y);
-        }
-        if (doodads_ && value.adt)
-          doodads_->LoadFromAdt(*value.adt, value.tile_x, value.tile_y);
-        if (water_ && value.liquids)
-          water_->ReplaceOwnedWaterHeightfields(value.owner, *value.liquids);
-        if (distant_) distant_->SetDetailedTile(value.tile_x, value.tile_y, true);
+        QueueTerrainPreparation(value);
       } else if constexpr (std::is_same_v<T, world::RemoveTerrainTileCommand>) {
+        CancelTerrainPreparation(value.tile_x, value.tile_y);
         if (terrain_) terrain_->RemoveAdt(value.tile_x, value.tile_y);
         if (doodads_) doodads_->UnloadTile(value.tile_x, value.tile_y);
         if (water_) water_->RemoveOwnedWaterHeightfields(value.owner);
@@ -567,6 +733,7 @@ world::WorldPresentationAcknowledgment WorldPresentationScene::Consume(
       }
     }, command);
   }
+  StartQueuedTerrainPreparations();
   StartQueuedWmoGroupPreparations();
   return acknowledgment;
 }
@@ -585,6 +752,8 @@ void WorldPresentationScene::Update(const float dt,
                                     const bool use_weather_shaders,
                                     const bool indoors) {
   if (!initialized_) return;
+  PumpPreparedTerrainTiles();
+  StartQueuedTerrainPreparations();
   SetEnvironmentDetail(environment_detail);
   weather_clock_ += static_cast<std::uint32_t>(std::max(0.0f, dt) * 1000.0f);
   world::UpdateWeather(
@@ -805,10 +974,85 @@ void WorldPresentationScene::Render(
       renderer.SetLightingPalette(env.wmo);
       renderer.SetNightGlowIntensity(snapshot.wmo_night_glow);
       renderer.SetFrustum(&frustum);
-      static_cast<void>(renderer.Render(
+      const auto& submitted = renderer.Render(
           views.wmo, gpu.view.data(), gpu.projection.data(), item.transform,
           &item.visible_subresources, item.wmo_visible_group_paths, screen_width,
-          screen_height, &occlusion_buffer_, encoder));
+          screen_height, &occlusion_buffer_, encoder);
+      // Capture the active route, not just a loaded asset. At most 64 group
+      // records per process and 8 batch descriptions per record; no frame spam.
+      static std::atomic<unsigned> light_trace_count{0u};
+      if (light_trace_count.load(std::memory_order_relaxed) < 64u) {
+        const auto resource = models_.find(item.resource_key);
+        if (resource != models_.end() && resource->second->root) {
+          auto& model = *resource->second;
+          const auto& root = *model.root;
+          const bool unified = (root.header.flags & data::wmo::kWmoFlagUnifiedRender) != 0u;
+          for (const auto& record : submitted.records) {
+            const auto found = model.groups.find(record.group_index);
+            if (record.submit_count == 0u || found == model.groups.end() || !found->second ||
+                !model.lighting_traced_groups.insert(record.group_index).second) continue;
+            if (light_trace_count.fetch_add(1u, std::memory_order_relaxed) >= 64u) break;
+            const auto& group = *found->second;
+            std::ostringstream trace;
+            trace << "[WMO_LIGHT_TRACE v1] resource=" << item.resource_key
+                  << " group=" << record.group_index << " rootFlags=" << root.header.flags
+                  << " groupFlags=" << group.header.flags << " unified=" << unified
+                  << " vertices=" << group.vertices.size() << " mocv=" << group.vertexColors.size()
+                  << " mocvUsable=" << (group.vertexColors.size() == group.vertices.size() ||
+                      (!group.vertexColors.empty() && group.vertexColors.size() < group.vertices.size() &&
+                       group.vertices.size() - group.vertexColors.size() == 1u))
+                  << " sections=" << group.header.transBatchCount << "/"
+                  << group.header.intBatchCount << "/" << group.header.extBatchCount
+                  << " actualSubmits=" << record.submit_count
+                  << " ambient=" << env.wmo.outdoor_ambient[0] << ","
+                  << env.wmo.outdoor_ambient[1] << "," << env.wmo.outdoor_ambient[2]
+                  << " diffuse=" << env.wmo.outdoor_diffuse[0] << ","
+                  << env.wmo.outdoor_diffuse[1] << "," << env.wmo.outdoor_diffuse[2]
+                  << " sun=" << env.surface_to_light[0] << ","
+                  << env.surface_to_light[1] << "," << env.surface_to_light[2];
+            const auto preparation = world::BuildWmoVertexColorPreparation(
+                group.renderBatches, group.header.transBatchCount, root.header.flags);
+            if (!group.vertexColors.empty() && !group.vertices.empty()) {
+              const auto& raw = group.vertexColors.front();
+              const auto prepared = world::PrepareWmoPortalVertexColor(
+                  root, group, group.vertices.front(),
+                  world::PrepareWmoVertexColor(raw, 0u, preparation), 0u, preparation);
+              trace << " raw0RGBA=" << unsigned(raw.r) << "," << unsigned(raw.g)
+                    << "," << unsigned(raw.b) << "," << unsigned(raw.a)
+                    << " prepared0RGBA=" << unsigned(prepared.r) << "," << unsigned(prepared.g)
+                    << "," << unsigned(prepared.b) << "," << unsigned(prepared.a);
+            }
+            const auto batch_count = std::min<std::size_t>(group.renderBatches.size(), 8u);
+            for (std::size_t i = 0; i < batch_count; ++i) {
+              const auto& batch = group.renderBatches[i];
+              if (batch.materialId >= root.materials.size()) continue;
+              const auto& material = root.materials[batch.materialId];
+              const auto region = i < group.header.transBatchCount
+                  ? WmoBatchMesh::Region::Transition
+                  : (i < std::size_t(group.header.transBatchCount) + group.header.intBatchCount
+                      ? WmoBatchMesh::Region::Interior : WmoBatchMesh::Region::Exterior);
+              trace << " batch=" << i << ":mat=" << unsigned(batch.materialId)
+                    << ":flags=" << material.flags << ":authoredShader=" << material.shader
+                    << ":region=" << unsigned(region) << ":mode="
+                    << unsigned(ResolveRetailWmoLightingMode(
+                         group.header.flags, region, material.flags, unified));
+              const auto vertex = std::size_t(batch.startVertex);
+              if (vertex < group.vertices.size() && !group.vertexColors.empty() &&
+                  (group.vertexColors.size() == group.vertices.size() ||
+                   (group.vertexColors.size() < group.vertices.size() &&
+                    group.vertices.size() - group.vertexColors.size() == 1u))) {
+                const auto& raw = group.vertexColors[std::min(vertex, group.vertexColors.size() - 1u)];
+                const auto color = world::PrepareWmoPortalVertexColor(
+                    root, group, group.vertices[vertex],
+                    world::PrepareWmoVertexColor(raw, vertex, preparation), vertex, preparation);
+                trace << ":preparedRGBA=" << unsigned(color.r) << "," << unsigned(color.g)
+                      << "," << unsigned(color.b) << "," << unsigned(color.a);
+              }
+            }
+            diagnostics::Log(diagnostics::LogLevel::kInfo, trace.str());
+          }
+        }
+      }
       const auto count = std::min(item.visible_subresources.size(),
                                   placement.instance->liquids.size());
       for (std::size_t group = 0; group < count; ++group) {

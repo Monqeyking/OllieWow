@@ -7,6 +7,7 @@
 #include "openwow/render/m2/m2_system.h"
 #include "openwow/render/m2/m2_transparent_draw_order.h"
 #include "openwow/render/models/animation/animation_state.h"
+#include "openwow/render/models/animation/wound_secondary_state.h"
 #include "openwow/render/models/characters/character_appearance_geosets.h"
 #include "openwow/render/models/characters/character_appearance_texture_baker.h"
 #include "openwow/render/models/characters/equipment_renderer.h"
@@ -63,6 +64,12 @@ struct GameObjectM2AnimationRenderState {
   std::uint32_t sync_serial{0};
   std::uint32_t applied_sync_serial{0};
 
+  // Terugval na een niet-geslaagde poging: voor dit sync_serial pas weer proberen
+  // vanaf next_attempt_frame, zodat een verzoek dat blijft mislukken niet elke
+  // frame de hele M2-laag aanroept.
+  std::uint32_t backoff_serial{0};
+  std::uint64_t next_attempt_frame{0};
+
   std::uint32_t resolved_animation_id{0};
   float resolved_playback_speed{1.0f};
 
@@ -85,6 +92,7 @@ struct UnitAnimationPresentationRequest {
   bool upper_body_only{false};
 
   bool zero_blend{false};
+  WoundSecondaryRequest wound{};
 };
 
 enum class ModelAttachmentRole : std::uint8_t {
@@ -307,6 +315,8 @@ struct RenderInstance {
   std::uint32_t transparent_draw_ordinal{0};
 
   AnimationState upper_animation;
+  WoundSecondaryState wound_secondary;
+  std::uint32_t wound_binding_instance_id{0u};
 
   std::uint32_t upper_body_animation_slot{kNoKeyBoneAnimationSlot};
   bool upper_body_slot_resolved{false};
@@ -588,6 +598,14 @@ public:
 
   [[nodiscard]] std::uint32_t QueryPrimaryM2InstanceId(game::ObjectHandle handle) const noexcept;
 
+  // Value-only generation-checked source tag for unit marker dispatch.
+  [[nodiscard]] std::optional<UnitAnimationPresentationRequest>
+  QueryUnitAnimationRequest(game::ObjectHandle handle) const {
+    const auto* const instance = FindInstance(handle.guid);
+    if (instance == nullptr || instance->handle != handle) return std::nullopt;
+    return instance->unit_animation;
+  }
+
   [[nodiscard]] bool IsCharacterAppearancePrepared(game::ObjectGuid guid) const;
 
   [[nodiscard]] bool IsLoadingScreenPlayerRenderAssetReady(game::ObjectGuid guid) const;
@@ -707,6 +725,7 @@ private:
                                            float requested_speed) const;
   void ApplyGameObjectM2AnimationRequestCallback(RenderInstance &inst);
   void ApplyGameObjectM2AnimationRequest(RenderInstance &inst);
+  void ApplyGameObjectM2AnimationRequestImpl(RenderInstance &inst);
   void ApplyGameObjectM2EventCallback(RenderInstance &inst);
   void ApplyCreatureDisplayOverrides(RenderInstance &inst);
   void ApplyVisibleSubmeshes(RenderInstance &inst);
@@ -752,6 +771,7 @@ private:
                                                    std::size_t request_budget);
   void ApplyEquipmentHandPose(RenderInstance &inst);
   void ApplyUpperBodyAnimationChannel(RenderInstance &inst);
+  void ApplyWoundAnimationChannel(RenderInstance &inst);
   [[nodiscard]] static RenderAssetKind ClassifyRenderAssetPath(const std::string &path);
   [[nodiscard]] bool IsM2RenderReady(const RenderInstance &inst) const;
 

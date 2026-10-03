@@ -84,7 +84,12 @@ void ApplySpellVictimReaction(WorldSession& session, const CombatEvent& event) {
     return;
   }
 
-  victim->Animation().PlayWoundReaction(session, event.critical);
+  // The spell flinch is owned by the impact kit's own CombatWound column
+  // (Benilla creature_anim/spell_visual.rs:507-509 play_kit -> WoundAnim, consumed in
+  // creature_anim/driver.rs:390-392). This damage-log path added a second,
+  // melee-selected trigger on every spell hit and periodic tick that the reference
+  // never produces, and could overwrite the kit's row (e.g. 10 on a crit where kit
+  // 286 carries 9). Only the victim injury sound belongs to this log.
   const auto hit_info = event.critical
                             ? unit_combat::AttackHitFlags::kCriticalHit
                             : 0u;
@@ -2113,7 +2118,12 @@ void WorldSession::HandleChannelStart(const net::wotlk::WorldPacket& pkt) {
   if (channel->duration == 0) {
     return;
   }
-  auto* const unit = objects().GetMutableUnit(channel->caster_guid);
+  // Vanilla channel messages are sent directly to the casting player.
+  const ObjectGuid caster_guid = objects().GetLocalPlayerGuid();
+  if (caster_guid.IsEmpty()) {
+    return;
+  }
+  auto* const unit = objects().GetMutableUnit(caster_guid);
   const auto* const dbc = GetDbcLoader();
   if (unit == nullptr || dbc == nullptr ||
       dbc->spell().LookupEntry(channel->spell_id) == nullptr) {
@@ -2122,14 +2132,14 @@ void WorldSession::HandleChannelStart(const net::wotlk::WorldPacket& pkt) {
   const auto cast = BuildUnitCastInfo(
       channel->spell_id, 0, static_cast<std::int32_t>(channel->duration), true);
   unit->Casts().SetChannelCast(cast);
-  QueueChannelStartVisual(*this, channel->caster_guid, channel->spell_id);
+  QueueChannelStartVisual(*this, caster_guid, channel->spell_id);
   FireUnitSpellcastPacketEvent(
-      *this, channel->caster_guid, kUnitSpellcastChannelStartEvent,
+      *this, caster_guid, kUnitSpellcastChannelStartEvent,
       channel->spell_id, 0, static_cast<std::int32_t>(channel->duration));
 
-  if (IsLocalPlayerSpellEvent(*this, channel->caster_guid)) {
+  if (IsLocalPlayerSpellEvent(*this, caster_guid)) {
     spell_cast_runtime_.OnChannelStart(
-        channel->caster_guid, channel->spell_id);
+        caster_guid, channel->spell_id);
     if (cast_bar_callbacks_.on_channel_start) {
       cast_bar_callbacks_.on_channel_start(
           channel->spell_id, static_cast<std::int32_t>(channel->duration));
@@ -2144,7 +2154,12 @@ void WorldSession::HandleChannelUpdate(const net::wotlk::WorldPacket& pkt) {
     return;
   }
 
-  auto* const unit = objects().GetMutableUnit(channel->caster_guid);
+  // Vanilla channel messages are sent directly to the casting player.
+  const ObjectGuid caster_guid = objects().GetLocalPlayerGuid();
+  if (caster_guid.IsEmpty()) {
+    return;
+  }
+  auto* const unit = objects().GetMutableUnit(caster_guid);
   const auto* const dbc = GetDbcLoader();
   if (unit == nullptr || dbc == nullptr) {
     return;
@@ -2157,7 +2172,7 @@ void WorldSession::HandleChannelUpdate(const net::wotlk::WorldPacket& pkt) {
   }
 
   const auto transition = PrepareChannelUpdate(
-      *unit, *spell, channel->caster_guid.GetRawValue(),
+      *unit, *spell, caster_guid.GetRawValue(),
       static_cast<std::int32_t>(channel->remaining),
       core::GameClock::GetTickCount32());
   if (transition == ChannelUpdateTransition::kIgnored) {
@@ -2166,24 +2181,24 @@ void WorldSession::HandleChannelUpdate(const net::wotlk::WorldPacket& pkt) {
 
   const bool stopped = transition == ChannelUpdateTransition::kStopped;
   if (stopped) {
-    QueueChannelStopVisual(*this, channel->caster_guid, spell_id);
-    ClearUnitCast(*this, channel->caster_guid, true);
+    QueueChannelStopVisual(*this, caster_guid, spell_id);
+    ClearUnitCast(*this, caster_guid, true);
     unit->Animation().SetChannelingActionLock(false);
     unit->Animation().EndSpellVisualStandAnimation(*this);
     FireUnitSpellcastPacketEvent(
-        *this, channel->caster_guid, kUnitSpellcastChannelStopEvent, spell_id,
+        *this, caster_guid, kUnitSpellcastChannelStopEvent, spell_id,
         0);
   } else {
     UpdateUnitChannelEndTime(
-        *this, channel->caster_guid,
+        *this, caster_guid,
         static_cast<std::int32_t>(channel->remaining));
     FireUnitSpellcastPacketEvent(
-        *this, channel->caster_guid, kUnitSpellcastChannelUpdateEvent,
+        *this, caster_guid, kUnitSpellcastChannelUpdateEvent,
         spell_id, 0, static_cast<std::int32_t>(channel->remaining));
   }
   CompleteChannelUpdate(*this, *unit, spell_id, transition);
 
-  if (IsLocalPlayerSpellEvent(*this, channel->caster_guid)) {
+  if (IsLocalPlayerSpellEvent(*this, caster_guid)) {
     if (stopped) {
       spell_cast_runtime_.OnChannelStop();
     }

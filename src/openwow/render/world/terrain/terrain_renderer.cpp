@@ -1,9 +1,11 @@
 #include "openwow/render/world/terrain/terrain_renderer.h"
+#include "openwow/render/world/terrain/terrain_publication_budget.h"
 #include "openwow/render/backend/bgfx/bgfx_texture_lease.h"
 
 #include "openwow/data/texture_cache.h"
 #include "openwow/foundation/diagnostics/logging.h"
 #include "openwow/render/resources/shaders/shader_registry.h"
+#include "openwow/render/resources/textures/world_sampler_quality.h"
 #include "openwow/render/resources/textures/texture_manager.h"
 #include "openwow/render/scene/shadow_data.h"
 #include "openwow/world/world_render_pipeline.h"
@@ -14,6 +16,7 @@
 #include <cstring>
 #include <optional>
 #include <string>
+#include <tuple>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -77,6 +80,78 @@ using PreparedUploadsByRow = std::unordered_map<std::uint32_t, const PreparedTex
 }
 
 }
+
+namespace {
+
+void DestroyTerrainTileResources(TerrainTileGpu &gpu) {
+  if (bgfx::isValid(gpu.vb)) {
+    bgfx::destroy(gpu.vb);
+  }
+  if (bgfx::isValid(gpu.alpha_array)) {
+    bgfx::destroy(gpu.alpha_array);
+  }
+  if (bgfx::isValid(gpu.index_buffer)) {
+    bgfx::destroy(gpu.index_buffer);
+  }
+
+  gpu = {};
+}
+
+}  // namespace
+
+// Opaque outside this translation unit. All operations, including destruction, are render-thread
+// only. Renderer shutdown cancels weakly tracked uploads before shutting down BGFX resources.
+struct PendingTerrainUpload {
+  enum class Phase {
+    kMaterials, kChunks, kVertexBuffer, kIndexOrder, kBatchChunks, kIndexBuffer,
+    kAlphaArray, kAlphaSlices, kPublish
+  };
+
+  PendingTerrainUpload() = default;
+  PendingTerrainUpload(const PendingTerrainUpload &) = delete;
+  PendingTerrainUpload &operator=(const PendingTerrainUpload &) = delete;
+  ~PendingTerrainUpload() {
+    if (status == TerrainUploadStatus::kPending) {
+      Cancel();
+    }
+  }
+
+  void ReleasePreparation() {
+    prepared_by_row.clear();
+    material_leases.clear();
+    batch_indices.clear();
+    prepared.reset();
+    materials.reset();
+  }
+
+  void Cancel() {
+    DestroyTerrainTileResources(tile);
+    ReleasePreparation();
+    status = TerrainUploadStatus::kFailed;
+    // The renderer cancels every outstanding upload before its pool is torn down.
+    if (owner != nullptr) {
+      owner->slice_arrays_.ReclaimEmptyArrays();
+    }
+  }
+
+  TerrainRenderer *owner{nullptr};
+  std::shared_ptr<const PreparedTerrainTile> prepared;
+  std::shared_ptr<const PreparedTerrainMaterialTextures> materials;
+  TerrainTileGpu tile;
+  PreparedUploadsByRow prepared_by_row;
+  std::vector<TextureLease> material_leases;
+  std::array<std::array<std::uint8_t, kMaxTerrainLayers>, TerrainRenderer::kChunksPerTile>
+      chunk_layer_slices{};
+  std::array<std::uint16_t, TerrainRenderer::kChunksPerTile> material_order{};
+  std::vector<std::uint16_t> batch_indices;
+  std::size_t material_cursor{0u};
+  std::size_t chunk_cursor{0u};
+  std::size_t ordered_chunks{0u};
+  std::size_t batch_cursor{0u};
+  std::size_t alpha_cursor{0u};
+  Phase phase{Phase::kMaterials};
+  TerrainUploadStatus status{TerrainUploadStatus::kPending};
+};
 
 namespace terrain_vs_param {
 
@@ -224,163 +299,212 @@ void TerrainRenderer::ResolveChunkLayerSlices(
   chunk.layer_array_tex = array_texture;
 }
 
-void TerrainRenderer::UploadPreparedAdt(const PreparedTerrainTile &prepared,
-                                        const PreparedTerrainMaterialTextures &materials,
-                                        const int32_t tile_x, const int32_t tile_y) {
+std::shared_ptr<PendingTerrainUpload> TerrainRenderer::BeginPreparedAdtUpload(
+    std::shared_ptr<const PreparedTerrainTile> prepared,
+    std::shared_ptr<const PreparedTerrainMaterialTextures> materials,
+    const int32_t tile_x, const int32_t tile_y) {
+  if (!initialized_ || !prepared || !materials || prepared->vertices.empty() ||
+      prepared->vertices.size() > UINT32_MAX / sizeof(TerrainVertex)) {
+    return {};
+  }
+  static_assert(std::tuple_size_v<decltype(PreparedTerrainTile::chunks)> == kChunksPerTile);
+  auto pending = std::make_shared<PendingTerrainUpload>();
+  pending->owner = this;
+  pending->prepared = std::move(prepared);
+  pending->materials = std::move(materials);
+  pending->tile.tile_x = tile_x;
+  pending->tile.tile_y = tile_y;
+  pending->prepared_by_row.reserve(pending->materials->uploads.size());
+  pending->material_leases.reserve(pending->materials->uploads.size());
+  pending_uploads_.erase(
+      std::remove_if(pending_uploads_.begin(), pending_uploads_.end(),
+                     [](const auto &weak) {
+                       const auto upload = weak.lock();
+                       return !upload || upload->status != TerrainUploadStatus::kPending;
+                     }),
+      pending_uploads_.end());
+  pending_uploads_.push_back(pending);
+  return pending;
+}
+
+TerrainUploadStatus TerrainRenderer::PumpPreparedAdtUpload(
+    PendingTerrainUpload &pending, const std::chrono::steady_clock::time_point deadline,
+    const std::size_t max_units) {
+  if (pending.owner != this) {
+    return TerrainUploadStatus::kFailed;
+  }
+  if (pending.status != TerrainUploadStatus::kPending) {
+    return pending.status;
+  }
+  const auto fail = [&pending]() {
+    pending.Cancel();
+    return TerrainUploadStatus::kFailed;
+  };
   if (!initialized_) {
-    return;
+    return fail();
   }
-  for (const auto &upload : materials.uploads) {
-    static_cast<void>(texture_manager_.CommitPreparedTexture(upload));
-  }
-  if (!initialized_ || prepared.vertices.empty()) {
-    return;
-  }
+  TerrainPublicationBudget budget(deadline, max_units);
+  const PreparedTerrainTile &prepared = *pending.prepared;
+  TerrainTileGpu &tile = pending.tile;
+  const int32_t tile_x = tile.tile_x;
+  const int32_t tile_y = tile.tile_y;
+  constexpr std::size_t kAlphaSliceBytes =
+      static_cast<std::size_t>(kAlphaMapSize) * kAlphaMapSize * kAlphaPixelBytes;
 
-  PreparedUploadsByRow prepared_by_row;
-  prepared_by_row.reserve(materials.uploads.size());
-  for (const auto &upload : materials.uploads) {
-    if (upload.valid && !upload.path.empty()) {
-      prepared_by_row.emplace(openwow::data::HashTextureCachePath(upload.path), &upload);
-    }
-  }
-
-  RemoveAdt(tile_x, tile_y);
-
-  TerrainTileGpu tile;
-  tile.tile_x = tile_x;
-  tile.tile_y = tile_y;
-
-  std::array<std::array<std::uint8_t, kMaxTerrainLayers>, kChunksPerTile> chunk_layer_slices{};
-  for (std::size_t chunk_index = 0; chunk_index < prepared.chunks.size(); ++chunk_index) {
-    const auto &source = prepared.chunks[chunk_index];
-    auto &chunk = tile.chunks[chunk_index];
-    chunk.tile_x = tile_x;
-    chunk.tile_y = tile_y;
-    chunk.chunk_x = source.chunk_x;
-    chunk.chunk_y = source.chunk_y;
-    if (!source.valid || source.vertex_start > prepared.vertices.size() ||
-        source.vertex_count > prepared.vertices.size() - source.vertex_start ||
-        source.hole_index_start > prepared.hole_indices.size() ||
-        source.hole_index_count > prepared.hole_indices.size() - source.hole_index_start) {
-      continue;
-    }
-    chunk.vertex_start = source.vertex_start;
-    chunk.vertex_count = source.vertex_count;
-    chunk.world_x = source.bounds_min[0] + (source.bounds_max[0] - source.bounds_min[0]) * 0.5f;
-    chunk.world_y = source.bounds_min[1] + (source.bounds_max[1] - source.bounds_min[1]) * 0.5f;
-    chunk.world_z = source.bounds_min[2] + (source.bounds_max[2] - source.bounds_min[2]) * 0.5f;
-
-    {
-      const float extent_x = (source.bounds_max[0] - source.bounds_min[0]) * 0.5f;
-      const float extent_y = (source.bounds_max[1] - source.bounds_min[1]) * 0.5f;
-      const float extent_z = (source.bounds_max[2] - source.bounds_min[2]) * 0.5f;
-      chunk.bounds_radius =
-          std::sqrt(extent_x * extent_x + extent_y * extent_y + extent_z * extent_z);
-    }
-    std::memcpy(chunk.bounds_min, source.bounds_min, sizeof(chunk.bounds_min));
-    std::memcpy(chunk.bounds_max, source.bounds_max, sizeof(chunk.bounds_max));
-    chunk.layer_count = std::clamp(source.layer_count, 0, kMaxTerrainLayers);
-
-    const std::optional<TextureSliceBucket> chunk_bucket =
-        ChooseChunkLayerBucket(source, chunk.layer_count, prepared_by_row, slice_arrays_);
-    for (int layer = 0; layer < chunk.layer_count; ++layer) {
-      if (!source.texture_paths[layer].empty()) {
-        chunk.layer_texture_leases[layer] =
-            texture_manager_.AcquireCachedTexture(source.texture_paths[layer]);
-        chunk.layer_tex[layer] = BgfxTextureLeaseAccess::Get(chunk.layer_texture_leases[layer]);
-
-        if (chunk.layer_texture_leases[layer].valid()) {
-          const std::uint32_t row =
-              openwow::data::HashTextureCachePath(source.texture_paths[layer]);
-          const auto upload = prepared_by_row.find(row);
-          chunk.layer_slice_leases[layer] = slice_arrays_.Acquire(
-              row, upload != prepared_by_row.end() ? upload->second : nullptr,
-              chunk_bucket.has_value() ? &*chunk_bucket : nullptr);
+  while (budget.TryBeginUnit(std::chrono::steady_clock::now())) {
+    switch (pending.phase) {
+    case PendingTerrainUpload::Phase::kMaterials: {
+      if (pending.material_cursor < pending.materials->uploads.size()) {
+        const auto &upload = pending.materials->uploads[pending.material_cursor++];
+        static_cast<void>(texture_manager_.CommitPreparedTexture(upload));
+        // Pin committed cache entries until chunk leases have been acquired in later frames.
+        pending.material_leases.push_back(texture_manager_.AcquireCachedTexture(upload.path));
+        if (upload.valid && !upload.path.empty()) {
+          pending.prepared_by_row.emplace(openwow::data::HashTextureCachePath(upload.path), &upload);
         }
       }
-      if (!bgfx::isValid(chunk.layer_tex[layer])) {
-        chunk.layer_tex[layer] = texture_manager_.GetCheckerTexture();
+      if (pending.material_cursor == pending.materials->uploads.size()) {
+        pending.phase = PendingTerrainUpload::Phase::kChunks;
       }
+      break;
     }
-    for (int layer = chunk.layer_count; layer < kMaxTerrainLayers; ++layer) {
-      chunk.layer_tex[layer] = texture_manager_.GetWhiteTexture();
-    }
-    ResolveChunkLayerSlices(chunk, chunk_layer_slices[chunk_index]);
-    chunk.valid = true;
-  }
+    case PendingTerrainUpload::Phase::kChunks: {
+      const std::size_t chunk_index = pending.chunk_cursor++;
+      // One chunk (at most four material slice acquisitions) is a bounded unit.
+      const auto &source = prepared.chunks[chunk_index];
+      auto &chunk = tile.chunks[chunk_index];
+      chunk.tile_x = tile_x;
+      chunk.tile_y = tile_y;
+      chunk.chunk_x = source.chunk_x;
+      chunk.chunk_y = source.chunk_y;
+      if (!source.valid || source.vertex_start > prepared.vertices.size() ||
+          source.vertex_count > prepared.vertices.size() - source.vertex_start ||
+          source.hole_index_start > prepared.hole_indices.size() ||
+          source.hole_index_count > prepared.hole_indices.size() - source.hole_index_start) {
+        break;
+      }
+      chunk.vertex_start = source.vertex_start;
+      chunk.vertex_count = source.vertex_count;
+      chunk.world_x = source.bounds_min[0] + (source.bounds_max[0] - source.bounds_min[0]) * 0.5f;
+      chunk.world_y = source.bounds_min[1] + (source.bounds_max[1] - source.bounds_min[1]) * 0.5f;
+      chunk.world_z = source.bounds_min[2] + (source.bounds_max[2] - source.bounds_min[2]) * 0.5f;
 
-  const auto vertex_bytes =
-      static_cast<std::uint32_t>(prepared.vertices.size() * sizeof(TerrainVertex));
-  const bgfx::Memory *const vertex_memory = bgfx::alloc(vertex_bytes);
-  std::memcpy(vertex_memory->data, prepared.vertices.data(), vertex_bytes);
-  {
-    auto *const vertices = reinterpret_cast<TerrainVertex *>(vertex_memory->data);
-    for (std::size_t chunk_index = 0; chunk_index < tile.chunks.size(); ++chunk_index) {
-      const TerrainChunkGpu &chunk = tile.chunks[chunk_index];
-      if (!chunk.valid || !bgfx::isValid(chunk.layer_array_tex)) {
-        continue;
+      {
+        const float extent_x = (source.bounds_max[0] - source.bounds_min[0]) * 0.5f;
+        const float extent_y = (source.bounds_max[1] - source.bounds_min[1]) * 0.5f;
+        const float extent_z = (source.bounds_max[2] - source.bounds_min[2]) * 0.5f;
+        chunk.bounds_radius =
+            std::sqrt(extent_x * extent_x + extent_y * extent_y + extent_z * extent_z);
       }
-      const auto &slices = chunk_layer_slices[chunk_index];
-      for (std::uint32_t vertex = 0; vertex < chunk.vertex_count; ++vertex) {
-        std::memcpy(vertices[chunk.vertex_start + vertex].layer_slice, slices.data(),
-                    slices.size());
-      }
-    }
-  }
-  tile.vb = bgfx::createVertexBuffer(vertex_memory, layout_);
-  if (!bgfx::isValid(tile.vb)) {
-    openwow::diagnostics::Log(openwow::diagnostics::LogLevel::kWarn,
-                              "TerrainRenderer: tile vertex buffer creation failed for (" +
-                                  std::to_string(tile_x) + "," + std::to_string(tile_y) + ")");
-    return;
-  }
+      std::memcpy(chunk.bounds_min, source.bounds_min, sizeof(chunk.bounds_min));
+      std::memcpy(chunk.bounds_max, source.bounds_max, sizeof(chunk.bounds_max));
+      chunk.layer_count = std::clamp(source.layer_count, 0, kMaxTerrainLayers);
 
-  {
-    const auto &lod0 = TerrainLodManager::GetLodIndexData(0);
-    const auto &lod0_indices = lod0.indices;
-    const std::uint32_t lod0_count = lod0.count;
+      const std::optional<TextureSliceBucket> chunk_bucket =
+          ChooseChunkLayerBucket(source, chunk.layer_count, pending.prepared_by_row, slice_arrays_);
+      for (int layer = 0; layer < chunk.layer_count; ++layer) {
+        if (!source.texture_paths[layer].empty()) {
+          chunk.layer_texture_leases[layer] =
+              texture_manager_.AcquireCachedTexture(source.texture_paths[layer]);
+          chunk.layer_tex[layer] = BgfxTextureLeaseAccess::Get(chunk.layer_texture_leases[layer]);
 
-    std::array<std::uint16_t, kChunksPerTile> material_order{};
-    std::size_t ordered_chunks = 0u;
-    for (std::size_t chunk_index = 0; chunk_index < prepared.chunks.size(); ++chunk_index) {
-      if (tile.chunks[chunk_index].valid) {
-        material_order[ordered_chunks++] = static_cast<std::uint16_t>(chunk_index);
-      }
-    }
-    std::stable_sort(
-        material_order.begin(),
-        material_order.begin() + static_cast<std::ptrdiff_t>(ordered_chunks),
-        [&tile](const std::uint16_t lhs, const std::uint16_t rhs) {
-          const TerrainChunkGpu &left = tile.chunks[lhs];
-          const TerrainChunkGpu &right = tile.chunks[rhs];
-          const bool left_splat = left.layer_count > 0;
-          const bool right_splat = right.layer_count > 0;
-          if (left_splat != right_splat) {
-            return left_splat < right_splat;
+          if (chunk.layer_texture_leases[layer].valid()) {
+            const std::uint32_t row =
+                openwow::data::HashTextureCachePath(source.texture_paths[layer]);
+            const auto upload = pending.prepared_by_row.find(row);
+            chunk.layer_slice_leases[layer] = slice_arrays_.Acquire(
+                row, upload != pending.prepared_by_row.end() ? upload->second : nullptr,
+                chunk_bucket.has_value() ? &*chunk_bucket : nullptr);
           }
-          const bool left_array = bgfx::isValid(left.layer_array_tex);
-          const bool right_array = bgfx::isValid(right.layer_array_tex);
-          if (left_array != right_array) {
-            return left_array < right_array;
+        }
+        if (!bgfx::isValid(chunk.layer_tex[layer])) {
+          chunk.layer_tex[layer] = texture_manager_.GetCheckerTexture();
+        }
+      }
+      for (int layer = chunk.layer_count; layer < kMaxTerrainLayers; ++layer) {
+        chunk.layer_tex[layer] = texture_manager_.GetWhiteTexture();
+      }
+      ResolveChunkLayerSlices(chunk, pending.chunk_layer_slices[chunk_index]);
+      chunk.valid = true;
+      break;
+    }
+    case PendingTerrainUpload::Phase::kVertexBuffer: {
+      // Monolithic per-tile copy/patch/create: no bgfx::Memory survives this unit.
+      const auto vertex_bytes =
+          static_cast<std::uint32_t>(prepared.vertices.size() * sizeof(TerrainVertex));
+      const bgfx::Memory *const vertex_memory = bgfx::alloc(vertex_bytes);
+      std::memcpy(vertex_memory->data, prepared.vertices.data(), vertex_bytes);
+      {
+        auto *const vertices = reinterpret_cast<TerrainVertex *>(vertex_memory->data);
+        for (std::size_t chunk_index = 0; chunk_index < tile.chunks.size(); ++chunk_index) {
+          const TerrainChunkGpu &chunk = tile.chunks[chunk_index];
+          if (!chunk.valid || !bgfx::isValid(chunk.layer_array_tex)) {
+            continue;
           }
-          if (left_array) {
-
-            return left.layer_array_tex.idx < right.layer_array_tex.idx;
+          const auto &slices = pending.chunk_layer_slices[chunk_index];
+          for (std::uint32_t vertex = 0; vertex < chunk.vertex_count; ++vertex) {
+            std::memcpy(vertices[chunk.vertex_start + vertex].layer_slice, slices.data(),
+                        slices.size());
           }
-          for (int layer = 0; layer < kMaxTerrainLayers; ++layer) {
-            if (left.layer_tex[layer].idx != right.layer_tex[layer].idx) {
-              return left.layer_tex[layer].idx < right.layer_tex[layer].idx;
+        }
+      }
+      tile.vb = bgfx::createVertexBuffer(vertex_memory, layout_);
+      if (!bgfx::isValid(tile.vb)) {
+        openwow::diagnostics::Log(openwow::diagnostics::LogLevel::kWarn,
+                                  "TerrainRenderer: tile vertex buffer creation failed for (" +
+                                      std::to_string(tile_x) + "," + std::to_string(tile_y) + ")");
+        return fail();
+      }
+      pending.phase = PendingTerrainUpload::Phase::kIndexOrder;
+      break;
+    }
+    case PendingTerrainUpload::Phase::kIndexOrder: {
+      auto &material_order = pending.material_order;
+      auto &ordered_chunks = pending.ordered_chunks;
+      for (std::size_t chunk_index = 0; chunk_index < prepared.chunks.size(); ++chunk_index) {
+        if (tile.chunks[chunk_index].valid) {
+          material_order[ordered_chunks++] = static_cast<std::uint16_t>(chunk_index);
+        }
+      }
+      std::stable_sort(
+          material_order.begin(),
+          material_order.begin() + static_cast<std::ptrdiff_t>(ordered_chunks),
+          [&tile](const std::uint16_t lhs, const std::uint16_t rhs) {
+            const TerrainChunkGpu &left = tile.chunks[lhs];
+            const TerrainChunkGpu &right = tile.chunks[rhs];
+            const bool left_splat = left.layer_count > 0;
+            const bool right_splat = right.layer_count > 0;
+            if (left_splat != right_splat) {
+              return left_splat < right_splat;
             }
-          }
+            const bool left_array = bgfx::isValid(left.layer_array_tex);
+            const bool right_array = bgfx::isValid(right.layer_array_tex);
+            if (left_array != right_array) {
+              return left_array < right_array;
+            }
+            if (left_array) {
 
-          return false;
-        });
+              return left.layer_array_tex.idx < right.layer_array_tex.idx;
+            }
+            for (int layer = 0; layer < kMaxTerrainLayers; ++layer) {
+              if (left.layer_tex[layer].idx != right.layer_tex[layer].idx) {
+                return left.layer_tex[layer].idx < right.layer_tex[layer].idx;
+              }
+            }
 
-    std::vector<std::uint16_t> batch_indices;
-    batch_indices.reserve(static_cast<std::size_t>(kChunksPerTile) * lod0_count);
-    for (std::size_t ordinal = 0; ordinal < ordered_chunks; ++ordinal) {
-      const std::size_t chunk_index = material_order[ordinal];
+            return false;
+          });
+      const auto &lod0 = TerrainLodManager::GetLodIndexData(0);
+      pending.batch_indices.reserve(kChunksPerTile * static_cast<std::size_t>(lod0.count));
+      pending.phase = pending.ordered_chunks == 0u ? PendingTerrainUpload::Phase::kIndexBuffer
+                                                  : PendingTerrainUpload::Phase::kBatchChunks;
+      break;
+    }
+    case PendingTerrainUpload::Phase::kBatchChunks: {
+      const auto &lod0 = TerrainLodManager::GetLodIndexData(0);
+      const auto &lod0_indices = lod0.indices;
+      const std::uint32_t lod0_count = lod0.count;
+      const std::size_t chunk_index = pending.material_order[pending.batch_cursor++];
       auto &chunk = tile.chunks[chunk_index];
       const auto &source = prepared.chunks[chunk_index];
       const bool uses_hole_indices = source.hole_index_count != 0u;
@@ -390,72 +514,126 @@ void TerrainRenderer::UploadPreparedAdt(const PreparedTerrainTile &prepared,
       const std::uint32_t local_count = uses_hole_indices ? source.hole_index_count : lod0_count;
       if (local_count == 0u) {
         chunk.valid = false;
-        continue;
+        break;
       }
 
       if (chunk.vertex_start + chunk.vertex_count > UINT16_MAX + 1u) {
         chunk.valid = false;
-        continue;
+        break;
       }
-      chunk.batch_index_start = static_cast<std::uint32_t>(batch_indices.size());
+      chunk.batch_index_start = static_cast<std::uint32_t>(pending.batch_indices.size());
       chunk.batch_index_count = local_count;
       for (std::uint32_t index = 0; index < local_count; ++index) {
-        batch_indices.push_back(static_cast<std::uint16_t>(chunk.vertex_start + local[index]));
+        pending.batch_indices.push_back(static_cast<std::uint16_t>(chunk.vertex_start + local[index]));
       }
+      break;
     }
-
-    if (batch_indices.empty()) {
-      bgfx::destroy(tile.vb);
-      return;
+    case PendingTerrainUpload::Phase::kIndexBuffer: {
+      if (pending.batch_indices.empty() ||
+          pending.batch_indices.size() > UINT32_MAX / sizeof(std::uint16_t)) {
+        return fail();
+      }
+      const bgfx::Memory *index_memory =
+          bgfx::copy(pending.batch_indices.data(),
+                     static_cast<std::uint32_t>(pending.batch_indices.size() * sizeof(std::uint16_t)));
+      tile.index_buffer = bgfx::createIndexBuffer(index_memory);
+      if (!bgfx::isValid(tile.index_buffer)) {
+        openwow::diagnostics::Log(openwow::diagnostics::LogLevel::kWarn,
+                                  "TerrainRenderer: tile index buffer creation failed for (" +
+                                      std::to_string(tile_x) + "," + std::to_string(tile_y) + ")");
+        return fail();
+      }
+      pending.phase = PendingTerrainUpload::Phase::kAlphaArray;
+      break;
     }
-    const bgfx::Memory *index_memory =
-        bgfx::copy(batch_indices.data(),
-                   static_cast<std::uint32_t>(batch_indices.size() * sizeof(std::uint16_t)));
-    tile.index_buffer = bgfx::createIndexBuffer(index_memory);
-    if (!bgfx::isValid(tile.index_buffer)) {
-      openwow::diagnostics::Log(openwow::diagnostics::LogLevel::kWarn,
-                                "TerrainRenderer: tile index buffer creation failed for (" +
-                                    std::to_string(tile_x) + "," + std::to_string(tile_y) + ")");
-      bgfx::destroy(tile.vb);
-      return;
+    case PendingTerrainUpload::Phase::kAlphaArray: {
+      pending.phase = PendingTerrainUpload::Phase::kPublish;
+      const std::size_t expected_alpha_bytes =
+          static_cast<std::size_t>(kTerrainAlphaArrayLayers) * kAlphaSliceBytes;
+      if (prepared.has_alpha_layers && prepared.alpha_array_rgba.size() >= expected_alpha_bytes) {
+        tile.alpha_array = bgfx::createTexture2D(
+            kAlphaMapSize, kAlphaMapSize, false, kTerrainAlphaArrayLayers,
+            bgfx::TextureFormat::RGBA8, BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP);
+        if (bgfx::isValid(tile.alpha_array)) {
+          pending.phase = PendingTerrainUpload::Phase::kAlphaSlices;
+        } else {
+          openwow::diagnostics::Log(openwow::diagnostics::LogLevel::kWarn,
+                                    "TerrainRenderer: tile alpha array creation failed for (" +
+                                        std::to_string(tile_x) + "," + std::to_string(tile_y) +
+                                        "); using fallback terrain material");
+          for (auto &chunk : tile.chunks) {
+            chunk.layer_count = 0;
+          }
+        }
+      } else if (prepared.has_alpha_layers) {
+        for (auto &chunk : tile.chunks) {
+          chunk.layer_count = 0;
+        }
+      }
+      break;
+    }
+    case PendingTerrainUpload::Phase::kAlphaSlices: {
+      const std::size_t offset = pending.alpha_cursor * kAlphaSliceBytes;
+      const auto slice = static_cast<std::uint16_t>(pending.alpha_cursor++);
+      bgfx::updateTexture2D(
+          tile.alpha_array, slice, 0u, 0u, 0u, static_cast<std::uint16_t>(kAlphaMapSize),
+          static_cast<std::uint16_t>(kAlphaMapSize),
+          bgfx::copy(prepared.alpha_array_rgba.data() + offset,
+                     static_cast<std::uint32_t>(kAlphaSliceBytes)),
+          UINT16_MAX);
+      if (pending.alpha_cursor == kChunksPerTile) {
+        pending.phase = PendingTerrainUpload::Phase::kPublish;
+      }
+      break;
+    }
+    case PendingTerrainUpload::Phase::kPublish: {
+      // Render-thread atomic publication. The old tile stays intact until this point.
+      tile.valid = true;
+      const auto old = std::find_if(loaded_tiles_.begin(), loaded_tiles_.end(),
+                                   [tile_x, tile_y](const TerrainTileGpu &candidate) {
+                                     return candidate.tile_x == tile_x && candidate.tile_y == tile_y;
+                                   });
+      if (old == loaded_tiles_.end()) {
+        loaded_tiles_.push_back(std::move(tile));
+        // GPU handles are scalar values, so moving alone does not disarm their source.
+        tile = {};
+      } else {
+        std::swap(*old, tile);
+        DestroyTileGpu(tile);
+      }
+      pending.ReleasePreparation();
+      pending.status = TerrainUploadStatus::kComplete;
+      slice_arrays_.ReclaimEmptyArrays();
+      return pending.status;
+    }
+    }
+    // Advance even when an invalid chunk took the early exit from its case.
+    if (pending.phase == PendingTerrainUpload::Phase::kChunks &&
+        pending.chunk_cursor == kChunksPerTile) {
+      pending.phase = PendingTerrainUpload::Phase::kVertexBuffer;
+    }
+    if (pending.phase == PendingTerrainUpload::Phase::kBatchChunks &&
+        pending.batch_cursor == pending.ordered_chunks) {
+      pending.phase = PendingTerrainUpload::Phase::kIndexBuffer;
     }
   }
+  return pending.status;
+}
 
-  constexpr std::size_t kAlphaSliceBytes =
-      static_cast<std::size_t>(kAlphaMapSize) * kAlphaMapSize * kAlphaPixelBytes;
-  const std::size_t expected_alpha_bytes =
-      static_cast<std::size_t>(kTerrainAlphaArrayLayers) * kAlphaSliceBytes;
-  if (prepared.has_alpha_layers && prepared.alpha_array_rgba.size() >= expected_alpha_bytes) {
-    tile.alpha_array = bgfx::createTexture2D(
-        kAlphaMapSize, kAlphaMapSize, false, kTerrainAlphaArrayLayers,
-        bgfx::TextureFormat::RGBA8, BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP);
-    if (bgfx::isValid(tile.alpha_array)) {
-      for (std::uint16_t slice = 0u; slice < kTerrainAlphaArrayLayers; ++slice) {
-        const std::size_t offset = static_cast<std::size_t>(slice) * kAlphaSliceBytes;
-        bgfx::updateTexture2D(
-            tile.alpha_array, slice, 0u, 0u, 0u, static_cast<std::uint16_t>(kAlphaMapSize),
-            static_cast<std::uint16_t>(kAlphaMapSize),
-            bgfx::copy(prepared.alpha_array_rgba.data() + offset,
-                       static_cast<std::uint32_t>(kAlphaSliceBytes)),
-            UINT16_MAX);
-      }
-    } else {
-      openwow::diagnostics::Log(openwow::diagnostics::LogLevel::kWarn,
-                                "TerrainRenderer: tile alpha array creation failed for (" +
-                                    std::to_string(tile_x) + "," + std::to_string(tile_y) +
-                                    "); using fallback terrain material");
-      for (auto &chunk : tile.chunks) {
-        chunk.layer_count = 0;
-      }
-    }
-  } else if (prepared.has_alpha_layers) {
-    for (auto &chunk : tile.chunks) {
-      chunk.layer_count = 0;
-    }
+void TerrainRenderer::UploadPreparedAdt(const PreparedTerrainTile &prepared,
+                                        const PreparedTerrainMaterialTextures &materials,
+                                        const int32_t tile_x, const int32_t tile_y) {
+  // Non-owning aliases are safe here only because this compatibility call drains synchronously.
+  auto pending = BeginPreparedAdtUpload(
+      std::shared_ptr<const PreparedTerrainTile>(&prepared, [](const auto *) {}),
+      std::shared_ptr<const PreparedTerrainMaterialTextures>(&materials, [](const auto *) {}),
+      tile_x, tile_y);
+  if (!pending) {
+    return;
   }
-
-  tile.valid = true;
-  loaded_tiles_.push_back(std::move(tile));
+  while (PumpPreparedAdtUpload(*pending, std::chrono::steady_clock::time_point::max()) ==
+         TerrainUploadStatus::kPending) {
+  }
 }
 
 bool TerrainRenderer::PipelineResourcesAreValid() const noexcept {
@@ -624,7 +802,7 @@ void TerrainRenderer::Render(uint8_t view_id, const WorldEnvironmentSnapshot &en
     draw.setUniform(u_fs_params_, fs_params.data(),
                     static_cast<std::uint16_t>(terrain_fs_param::kCount));
 
-    constexpr std::uint32_t sampler_flags = DiffuseSamplerFlags();
+    const std::uint32_t sampler_flags = WorldSamplerQualityFlags();
     if (key.program == TerrainProgramKind::kSplat) {
       for (std::size_t layer = 0; layer < key.texture_indices.size(); ++layer) {
         draw.setTexture(static_cast<std::uint8_t>(layer), s_terrain_tex_[layer],
@@ -735,6 +913,13 @@ void TerrainRenderer::RemoveAdt(const int32_t tile_x, const int32_t tile_y) {
 }
 
 void TerrainRenderer::ClearTerrain() {
+  for (const auto &weak : pending_uploads_) {
+    if (const auto pending = weak.lock(); pending &&
+        pending->status == TerrainUploadStatus::kPending) {
+      pending->Cancel();
+    }
+  }
+  pending_uploads_.clear();
   for (auto &tile : loaded_tiles_) {
     DestroyTileGpu(tile);
   }
@@ -754,17 +939,7 @@ void TerrainRenderer::Shutdown() {
 }
 
 void TerrainRenderer::DestroyTileGpu(TerrainTileGpu &gpu) {
-  if (bgfx::isValid(gpu.vb)) {
-    bgfx::destroy(gpu.vb);
-  }
-  if (bgfx::isValid(gpu.alpha_array)) {
-    bgfx::destroy(gpu.alpha_array);
-  }
-  if (bgfx::isValid(gpu.index_buffer)) {
-    bgfx::destroy(gpu.index_buffer);
-  }
-
-  gpu = {};
+  DestroyTerrainTileResources(gpu);
 }
 
 void TerrainRenderer::SetViewDistance(uint32_t distance) {

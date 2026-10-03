@@ -6,6 +6,7 @@
 #include "openwow/render/api/math/render_matrix_math.h"
 #include "openwow/render/api/packed_color.h"
 #include "openwow/render/resources/shaders/shader_registry.h"
+#include "openwow/render/resources/textures/world_sampler_quality.h"
 #include "openwow/render/resources/textures/texture_manager.h"
 #include "openwow/render/world/wmo/wmo_material_pipeline.h"
 #include "openwow/render/scene/occlusion/occluder_polygon_builder.h"
@@ -482,44 +483,6 @@ uint32_t ResolveWmoMaterialShader(uint32_t shader, uint32_t blend_mode,
   return shader;
 }
 
-WmoLightingMode ResolveRetailWmoLightingMode(
-    const std::uint32_t group_flags, const WmoBatchMesh::Region region,
-    const std::uint32_t material_flags,
-    const bool unified_render_path) noexcept {
-  const bool unlit = (material_flags & data::wmo::kMatUnlit) != 0u;
-  const bool window = (material_flags & data::wmo::kMatWindow) != 0u;
-
-  if (region == WmoBatchMesh::Region::Transition) {
-    if (unified_render_path && unlit) {
-      return WmoLightingMode::Unlit;
-    }
-    return window ? WmoLightingMode::Window : WmoLightingMode::Outdoor;
-  }
-
-  if (unified_render_path) {
-    const bool group_exterior =
-        (group_flags &
-         (data::wmo::kMogpExterior | data::wmo::kMogpExteriorLit)) != 0u;
-    if (group_exterior) {
-      return unlit ? WmoLightingMode::Unlit : WmoLightingMode::Outdoor;
-    }
-    if (window) {
-      return WmoLightingMode::Window;
-    }
-    // 1.12: een interior-groep is onbelicht `tex x MOCV`
-    // (benilla-assets/src/materials.rs:190: "interior INT => unlit tex x MOCV");
-    // de MOCV bevat de interior-bake al. De oude `Interior`-mode telde daar nog
-    // root_ambient_ bij op, waardoor een cave overbelicht raakte ten opzichte van
-    // de omgeving.
-    return WmoLightingMode::Unlit;
-  }
-
-  if (region == WmoBatchMesh::Region::Interior) {
-    return WmoLightingMode::Unlit;
-  }
-  return window ? WmoLightingMode::Window : WmoLightingMode::Outdoor;
-}
-
 WmoRenderer::~WmoRenderer() {
   Shutdown();
 }
@@ -642,6 +605,7 @@ bool WmoRenderer::UploadGroupIntoSlot(const std::size_t group_index,
   std::memcpy(gpu.bounds_min, mesh.bounds_min, sizeof(gpu.bounds_min));
   std::memcpy(gpu.bounds_max, mesh.bounds_max, sizeof(gpu.bounds_max));
   gpu.flags = mesh.flags;
+  gpu.has_vertex_colors = mesh.has_vertex_colors;
   gpu.composite_vertices = composite;
   gpu.vertex_count = static_cast<std::uint32_t>(
       composite ? mesh.composite_vertices.size() : mesh.vertices.size());
@@ -1298,6 +1262,8 @@ const WmoSubmitTelemetry& WmoRenderer::Render(
     std::uint32_t index_count{0u};
     std::uint32_t material_index{0u};
     WmoBatchMesh::Region region{WmoBatchMesh::Region::Exterior};
+    bool transition_blend{false};
+    float vertex_color_mode{0.0f};
 
     WmoLightingMode lighting_mode{WmoLightingMode::Unlit};
     RenderVec4 group_color{};
@@ -1337,8 +1303,7 @@ const WmoSubmitTelemetry& WmoRenderer::Render(
       state |= kWmoOneSidedCullState;
     }
 
-    const bool transition_batch =
-        submitted.region == WmoBatchMesh::Region::Transition;
+    const bool transition_batch = submitted.transition_blend;
     if (transition_batch) {
 
       state |= BlendStateForMode(9u);
@@ -1377,7 +1342,7 @@ const WmoSubmitTelemetry& WmoRenderer::Render(
     };
 
     const RenderVec4 extra_params{
-        unified_render_path_ ? (transition_batch ? 2.0f : 1.0f) : 0.0f,
+        submitted.vertex_color_mode,
         effective_shader == data::wmo::kShaderOpaque ? 1.0f : 0.0f,
         effective_shader == data::wmo::kShaderEnvMetal ? 1.0f : 0.0f,
         mat && mat->alpha_test ? 1.0f : 0.0f,
@@ -1386,8 +1351,9 @@ const WmoSubmitTelemetry& WmoRenderer::Render(
         lighting_palette_.material_ambient_argb,
         mat != nullptr ? mat->sidn_color_bgra : 0u,
         night_glow_intensity_,
+        submitted.vertex_color_mode != -1.0f && submitted.vertex_color_mode != 1.0f &&
         mat != nullptr && (mat->flags & data::wmo::kMatSidnNight) != 0u);
-    uint32_t sampler_flags = 0;
+    uint32_t sampler_flags = WorldSamplerQualityFlags();
     if (mat) {
       if (mat->clamp_s)
         sampler_flags |= BGFX_SAMPLER_U_CLAMP;
@@ -1418,9 +1384,9 @@ const WmoSubmitTelemetry& WmoRenderer::Render(
     ++telemetry.submit_count;
 
     if (transition_batch) {
-      const WmoLightingMode interior_mode = unified_render_path_
-                                                ? WmoLightingMode::Interior
-                                                : WmoLightingMode::Unlit;
+      // TRANS = lit * alpha + unlit bake * (1-alpha), for both MOHD paths.
+      // No root ambient and no third additive/fullbright pass.
+      const WmoLightingMode interior_mode = WmoLightingMode::Unlit;
       RenderVec4 interior_material_params = material_params;
       interior_material_params[0] =
           interior_mode == WmoLightingMode::Unlit ? 1.0f : 0.0f;
@@ -1435,7 +1401,7 @@ const WmoSubmitTelemetry& WmoRenderer::Render(
       }
 
       const WmoVsParamBlock interior_vs_params = MakeWmoVsParamBlock(
-          model_mtx, sun_dir_, interior_ambient, interior_diffuse, emissive,
+          model_mtx, sun_dir_, interior_ambient, interior_diffuse, RenderVec4{},
           interior_material_params, extra_params);
       const WmoFsParamBlock interior_fs_params = MakeWmoFsParamBlock(
           submitted.group_color, fog_.params, fog_.color, sun_dir_,
@@ -1455,41 +1421,6 @@ const WmoSubmitTelemetry& WmoRenderer::Render(
       draw.submit(view_id, prog);
       ++record_telemetry.submit_count;
       ++telemetry.submit_count;
-
-      if (unified_render_path_) {
-
-        RenderVec4 additive_material_params = material_params;
-        additive_material_params[0] = 1.0f;
-
-        uint64_t additive_state = BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
-                                  kWmoTransitionPassDepthTestState |
-                                  BGFX_STATE_MSAA | BlendStateForMode(10u);
-        if (!(mat && mat->two_sided)) {
-          additive_state |= kWmoOneSidedCullState;
-        }
-
-        const WmoVsParamBlock additive_vs_params = MakeWmoVsParamBlock(
-            model_mtx, sun_dir_, kZeroWmoParams, kZeroWmoParams,
-            kZeroWmoParams, additive_material_params, extra_params);
-        const WmoFsParamBlock additive_fs_params = MakeWmoFsParamBlock(
-            submitted.group_color, fog_.params, fog_.color, sun_dir_,
-            additive_material_params, extra_params);
-
-        bind_placement_transform();
-        draw.setVertexBuffer(0, submitted.vb);
-        draw.setIndexBuffer(submitted.ib, submitted.start_index,
-                            submitted.index_count);
-        draw.setUniform(shaders.vs_params, additive_vs_params.data(),
-                        static_cast<std::uint16_t>(wmo_vs_param::kCount));
-        draw.setUniform(shaders.fs_params, additive_fs_params.data(),
-                        static_cast<std::uint16_t>(wmo_fs_param::kCount));
-        draw.setTexture(0, shaders.diffuse_sampler, tex, sampler_flags);
-        bind_environment_sampler();
-        draw.setState(additive_state);
-        draw.submit(view_id, prog);
-        ++record_telemetry.submit_count;
-        ++telemetry.submit_count;
-      }
     }
   };
 
@@ -1594,10 +1525,17 @@ const WmoSubmitTelemetry& WmoRenderer::Render(
         }
       }
 
+      const bool transition_blend = UsesClassicWmoTransitionBlend(gpu.flags, batch.region);
+      const bool interior = (gpu.flags & 0x48u) == 0u;
+      const float vertex_color_mode = transition_blend ? 2.0f :
+          (interior && batch.region == WmoBatchMesh::Region::Interior
+              ? (gpu.has_vertex_colors ? 1.0f : -1.0f) : 0.0f);
       if (run.open) {
         if (run.vb.idx == group_vb.idx && run.ib.idx == group_ib.idx &&
             run.material_index == batch.material_index &&
             run.region == batch.region &&
+            run.transition_blend == transition_blend &&
+            run.vertex_color_mode == vertex_color_mode &&
             run.lighting_mode == lighting_mode &&
             run.group_color == group_color &&
             run.start_index + run.index_count == batch_start_index) {
@@ -1613,6 +1551,8 @@ const WmoSubmitTelemetry& WmoRenderer::Render(
           .index_count = batch.index_count,
           .material_index = batch.material_index,
           .region = batch.region,
+          .transition_blend = transition_blend,
+          .vertex_color_mode = vertex_color_mode,
           .lighting_mode = lighting_mode,
           .group_color = group_color,
           .record_index = record_index,

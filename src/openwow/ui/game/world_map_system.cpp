@@ -7,6 +7,8 @@
 #include "openwow/game/object_manager.h"
 #include "openwow/game/update_fields.h"
 #include "openwow/game/world_map_continent_lookup.h"
+#include "openwow/game/world_map_continent_filter.h"
+#include "openwow/game/world_map_continent_rect.h"
 #include "openwow/game/world_session.h"
 #include "openwow/ui/game/api/game_lua_api_map.h"
 #include "openwow/ui/game/game_ui_manager.h"
@@ -331,7 +333,7 @@ void WorldMapSystem::BuildRuntimeDataFromDbcNoLock(const openwow::data::dbc::Dbc
   continents_.reserve(dbc.world_map_area().size());
 
   for (const auto &wma : dbc.world_map_area()) {
-    if (wma.area_id != 0) {
+    if (!openwow::game::IsWorldMapContinentOverview(wma)) {
       continue;
     }
 
@@ -1529,20 +1531,9 @@ std::uint32_t WorldMapSystem::ResolveLandmarkTextureNoLock(
   const bool can_resolve_texture =
       is_special_landmark || (landmark.flags & 0x80u) != 0u ||
       (current_zone_token_ == -1 && current_continent_token_ != -2);
-  if (!can_resolve_texture) {
-    return 0;
-  }
-
-  std::size_t texture_index = 0;
-  if (landmark.world_state_id != 0 && world_states != nullptr) {
-    const auto value =
-        world_states->GetWorldState(static_cast<std::int32_t>(landmark.world_state_id));
-    if (value > 0 && value <= static_cast<std::int32_t>(landmark.texture_indices.size())) {
-      texture_index = static_cast<std::size_t>(value - 1);
-    }
-  }
-
-  return landmark.texture_indices[texture_index];
+  // Classic has one icon. WorldState controls visibility, not an icon-array index.
+  (void)world_states;
+  return can_resolve_texture ? landmark.texture_indices[0] : 15u;
 }
 
 WorldMapSystem::MapCoord
@@ -1550,7 +1541,7 @@ WorldMapSystem::ProjectLandmarkToSelectionNoLock(const LandmarkSource &landmark)
   if (landmark.has_normalized_coords) {
     return {landmark.normalized_x, landmark.normalized_y, true};
   }
-  if (landmark.map_id <= 0) {
+  if (landmark.map_id < 0) {
     return {0.0f, 0.0f, false};
   }
 
@@ -1587,7 +1578,9 @@ void WorldMapSystem::RefreshVisibleLandmarksNoLock(
       }
     }
 
-    if (landmark.area_id != 0 && !IsAreaVisibleForPlayerNoLock(landmark.area_id, player)) {
+    // Classic AreaID -1 marks continent-wide landmarks (no exploration gate).
+    if (static_cast<std::int32_t>(landmark.area_id) > 0 &&
+        !IsAreaVisibleForPlayerNoLock(landmark.area_id, player)) {
       continue;
     }
 
@@ -2106,15 +2099,11 @@ std::int32_t WorldMapSystem::HitTestMapZoneNoLock(float norm_x, float norm_y) co
       continue;
     }
 
-    const float left = 0.5f -
-                       static_cast<float>(continent.right_boundary) * kContinentLookupScale_;
-    const float right = 0.5f -
-                        static_cast<float>(continent.left_boundary) * kContinentLookupScale_;
-    const float top = 0.5f -
-                      static_cast<float>(continent.bottom_boundary) * kContinentLookupScale_;
-    const float bottom = 0.5f -
-                         static_cast<float>(continent.top_boundary) * kContinentLookupScale_;
-    if (RectContainsPointInclusive(left, top, right, bottom, norm_x, norm_y)) {
+    const auto rect = openwow::game::ProjectWorldMapContinentRect(
+        continent.left_boundary, continent.right_boundary, continent.top_boundary,
+        continent.bottom_boundary, continent.continent_offset_x,
+        continent.continent_offset_y, continent.scale);
+    if (RectContainsPointInclusive(rect.left, rect.top, rect.right, rect.bottom, norm_x, norm_y)) {
       return static_cast<std::int32_t>(continent.overview_wma_id);
     }
   }
@@ -2134,19 +2123,15 @@ void WorldMapSystem::ProcessMapClick(float norm_x, float norm_y) {
     if (current_continent_token_ == -1) {
       for (std::size_t i = 0; i < continents_.size(); ++i) {
         const auto &continent = continents_[i];
-        if (continent.overview_wma_id == 0) {
+        if (!continent.has_overview_bounds || continent.overview_wma_id == 0) {
           continue;
         }
 
-        const float left =
-            0.5f - static_cast<float>(continent.right_boundary) * kContinentLookupScale_;
-        const float right =
-            0.5f - static_cast<float>(continent.left_boundary) * kContinentLookupScale_;
-        const float top =
-            0.5f - static_cast<float>(continent.bottom_boundary) * kContinentLookupScale_;
-        const float bottom =
-            0.5f - static_cast<float>(continent.top_boundary) * kContinentLookupScale_;
-        if (!RectContainsPointInclusive(left, top, right, bottom, norm_x, norm_y)) {
+        const auto rect = openwow::game::ProjectWorldMapContinentRect(
+            continent.left_boundary, continent.right_boundary, continent.top_boundary,
+            continent.bottom_boundary, continent.continent_offset_x,
+            continent.continent_offset_y, continent.scale);
+        if (!RectContainsPointInclusive(rect.left, rect.top, rect.right, rect.bottom, norm_x, norm_y)) {
           continue;
         }
 

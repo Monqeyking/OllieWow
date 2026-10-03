@@ -363,7 +363,7 @@ std::optional<DecodedTexture> BLPLoader::LoadFromVFS(
     return Load(bytes->data(), bytes->size());
 }
 
-DecodedTexture BLPLoader::DecompressToRGBA8(const DecodedTexture& tex) {
+DecodedTexture BLPLoader::DecompressToRGBA8(const DecodedTexture& tex, size_t max_mips) {
     if (tex.format == DecodedTexture::Format::RGBA8) return tex;
 
     const size_t block_size = DXTBlockSize(tex.format);
@@ -374,9 +374,10 @@ DecodedTexture BLPLoader::DecompressToRGBA8(const DecodedTexture& tex) {
     out.height = tex.height;
     out.mip_levels = tex.mip_levels;
     out.format = DecodedTexture::Format::RGBA8;
-    out.mips.resize(tex.mips.size());
+    const size_t mip_count = (max_mips != 0 && max_mips < tex.mips.size()) ? max_mips : tex.mips.size();
+    out.mips.resize(mip_count);
 
-    for (size_t m = 0; m < tex.mips.size(); ++m) {
+    for (size_t m = 0; m < mip_count; ++m) {
         const auto& src_mip = tex.mips[m];
         auto& dst_mip = out.mips[m];
         dst_mip.width = src_mip.width;

@@ -736,7 +736,8 @@ SPELLCAST_DELAYED
 SPELLCAST_CHANNEL_START
 SPELLCAST_CHANNEL_UPDATE
 SPELLCAST_CHANNEL_STOP
-PLAYER_COMBO_POINTS)";
+PLAYER_COMBO_POINTS
+MINIMAP_ZONE_CHANGED)";
 
 bool StartsWith(std::string_view value, std::string_view prefix) {
   return value.substr(0, prefix.size()) == prefix;

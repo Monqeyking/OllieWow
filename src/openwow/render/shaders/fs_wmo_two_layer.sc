@@ -14,9 +14,9 @@ void main()
     vec4 overlay = texture2D(s_envMap, v_texcoord1);
 
     vec3 composite = mix(base.rgb, overlay.rgb, v_color0.a);
-    vec3 color = (2.0 * v_color0.rgb * composite + v_color1.rgb)
+    vec3 color = (wmoDiffuseColor(composite, v_color0) + v_color1.rgb)
                * u_wmoGroupColor.rgb;
-    float alpha = v_color0.a * u_wmoGroupColor.a;
+    float alpha = wmoCoverageAlpha(base.a, v_color0.a) * u_wmoGroupColor.a;
 
     if (u_wmoExtraParams.w > 0.5 && alpha < (128.0 / 255.0)) {
         discard;

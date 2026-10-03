@@ -214,16 +214,20 @@ WmoGroupMesh GenerateWmoGroupMeshImpl(const WmoGroup &group,
 
   const bool has_normals = group.normals.size() == vert_count;
   const bool has_uvs = group.texCoords.size() == vert_count;
-  const bool has_colors = group.vertexColors.size() == vert_count;
+  // Benilla parallel_colors: recover only one missing final MOCV record.
+  // Larger gaps must not invent lighting for the rest of the group.
+  const bool has_colors = group.vertexColors.size() == vert_count ||
+      (!group.vertexColors.empty() && group.vertexColors.size() < vert_count &&
+       vert_count - group.vertexColors.size() == 1u);
   const bool use_composite_vertices = GroupUsesCompositeVertices(root, group);
   const bool has_uvs2 = group.texCoords2.size() == vert_count;
   const bool has_colors2 = group.vertexColors2.size() == vert_count;
   if (use_composite_vertices) {
     mesh.composite_vertices.resize(vert_count);
   }
-  const openwow::world::WmoVertexColorPreparation color_preparation =
-      openwow::world::BuildWmoVertexColorPreparation(
-          group.renderBatches, group.header.transBatchCount, mohd_flags);
+  // GPU uses authored/full-scale MOCV, independently of the CPU query bake.
+  mesh.has_vertex_colors = has_colors;
+  (void)mohd_flags;
 
   for (std::size_t i = 0; i < vert_count; ++i) {
     WmoVertex &v = mesh.vertices[i];
@@ -251,22 +255,17 @@ WmoGroupMesh GenerateWmoGroupMeshImpl(const WmoGroup &group,
     }
 
     if (has_colors) {
-      auto vc = openwow::world::PrepareWmoVertexColor(
-          group.vertexColors[i], i, color_preparation);
+      auto vc = group.vertexColors[std::min(i, group.vertexColors.size() - 1u)];
       if (root != nullptr) {
-        vc = openwow::world::PrepareWmoPortalVertexColor(
-            *root, group, group.vertices[i], vc, i, color_preparation);
+        vc = openwow::world::PrepareWmoRenderPortalVertexColor(
+            *root, group, group.vertices[i], vc);
       }
       v.color = static_cast<uint32_t>(vc.r) | (static_cast<uint32_t>(vc.g) << 8) |
                 (static_cast<uint32_t>(vc.b) << 16) | (static_cast<uint32_t>(vc.a) << 24);
     } else {
 
-      // Geen MOCV: neutraal, geen modulatie. Hier stond in unified-render-roots
-      // 0xFF000000 (zwart), waardoor zo'n groep in BEIDE lichtpaden volledig
-      // zwart rendert -- zwart x licht is zwart. Dat zijn de zwarte WMO-vlakken
-      // in de verte. De vertexkleuren staan op halve schaal (de shader verdubbelt
-      // ze, fs_wmo.sc:25), dus 0x7F is de neutrale 1.0.
-      v.color = 0xFF7F7F7Fu;
+      // No authored MOCV: neutral full-scale white, not the CPU bake half-scale.
+      v.color = 0xFFFFFFFFu;
     }
 
     if (use_composite_vertices) {

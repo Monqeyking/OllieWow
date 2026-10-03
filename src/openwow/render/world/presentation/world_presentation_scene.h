@@ -17,6 +17,10 @@
 #include <unordered_map>
 #include <vector>
 
+namespace openwow::core {
+class ThreadPoolSystem;
+}
+
 namespace openwow::data::dbc {
 class DbcLoader;
 }
@@ -88,6 +92,7 @@ class WorldPresentationScene final {
  private:
   struct ModelResource;
   struct PendingWmoGroup;
+  struct PendingTerrainTile;
   struct ModelInstance {
     std::string resource_key;
     std::uint64_t doodad_owner{};
@@ -106,6 +111,10 @@ class WorldPresentationScene final {
   };
 
   void ResetMap();
+  void QueueTerrainPreparation(const world::PublishTerrainTileCommand& command);
+  void CancelTerrainPreparation(std::int32_t tile_x, std::int32_t tile_y);
+  void StartQueuedTerrainPreparations();
+  void PumpPreparedTerrainTiles();
   void QueueWmoGroupPreparation(
       const world::PublishWorldModelGroupCommand& command);
   void StartQueuedWmoGroupPreparations();
@@ -131,6 +140,11 @@ class WorldPresentationScene final {
   std::unordered_map<std::uint64_t, ModelInstance> instances_;
   std::map<std::pair<std::string, std::uint32_t>,
            std::unique_ptr<PendingWmoGroup>> pending_wmo_groups_;
+  // Managed CPU-only workers; GPU staging remains on the presentation thread.
+  std::unique_ptr<core::ThreadPoolSystem> terrain_workers_;
+  std::map<std::pair<std::int32_t, std::int32_t>,
+           std::unique_ptr<PendingTerrainTile>> pending_terrain_tiles_;
+  std::uint64_t next_terrain_sequence_{1u};
   LoadFileCallback load_file_;
   m2::M2StreamPrefixFileLoader load_file_prefix_;
   const data::dbc::DbcLoader* dbc_{nullptr};

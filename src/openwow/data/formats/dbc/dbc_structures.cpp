@@ -372,13 +372,13 @@ OPENWOW_DBC_SCHEMA(SpellVisualKitEntry,
 )
 
 OPENWOW_DBC_SCHEMA(SpellVisualEffectNameEntry,
+  // Classic/Turtle layout: 5 columns, of which these three exist (id, debug name,
+  // model path). The WotLK area-size/scale columns are absent -- fields 3/4 are
+  // dead-by-absence -- so the struct defaults apply instead of reading past the
+  // row (which used to yield scale 0 and render every kit effect invisible).
   DBC_U32(id, 0)
   DBC_STRING(name, 1)
   DBC_STRING(file_path, 2)
-  DBC_F32(area_effect_size, 3)
-  DBC_F32(scale, 4)
-  DBC_F32(min_allowed_scale, 5)
-  DBC_F32(max_allowed_scale, 6)
 )
 
 OPENWOW_DBC_SCHEMA(AnimationDataEntry,

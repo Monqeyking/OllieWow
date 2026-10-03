@@ -50,6 +50,10 @@ struct LoadedTile {
   data::terrain::AdtFile adt{};
   std::array<std::array<std::uint32_t, 64>, 256> terrain_cell_ground_effect_ids{};
   std::vector<WaterHeightfield> water_surfaces;
+  // Owning immutable render snapshots are copied by the staging worker, not
+  // during frame publication. CPU collision/query data stays in adt/water_surfaces.
+  std::shared_ptr<const data::terrain::AdtFile> presentation_adt;
+  std::shared_ptr<const std::vector<WaterHeightfield>> presentation_liquids;
   std::array<ChunkSoundInstanceSet, data::terrain::kTotalChunks> ambient_sounds;
 };
 

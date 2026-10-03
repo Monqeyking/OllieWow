@@ -55,6 +55,10 @@ class DbcFile {
   [[nodiscard]] std::string_view GetString(std::uint32_t record, std::uint32_t field) const;
   [[nodiscard]] std::string_view GetLocalizedString(std::uint32_t record,
                                                     std::uint32_t first_field) const;
+  // Explicit block width prevents reading flags/next fields as locale strings.
+  [[nodiscard]] std::string_view GetLocalizedString(std::uint32_t record,
+                                                    std::uint32_t first_field,
+                                                    std::uint32_t locale_count) const;
 
   [[nodiscard]] std::uint8_t GetByte(std::uint32_t record, std::uint32_t byte_offset) const;
   [[nodiscard]] std::uint32_t GetUInt32AtOffset(std::uint32_t record,

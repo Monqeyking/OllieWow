@@ -25,17 +25,25 @@ enum class ZonePvPType : std::uint8_t {
 struct ZonePvPInfo {
   bool available{false};
   ZonePvPType type{ZonePvPType::Contested};
-  bool is_sub_zone_pvp{false};
+  bool is_arena{false};
   bool has_faction_name{false};
   std::string faction_name;
 };
 
-[[nodiscard]] ZonePvPInfo ResolveRetailZonePvpInfo(
+// Vanilla territory compares the parent-zone owner mask, friend before enemy.
+inline ZonePvPType ResolveClassicZonePvpType(std::uint32_t owner,
+                                           std::uint32_t friends,
+                                           std::uint32_t enemies) {
+  if ((owner & friends) != 0u) return ZonePvPType::Friendly;
+  if ((owner & enemies) != 0u) return ZonePvPType::Hostile;
+  return ZonePvPType::Contested;
+}
+
+[[nodiscard]] ZonePvPInfo ResolveClassicZonePvpInfo(
     const openwow::data::dbc::DbcLoader& dbc,
     const CGPlayer_C* active_player,
     std::uint32_t zone_id,
-    std::uint32_t sub_zone_id,
-    bool is_pvp_realm);
+    std::uint32_t sub_zone_id);
 
 class ContestedAreaTracker {
  public:

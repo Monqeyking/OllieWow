@@ -9,6 +9,7 @@
 #include "openwow/game/objects/cgunit.h"
 #include "openwow/game/ceffect_c.h"
 #include "openwow/game/gameobject_model_sound_callback.h"
+#include "openwow/debug/diagnostics/profiler.h"
 #include "openwow/game/nameplate_damage_flash.h"
 #include "openwow/game/player_control_runtime.h"
 #include "openwow/game/spell_cast_runtime.h"
@@ -1130,30 +1131,40 @@ void WorldScene::Update(const float dt, const float cam_x,
   if (!initialized_) return;
   last_frame_delta_seconds_ = dt;
 
-  world_map_.UpdateStreamingPosition(cam_x, cam_y);
+  { OPENWOW_PROFILE_SCOPE("ow.ws.streaming_position");
+    world_map_.UpdateStreamingPosition(cam_x, cam_y); }
 
-  world_map_.Update(dt);
-  ConsumeWorldPresentationCommands();
+  { OPENWOW_PROFILE_SCOPE("ow.ws.world_map_update");
+    world_map_.Update(dt); }
+  { OPENWOW_PROFILE_SCOPE("ow.ws.consume_commands");
+    ConsumeWorldPresentationCommands(); }
 
-  object_renderer_->Update(dt);
+  { OPENWOW_PROFILE_SCOPE("ow.ws.object_renderer");
+    object_renderer_->Update(dt); }
 
-  world_presentation_scene_.Update(
+  { OPENWOW_PROFILE_SCOPE("ow.ws.presentation_scene");
+    world_presentation_scene_.Update(
       dt, {cam_x, cam_y, cam_z}, environment_detail,
       weather_particle_density, use_weather_shaders,
-      !world_map_.IsOutdoorsAtPosition(cam_x, cam_y, cam_z));
-  NameplateDamageFlashState::Get().Update(dt);
+      !world_map_.IsOutdoorsAtPosition(cam_x, cam_y, cam_z)); }
+  { OPENWOW_PROFILE_SCOPE("ow.ws.nameplate_flash");
+    NameplateDamageFlashState::Get().Update(dt); }
 
-  water_particulates_.Update(
+  { OPENWOW_PROFILE_SCOPE("ow.ws.water_particulates");
+    water_particulates_.Update(
       dt, cam_x, cam_y, cam_z,
       world_map_.GetUnderwaterLiquidTypeId(cam_x, cam_y, cam_z),
       openwow::world::CWorld_HasRenderFlag(
-          openwow::world::WorldRenderFlag::kWaterParticulates));
+          openwow::world::WorldRenderFlag::kWaterParticulates)); }
 
-  particles_.Update(dt);
+  { OPENWOW_PROFILE_SCOPE("ow.ws.particles");
+    particles_.Update(dt); }
 
-  spell_visuals_.Update(dt);
+  { OPENWOW_PROFILE_SCOPE("ow.ws.spell_visuals");
+    spell_visuals_.Update(dt); }
 
-  spell_visual_renderer_.Update(dt);
+  { OPENWOW_PROFILE_SCOPE("ow.ws.spell_visual_renderer");
+    spell_visual_renderer_.Update(dt); }
 
 }
 
@@ -1671,6 +1682,14 @@ void WorldScene::PublishObjectPresentation(
         *current_handle != completion.owner) {
       continue;
     }
+    const auto& playback = unit->Animation().GetPlaybackRequest();
+    if (playback.serial == completion.request_serial &&
+        playback.animation_id == completion.animation_id) {
+      // Flush only the matching cast before its selector restores the base pose.
+      unit->SpellVisuals().FinishCastMissiles(
+          world_session, core::GameClock::GetTickCount32(),
+          completion.request_serial, completion.animation_id);
+    }
     unit->Animation().HandlePlaybackCompletion(
         world_session, completion.request_serial, completion.animation_id);
   }
@@ -1753,6 +1772,19 @@ void WorldScene::SynchronizeObjectModelBindings(
     }
     const std::uint32_t instance_id =
         object_renderer_->QueryPrimaryM2InstanceId(record.handle);
+    if (object->IsUnit()) {
+      auto* const unit = static_cast<CGUnit_C*>(object);
+      const auto rendered =
+          object_renderer_->QueryUnitAnimationRequest(record.handle);
+      if (instance_id != 0u && rendered.has_value()) {
+        // Marker callbacks belong to the consumed render request, not a newer
+        // packet-side request that may already have replaced it this frame.
+        unit->Animation().SetRenderedPlaybackSource(
+            instance_id, rendered->serial, rendered->animation_id);
+      } else {
+        unit->Animation().SetRenderedPlaybackSource(0u, 0u, 0u);
+      }
+    }
     if (object->GetPrimaryM2InstanceId() != instance_id) {
       object->SetPrimaryM2InstanceId(instance_id);
       if (instance_id != 0u && object->IsUnit()) {

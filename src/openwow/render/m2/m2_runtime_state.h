@@ -176,6 +176,8 @@ struct M2Instance {
   RenderVec3 rotation{};
   float scale = 1.0f;
   M2AnimationSlotStates animation_slots{};
+  M2WoundSample wound_sample{};
+  bool wound_sample_pending = false;
 
   std::vector<M2BoneBasisOverride> bone_basis_overrides;
   std::array<std::optional<PendingSlotAnimation>, kM2RetailAnimationSlotCount>

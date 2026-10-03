@@ -235,6 +235,11 @@ OPENWOW_DBC_SCHEMA(CreatureFamilyEntry,
   DBC_U32(skill_line_0, 5)
   DBC_U32(skill_line_1, 6)
   DBC_U32(pet_food_mask, 7)
+  // WotLK layout carried over: petTalentType/category at 8/9 push Name to 10.
+  // Classic has the Name block at 8 and iconFile at 17, but those two WotLK
+  // members are still consumed by the pet-talent UI, so the layout is left as-is
+  // until the Classic pet-talent source is established (open item in
+  // docs/CLASSIC_GAP_REGISTER.md). Do not "fix" the position without that.
   DBC_I32(pet_talent_type, 8)
   DBC_U32(category, 9)
   DBC_LOCALIZED(name, 10)
@@ -285,9 +290,8 @@ OPENWOW_DBC_SCHEMA(SpellDifficultyEntry,
 OPENWOW_DBC_SCHEMA(SpellDispelTypeEntry,
   DBC_U32(id, 0)
   DBC_LOCALIZED(name, 1)
-  DBC_U32(mask, 18)
-  DBC_U32(immunity_possible, 19)
-  DBC_STRING(internal_name, 20)
+  // WotLK mask/immunity/internal_name columns do not exist in this build (the
+  // table is 12 columns); they read past the row and always yielded 0.
 )
 
 OPENWOW_DBC_SCHEMA(SpellMechanicEntry,
@@ -571,7 +575,8 @@ OPENWOW_DBC_SCHEMA(SkillCostsDataEntry,
 OPENWOW_DBC_SCHEMA(SkillLineCategoryEntry,
   DBC_U32(id, 0)
   DBC_LOCALIZED(name, 1)
-  DBC_U32(sort_index, 18)
+  // Classic/Turtle: 11 columns -- ID@0, Name_Lang@1..8, NameFlags@9, sort@10.
+  DBC_U32(sort_index, 10)
 )
 
 OPENWOW_DBC_SCHEMA(QuestFactionRewardEntry,

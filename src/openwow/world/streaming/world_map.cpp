@@ -6,6 +6,7 @@
 #include "openwow/data/terrain/adt_file.h"
 #include "openwow/data/terrain/wdt_file.h"
 #include "openwow/data/wmo/wmo_file.h"
+#include "openwow/debug/diagnostics/profiler.h"
 #include "openwow/debug/inspection/render_debug.h"
 #include "openwow/world/environment/day_night.h"
 #include "openwow/world/coordinates/frustum.h"
@@ -2469,6 +2470,23 @@ MovementWmoCollisionCompleteness WorldMap::VisitWmoFacets(
             i2 >= group.vertices.size()) {
           return;
         }
+        // Voor-test in lokale ruimte: de lokale zoekbox omvat de hele zoekruimte,
+        // dus een driehoek die er buiten valt kan de wereld-zoekruimte niet raken.
+        // Scheelt drie matrixtransformaties per overgeslagen driehoek.
+        {
+          constexpr float kLocalPad = 0.05f;
+          const auto& p0 = group.vertices[i0];
+          const auto& p1 = group.vertices[i1];
+          const auto& p2 = group.vertices[i2];
+          if (std::min({p0.x, p1.x, p2.x}) > local_bounds[3] + kLocalPad ||
+              std::max({p0.x, p1.x, p2.x}) < local_bounds[0] - kLocalPad ||
+              std::min({p0.y, p1.y, p2.y}) > local_bounds[4] + kLocalPad ||
+              std::max({p0.y, p1.y, p2.y}) < local_bounds[1] - kLocalPad ||
+              std::min({p0.z, p1.z, p2.z}) > local_bounds[5] + kLocalPad ||
+              std::max({p0.z, p1.z, p2.z}) < local_bounds[2] - kLocalPad) {
+            return;
+          }
+        }
         const auto to_world = [&instance](const data::wmo::Vec3f& vertex) {
           return TransformPoint(instance.model_matrix,
                                 {vertex.x, vertex.y, vertex.z});
@@ -3058,9 +3076,9 @@ void WorldMap::QueueFullPresentationReplay() {
         .owner = TileOwnerId(coord),
         .tile_x = coord.x,
         .tile_y = coord.y,
-        .adt = std::make_shared<const data::terrain::AdtFile>(loaded->adt),
-        .liquids = std::make_shared<const std::vector<WaterHeightfield>>(
-            loaded->water_surfaces),
+        .adt = loaded->presentation_adt,
+        .liquids = loaded->presentation_liquids,
+        .publication_priority = TileBoundsDistanceSq2D(streaming_x_, streaming_y_, coord),
         .big_alpha =
             (wdt_.flags & data::terrain::WdtFlags::kBigAlpha) != 0u});
   }
@@ -3300,6 +3318,10 @@ void WorldMap::QueueTileLoad(const TileCoord &coord) {
                     BuildAdtWaterHeightfields(
                         tile->adt, map_id, liquid_vertex_formats,
                         liquid_material_variants);
+                tile->presentation_adt =
+                    std::make_shared<const data::terrain::AdtFile>(tile->adt);
+                tile->presentation_liquids =
+                    std::make_shared<const std::vector<WaterHeightfield>>(tile->water_surfaces);
                 completion.tile = std::move(tile);
               }
             }
@@ -4027,13 +4049,25 @@ std::size_t WorldMap::PumpReadyWmoGroups(
 
 void WorldMap::PumpWorldStaging(const std::size_t tile_budget,
                                     const std::size_t wmo_budget) {
+  OPENWOW_PROFILE_SCOPE("ow.wm.pump_total");
   ++world_staging_pump_sequence_;
   QueueDueWmoRetries();
   const auto pump_started = std::chrono::steady_clock::now();
-  DrainWorldStagingMailbox();
+  { OPENWOW_PROFILE_SCOPE("ow.wm.drain_mailbox");
+  DrainWorldStagingMailbox(); }
 
   std::size_t published_tiles = 0u;
+  std::size_t inspected_tiles = 0u;
+  const auto tile_deadline = pump_started + std::chrono::milliseconds(2);
+  const bool pace_tiles = tile_budget != std::numeric_limits<std::size_t>::max();
+  openwow::debug::Profiler::Get().BeginScope("ow.wm.tile_publish");
   while (published_tiles < tile_budget && !ready_tile_publications_.empty()) {
+    // Soft deadline between complete CPU publications; collision stays atomic.
+    if (pace_tiles && inspected_tiles != 0u &&
+        std::chrono::steady_clock::now() >= tile_deadline) {
+      break;
+    }
+    ++inspected_tiles;
     const TilePublicationCandidate candidate = ready_tile_publications_.top();
     ready_tile_publications_.pop();
     const auto request = pending_tile_loads_.find(candidate.coord);
@@ -4077,10 +4111,9 @@ void WorldMap::PumpWorldStaging(const std::size_t tile_budget,
           .owner = TileOwnerId(coord),
           .tile_x = coord.x,
           .tile_y = coord.y,
-          .adt = std::make_shared<const data::terrain::AdtFile>(loaded->adt),
-          .liquids =
-              std::make_shared<const std::vector<WaterHeightfield>>(
-                  loaded->water_surfaces),
+          .adt = loaded->presentation_adt,
+          .liquids = loaded->presentation_liquids,
+          .publication_priority = candidate.priority,
           .big_alpha =
               (wdt_.flags & data::terrain::WdtFlags::kBigAlpha) != 0u});
       RegisterTileWmoPlacementOwner(*loaded);
@@ -4093,8 +4126,10 @@ void WorldMap::PumpWorldStaging(const std::size_t tile_budget,
     }
   }
 
+  openwow::debug::Profiler::Get().EndScope();
   DrainWorldStagingMailbox();
   std::size_t published_wmos = 0u;
+  openwow::debug::Profiler::Get().BeginScope("ow.wm.wmo_publish");
   while (published_wmos < wmo_budget && !ready_wmo_publications_.empty()) {
     WmoPublicationCandidate candidate = ready_wmo_publications_.top();
     ready_wmo_publications_.pop();
@@ -4142,12 +4177,15 @@ void WorldMap::PumpWorldStaging(const std::size_t tile_budget,
     }
   }
 
-  DrainWorldStagingMailbox();
+  openwow::debug::Profiler::Get().EndScope();
+  { OPENWOW_PROFILE_SCOPE("ow.wm.drain_mailbox2");
+  DrainWorldStagingMailbox(); }
   std::uint64_t wmo_byte_budget = kWmoPublicationByteBudgetPerFrame;
   const auto wmo_deadline = pump_started + kWmoPublicationTimeBudgetPerFrame;
+  { OPENWOW_PROFILE_SCOPE("ow.wm.wmo_groups");
   PumpReadyWmoGroups(
       wmo_budget > published_wmos ? wmo_budget - published_wmos : 0u,
-      &wmo_byte_budget, wmo_deadline);
+      &wmo_byte_budget, wmo_deadline); }
 
   if (stream_progress_total_ != 0u &&
       stream_progress_completed_ >= stream_progress_total_ &&

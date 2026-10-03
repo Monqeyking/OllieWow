@@ -581,12 +581,21 @@ GlueTextureStreamingStats GlueTextureStream::StreamingStats() const {
     pending = async_state_->pending.size();
     prepared = async_state_->prepared_count;
   }
+  const std::uint32_t workers =
+      async_workers_ != nullptr ? async_workers_->GetThreadCount() : 0u;
+  const std::uint32_t running_workers =
+      async_workers_ != nullptr ? async_workers_->GetRunningCount() : 0u;
+  const std::uint32_t queued_workers =
+      async_workers_ != nullptr ? async_workers_->GetQueueSize() : 0u;
   return GlueTextureStreamingStats{
       .pending = pending,
       .prepared = prepared,
       .failed = source_rows_ != nullptr
                     ? source_rows_->TerminalFailureCount()
                     : 0u,
+      .workers = workers,
+      .running_workers = running_workers,
+      .queued_workers = queued_workers,
   };
 }
 

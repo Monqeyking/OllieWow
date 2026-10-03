@@ -490,6 +490,14 @@ target_link_libraries(openwow_render_bgfx PUBLIC bgfx::bgfx bgfx::bx bgfx::bimg)
 target_link_libraries(openwow_render_bgfx PRIVATE SDL2::SDL2)
 add_dependencies(openwow_render_bgfx openwow_shaders)
 openwow_configure_target(openwow_render_bgfx)
+# Staged terrain owns RAII resources across CPU preparation/GPU failure boundaries.
+# MSVC must unwind those scopes when a preparation callback or allocation throws.
+if(MSVC)
+  set_property(SOURCE
+    "${PROJECT_SOURCE_DIR}/src/openwow/render/world/presentation/world_presentation_scene.cpp"
+    "${PROJECT_SOURCE_DIR}/src/openwow/render/world/terrain/terrain_renderer.cpp"
+    APPEND PROPERTY COMPILE_OPTIONS /EHsc)
+endif()
 
 add_library(openwow_render_bgfx_imgui
   ${PROJECT_SOURCE_DIR}/src/openwow/render/backend/bgfx/bgfx_imgui_renderer.cpp

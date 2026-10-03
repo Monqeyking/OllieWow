@@ -65,6 +65,7 @@ struct WmoGroupMesh {
   float bounds_min[3];
   float bounds_max[3];
   uint32_t flags;
+  bool has_vertex_colors{false};
 
   [[nodiscard]] bool uses_composite_vertices() const noexcept {
     return !composite_vertices.empty();

@@ -176,6 +176,9 @@ class M2System final : public api::RendererDeviceLifecycleObserver {
   [[nodiscard]] M2ResultStatus SetAnimationSlotRequest(std::uint32_t instance, std::uint32_t slot, const M2AnimationRequest& request);
 
   [[nodiscard]] M2ResultStatus SetAnimationSlotSample(std::uint32_t instance, std::uint32_t slot, std::uint32_t animation, std::uint32_t time, float speed = 1.0f, bool zero_blend = false);
+  // Caller owns the wound clock/decay. Weight zero clears even while streaming.
+  // keybone_slot == 0xFFFFFFFF blends full body; otherwise its keyed subtree.
+  [[nodiscard]] M2ResultStatus SetWoundSample(std::uint32_t instance_id, std::uint32_t animation_id, std::uint32_t time_ms, float weight, std::uint32_t keybone_slot);
   [[nodiscard]] M2ResultStatus SetAnimationSlotTimes(std::uint32_t instance, std::span<const std::uint32_t> slots, std::uint32_t time);
   [[nodiscard]] M2ResultStatus ClearAnimationSlot(std::uint32_t instance, std::uint32_t slot);
 

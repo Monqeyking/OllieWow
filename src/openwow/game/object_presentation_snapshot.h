@@ -143,8 +143,15 @@ struct SpellVisualPresentationEvent {
   std::array<float, 3> missile_source_position{};
   std::uint64_t missile_caster_guid{0};
   std::uint8_t missile_cast_count{0};
+  std::uint32_t missile_go_tick{0};
+  std::uint32_t missile_queue_tick{0};
+  std::uint32_t missile_release_tick{0};
+  std::uint32_t missile_deadline_tick{0};
+  bool missile_has_deadline{false};
   std::uint64_t missile_target_guid{0};
   std::array<float, 3> missile_target_position{};
+  std::array<float, 3> missile_target_fallback_offset{};
+  ObjectHandle missile_target_handle{};
   float missile_speed{0.0f};
 
   bool missile_uses_timed_trajectory{false};

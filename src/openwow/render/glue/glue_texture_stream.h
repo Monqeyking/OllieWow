@@ -54,6 +54,9 @@ struct GlueTextureStreamingStats {
   std::size_t pending{0};
   std::size_t prepared{0};
   std::size_t failed{0};
+  std::uint32_t workers{0};
+  std::uint32_t running_workers{0};
+  std::uint32_t queued_workers{0};
 };
 
 class GlueTextureStream {

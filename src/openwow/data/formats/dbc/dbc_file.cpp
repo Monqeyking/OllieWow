@@ -195,6 +195,14 @@ std::string_view DbcFile::GetLocalizedString(const std::uint32_t record,
              : std::string_view{};
 }
 
+std::string_view DbcFile::GetLocalizedString(const std::uint32_t record,
+                                             const std::uint32_t first_field,
+                                             const std::uint32_t locale_count) const {
+  return ToDbcLocaleIndex(locale_) < locale_count
+             ? GetLocalizedString(record, first_field)
+             : std::string_view{};
+}
+
 std::uint8_t DbcFile::GetByte(const std::uint32_t record,
                               const std::uint32_t byte_offset) const {
   const auto* const bytes = BytePtr(record, byte_offset, 1u);

@@ -31,6 +31,7 @@ struct PublishTerrainTileCommand {
   std::shared_ptr<const data::terrain::AdtFile> adt;
   std::shared_ptr<const std::vector<WaterHeightfield>> liquids;
 
+  float publication_priority{};
   bool big_alpha{false};
 };
 struct RemoveTerrainTileCommand {

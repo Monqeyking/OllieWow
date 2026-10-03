@@ -34,7 +34,8 @@ Daarna is de beweging-slice opgepakt.
 | A2 | `SMSG_MONSTER_MOVE` leest een Animation-bit dat 1.12 niet heeft | **gereed** — zie hieronder; het was groter dan dit item |
 | A3 | Cyclische splines wissen hun fake eerste vertex niet | **gereed** — zelfde oorzaak als A2 |
 | C1 | `SMSG_GROUP_LIST` leest 4 header-bytes i.p.v. 2 | **open** — `group_manager.cpp:15-21` |
-| overige ~56 | zie `PROTOCOL_AUDIT_335_VS_112.md` | **open** |
+| B1/B2/B3 | Channel-start/update en cast-pushback | **gebouwd, parserfixtures geslaagd; pushback (B3) door gebruiker ingame bevestigd, channels (B1/B2) onbevestigd** — Classic 8/4/12-byte parsers; channel-caster uit lokale speler; fixture `tools/classic_spell_packets_regression.cpp`. Zie Benilla batch 12. |
+| overige | zie `PROTOCOL_AUDIT_335_VS_112.md` | Resterende status per item controleren; oude audit is geen actuele runtimebevestiging. |
 
 ### De beweging-slice: de hele spline-vlaggentabel was WotLK
 
@@ -160,8 +161,9 @@ tabelopzoeking in plaats van op naam.
 |---|---|---|
 | Skill-rij-trough (vol blauw i.p.v. rank) | **gereed** | `lua_frame_projection.cpp` — vertexkleur vermenigvuldigt nu met de authored `<Color>`; authored kleur wordt gediscard op textures met `file=`. In-game bevestigd door eigenaar. |
 | Eenmalige effecten blijven eeuwig staan | **gereed** | `unit_spell_visual_runtime.cpp` + `ceffect_c.cpp` — deadline uit de file-order-eerste M2-sequentieduur (Benilla's `first_seq_span`). Nog niet in-game getest. |
-| **Wond-reactie vervangt de swing** | **open** | `PlayWoundReaction` → `SubmitRawPlayback` (`unit_animation_runtime.cpp:2114`) overschrijft `playback_request_`. Benilla legt de flinch in een aparte SECONDARY-slot (`driver/wound.rs:85-92`) die de base/one-shot nooit raakt. |
-| Geen derde kanaal | **open** | M2 heeft 35 slots met smoothstep-blend, maar zonder amplitude-veld; `PlaybackRequest` heeft alleen base + upper-body. |
+| **Wond-reactie vervangt de swing** | **gewijzigd; gedeelde offline primitives PASS; ingame open** | `PlayWoundReaction` gebruikt nu aparte `WoundSecondaryRequest` in plaats van `SubmitRawPlayback`; base/swing serial en klok blijven intact. Benilla `benilla-app/src/creature_anim/driver/wound.rs::wound_trigger`; echte renderer/M2-projectie toegevoegd. `tools/wound_secondary_regression.cpp` + productieklok/maskerhelper PASS; clientbuild `DEV_BUILD_OK`. Spell- en DoT-wondbron uit de damage-log verwijderd; de flinch komt nu uit de kit-kolom (`docs/BENILLA_DEVIATIONS.md`). Geen bewezen ingame-pose. |
+| Geen derde kanaal (wond) | **wondkanaal toegevoegd; ingame open** | `M2System::SetWoundSample` heeft onafhankelijke sample/gewicht (.75 smoothstep) en TRS-blend vóór bot-hiërarchie. Geen algemene amplitude-pariteit voor alle35 bestaande slots geclaimd. Zie `docs/BENILLA_DEVIATIONS.md` voor impact/bron/tests. |
+| Imp-cast / verre of late projectielen | **gewijzigd; definitieve verificatie loopt** | Cast-releasequeue met exact owner/generatie/rendered serial/id, GO-deadline, homing en unload/reset annuleert ook assetvrije flights. `tools/missile_release_regression.cpp` en de echte `tools/missile_renderer_regression.cpp` PASS. Concrete15s/vertrekcoördinaten en CGUnit/M2-binding ingame nog onbekend; geen asset- of datacorruptieclaim. |
 
 ---
 
@@ -177,7 +179,7 @@ tabelopzoeking in plaats van op naam.
 
 ## 7. Data en DBC
 
-Status: **schoon** — hier is geen werk meer.
+Status: **deels** — de catalogus-`field_count` klopte, maar de schema-*indices* zijn daar nooit tegen gecontroleerd (zie hieronder).
 
 - **54 DBC-headers** read-only geëxtraheerd en vergeleken met
   `dbc_retail_catalog.inc`: alle `field_count`/`record_size` exact gelijk.
@@ -189,6 +191,98 @@ Status: **schoon** — hier is geen werk meer.
   Benilla leest hem ook niet. OpenWow slaat hem terecht over.
 - **`SpellVisual` veld 10 en 14** correct gemapt en gebruikt.
 - **`ChrRaces`** veld 6/7 zijn `ClientPrefix`/unused — correct overgeslagen.
+
+- **Nieuwe controle (2026-10-02): schema-indices tegen het echte `fieldCount`.**
+  Uit elk `OPENWOW_DBC_SCHEMA` de hoogste gelezen veldindex gehaald (arrays via hun
+  `[N]`) en vergeleken met het `WDBC`-header van de gedumpte tabel. Als de hoogste
+  index `>= fieldCount` is, leest het schema velden die niet bestaan — die worden
+  altijd 0. **25 van de 226 gecontroleerde schema's** zitten fout:
+
+  Bron per rij: `header` = het echte `WDBC`-header (hardst), `serverfmt` = de lokale
+  Source `D:/OllieWoW/Source/src/game/Database/DBCfmt.h`, `catalog` = onze eigen
+  `dbc_retail_catalog.inc` (gevalideerd: 0 verschillen met `DBCfmt.h` over alle 54
+  gedeelde tabellen, en `Spell` klopt op 173).
+
+  | Schema | max index | echte velden | bron | ongeldige leden |
+  |---|---|---|---|---|
+  | `TalentTab` | 23 | 15 | header | `spell_icon_id@18`, `race_mask@19`, `class_mask@20`, `pet_talent_mask@21`, `order_index@22`, `background_file@23` |
+  | `SpellItemEnchantment` | 35 | 24 | header | `tail_fields@35` (array → 35-50) |
+  | `CreatureSoundData` | 37 | 30 | header | `sound_pet_dismiss_id@30` … `creature_sound_data_id_pet@37`, o.a. **`spell_cast_directed_sound_id@34`** |
+  | `WorldMapArea` | 10 | 8 | header | `parent_world_map_id@10` |
+  | `SpellVisualEffectName` | 6 | 5 | header | `area_effect_size@3`, `scale@4`, `min_allowed_scale@5`, `max_allowed_scale@6` — **gerepareerd** |
+  | `AnimationData` | 7 | 7 | header | `behavior_tier@7` |
+  | `Talent` | 21 | 21 | header | `pet_talent_mask@21` |
+  | `SoundEntries` | 29 | 29 | header | `sound_entries_advanced_id@29` — al bekend, lage impact |
+  | `CreatureType` | 18 | 11 | serverfmt | `flags@18` |
+  | `MailTemplate` | 18 | 10 | serverfmt | `body@18` |
+  | `NamesProfanity` | 2 | 2 | serverfmt | `language@2` |
+  | `NamesReserved` | 2 | 2 | serverfmt | `language@2` |
+  | `TaxiPathNode` | 10 | 9 | serverfmt | `arrival_event_id@9`, `departure_event_id@10` |
+  | `LfgDungeons` | 32 | 14 | catalog | `min_level@18` … `description@32` (15 leden) |
+  | `WorldStateUI` | 62 | 39 | catalog | `world_state_id@39` … `extended_ui_state_variable2@62` |
+  | `LockType` | 52 | 29 | catalog | `verb@35`, `cursor@52` |
+  | `Exhaustion` | 22 | 15 | catalog | `threshold@22` — **gerepareerd** → `@14` |
+  | `PetPersonality` | 23 | 19 | catalog | `threshold@18`, `damage_modifier@21` |
+  | `SpellDispelType` | 20 | 12 | catalog | `mask@18`, `immunity_possible@19`, `internal_name@20` — **gerepareerd** (WotLK-leden weg) |
+  | `SkillLineCategory` | 18 | 11 | catalog | `sort_index@18` — **gerepareerd** → `@10` (skillpaneel-volgorde) |
+  | `WorldMapContinent` | 13 | 13 | catalog | `world_map_id@13` |
+  | `VideoHardware` | 22 | 22 | catalog | `settings_22@22` |
+  | `LoadingScreens` | 3 | 3 | catalog | `has_wide_screen@3` |
+  | `Material` | 4 | 3 | catalog | `sheathe_sound@3`, `unsheathe_sound@4` |
+  | `LightSkybox` | 2 | 2 | catalog | `flags@2` |
+  | `ChatProfanity` | 2 | 2 | catalog | `language@2` |
+
+  Dekking: **alle 226 schema's gecontroleerd** — 55 tegen het echte header, 54 tegen
+  `DBCfmt.h`, de rest tegen de catalogus. Deze controle vangt alleen "leest voorbij het
+  einde"; een schema dat een bestaande maar *verkeerde* kolom leest, wordt hier niet
+  gevonden. Dat blijft per-tabel werk.
+- **Positievergelijking (2026-10-02): niet alleen aantal, ook type per positie.**
+  Voor elke tabel met een serverformaat is per positie het type vergeleken (`s` = string
+  vs numeriek). Dat vond **18 tabellen met een typeconflict**, waarvan 17 onschuldig zijn:
+  de server markeert het veld als `x` (leest het niet) terwijl de client er een string
+  leest — dat mag. **Eén is een echte verschuiving:**
+
+  | Tabel | server | OpenWow | gevolg |
+  |---|---|---|---|
+  | `CreatureFamily` | 18 velden, naamreeks op **8**, `iconFile` op **17** (`DBCfmt.h:251` "nfifiiiissssssssxx"; Benilla `creature_families.rs:84-95`, byte-pinned: Name @0x20 = veld 8, iconFile @0x44 = veld 17) | `pet_talent_type@8`, `category@9`, `name@10` | naam leest locale 2 i.p.v. 0; `iconFile` wordt nooit gelezen |
+
+  **Nog niet gefixt, en met opzet.** `pet_talent_type`/`category` bestaan in deze build
+  niet, maar ze worden wél gebruikt door de pet-talent-UI (`talent_info.cpp:881`,
+  `game_lua_api_pet.cpp:966-973`). De posities goedzetten zonder eerst de Classic-bron
+  voor de pet-talentboom vast te stellen breekt die UI (build faalde op precies die twee
+  leden). Wijziging teruggedraaid; build weer `DEV_BUILD_OK`. Dit is dus geen mechanische
+  verschuiving maar een open bronvraag.
+
+- **Toegepaste DBC-cleanup (2026-10-02).** Regel: staat een lid niet in vanilla, dan gaat
+  het WotLK-stuk eruit. Deze ronde, elk met bron, gebouwd (`DEV_BUILD_OK`):
+  - `SpellDispelType` — `mask`/`immunity_possible`/`internal_name` bestaan niet (12
+    kolommen; Benilla `spells/dispelt_types.rs:16-20`). Leden verwijderd;
+    `ResolveDispelTypeMask` gebruikt expliciet de bit-uit-id (was al de `mask==0`-
+    terugval, dus gedrag identiek).
+  - `SkillLineCategory.sort_index` 18 → **10**. Dit lid **werd gebruikt**
+    (`skill_info.cpp:79`) en stond altijd op 0 → skillpaneel-volgorde was stuk.
+  - `Exhaustion.threshold` 22 → **14** (naam-blok 5..13, dus laatste kolom).
+  - `CreatureFamily` — bewust open, zie hierboven.
+
+- **Nog te doen, per stuk met een bronvraag:** `TalentTab` (icoon/volgorde/maskers),
+  `MailTemplate.body` (bestaat niet in een tabel van 10, maar de mail-presentatie leest
+  het), `CreatureSoundData` (castgeluid), en de overige catalog-only rijen.
+
+
+- **`SpellVisualEffectName` gerepareerd.** De tabel heeft 5 kolommen (id, naam, pad,
+  en twee dode kolommen); de WotLK-kolommen `area_effect_size`/`scale`/`min`/`max`
+  werden uit veld 3-6 gelezen. `scale` werd daardoor 0, en schaal 0 maakt de matrix
+  ontaard (`spell_visual_renderer.cpp:2387 → 1918 → 2079`) → **elk kit-effect
+  onzichtbaar**: pre-cast handgloed 287, cast-handgloed 288, chest-impact 321.
+  Bron: `benilla-formats/src/spell_visual/mod.rs:53-61` ("fields 3/4 are
+  dead-by-absence … the emitter *scale* … never from this table") +
+  `spell_visual/tests.rs:335-347`. Schema teruggebracht tot de drie echte kolommen;
+  struct-defaults staan nu op schaal 1.0. Gebouwd: `DEV_BUILD_OK`. Nog niet in-game
+  bevestigd.
+
+- **Overige 7 als werkvoorraad.** De ongeldige index is bewezen; de *juiste* kolom is
+  nog niet geverifieerd, dus daar is (nog) niets gewijzigd. Meest impactvol lijken
+  `TalentTab` en `CreatureSoundData.spell_cast_directed_sound_id` (creature-castgeluid).
 
 ---
 
@@ -204,6 +298,16 @@ Status: **schoon** voor wat onderzocht is.
 | Update fields | Classic-correct | `update_fields.h`: `UNIT_END`=188, `PLAYER_END`=1282, WotLK-currencies op `PLAYER_UNSUPPORTED_FIELD` |
 
 ---
+
+### Movement/camera frame-hitches — actuele performance-slice
+
+Gebruiker meldt haperend beeld bij lopen/camera draaien. Concrete synchronous terrain
+publication path vervangen door worker-CPU-voorbereiding en gefaseerde complete-tile
+GPU-publicatie; owning snapshots op staging-worker, readiness/cancellation behouden.
+Client gebouwd; budgetfixture (16/32 units) en echte headless Noop-uploader/scene
+lifecyclefixture geslaagd (laatste versie 3x exit0). Ingame framewinst onbevestigd.
+Zie `terrain-benilla-audit.md`, sectie Movement/camera hitch slice. Geen algemene
+claim dat alle spikes hierdoor opgelost zijn; driver-, water/doodad- en andere bursts blijven.
 
 ## 9. Infrastructuur
 
@@ -282,7 +386,7 @@ aangeroepen" en "gelezen maar nooit gezet" over de hele boom.
 
 - `D:\OllieWoW\Client` — primair voor glue/UI en assets (read-only)
 - `D:\OllieWoW\Source` — autoriteit voor serverdata en packetbodies
-- `D:\OllieWoW\benilla` — Vanilla/Turtle-referentie voor clientgedrag
+- `D:\OllieWoW\Experiments\Benilla` — Vanilla/Turtle-referentie voor clientgedrag
 - `D:\OllieWoW\Client\WoW.exe` — originele client, voor naamtabellen en RTTI
 - `docs/PROTOCOL_AUDIT_335_VS_112.md` — protocol-bodies (sectie 1)
 - `docs/BENILLA_DEVIATIONS.md` — eerdere batches met onderbouwing

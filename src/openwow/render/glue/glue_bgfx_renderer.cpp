@@ -676,6 +676,10 @@ void GlueBgfxRenderer::TickStreaming(openwow::ui::glue::GlueWidgetRuntime& widge
 openwow::ui::glue::GlueStreamingCounters GlueBgfxRenderer::StreamingCounters() const {
   return impl_->models.StreamingCounters();
 }
+openwow::render::GlueTextureStreamingStats
+GlueBgfxRenderer::TextureStreamingStats() const {
+  return impl_->textures.StreamingStats();
+}
 
 openwow::ui::TextureNaturalSizeSource&
 GlueBgfxRenderer::texture_natural_size_source() {

@@ -3,6 +3,7 @@
 #include "openwow/foundation/math/get_dominant_axis.h"
 
 #include <algorithm>
+#include <bit>
 #include <cmath>
 #include <limits>
 
@@ -131,6 +132,25 @@ namespace {
   return std::signbit(oriented) ? -magnitude : magnitude;
 }
 
+// GPU doorway kernel matches current Benilla group.rs::portal_distance.
+// Within the plane epsilon and outline it is zero; otherwise use edge distance.
+[[nodiscard]] float RenderDistanceToPortal(
+    const data::wmo::Vec3f& point, const data::wmo::WmoPortal& portal,
+    std::span<const data::wmo::Vec3f> vertices) noexcept {
+  const data::wmo::Vec3f normal{portal.normal[0], portal.normal[1], portal.normal[2]};
+  const float plane = Dot(normal, point) + portal.distance;
+  const data::wmo::Vec3f projected{point.x-normal.x*plane,
+      point.y-normal.y*plane, point.z-normal.z*plane};
+  bool inside = plane * plane < (1.0f/6.0f) * (1.0f/6.0f);
+  float nearest = std::numeric_limits<float>::infinity();
+  for (std::size_t i = 0u; i < vertices.size(); ++i) {
+    const auto& a = vertices[i]; const auto& b = vertices[(i+1u)%vertices.size()];
+    if (Dot(Cross(Subtract(b,a),normal),Subtract(projected,a)) > 0.0f) inside = false;
+    nearest = std::min(nearest, DistanceToSegment(point,a,b));
+  }
+  return inside ? 0.0f : nearest;
+}
+
 }
 
 WmoVertexColorPreparation BuildWmoVertexColorPreparation(
@@ -171,6 +191,39 @@ data::wmo::WmoVertexColor PrepareWmoVertexColor(
   result.r = PreparedChannel(source.r, source.a);
   result.a = 0xffu;
   return result;
+}
+
+data::wmo::WmoVertexColor PrepareWmoRenderPortalVertexColor(
+    const data::wmo::WmoRoot& root, const data::wmo::WmoGroup& group,
+    const data::wmo::Vec3f& position, data::wmo::WmoVertexColor color) noexcept {
+  float nearest = std::numeric_limits<float>::infinity();
+  const std::size_t begin = group.header.portalStart;
+  const std::size_t end = std::min(root.portalRefs.size(), begin + group.header.portalCount);
+  for (std::size_t i = begin; i < end; ++i) {
+    const auto& ref = root.portalRefs[i];
+    if (ref.groupIndex >= root.groupInfos.size() ||
+        (root.groupInfos[ref.groupIndex].flags & 0x48u) == 0u ||
+        ref.portalIndex >= root.portals.size()) continue;
+    const auto& portal = root.portals[ref.portalIndex];
+    const std::size_t start = portal.startVertex, count = portal.nVertices;
+    if (count < 3u || start > root.portalVertices.size() ||
+        count > root.portalVertices.size() - start) continue;
+    nearest = std::min(nearest, RenderDistanceToPortal(
+        position, portal, std::span<const data::wmo::Vec3f>(root.portalVertices)
+            .subspan(start, count)));
+  }
+  if (nearest == 0.0f) return {.b = 255u, .g = 255u, .r = 255u, .a = 255u};
+  if (nearest < 6.6666665f && color.a == 0u) {
+    const double weight = 1.0 - static_cast<double>(nearest) * 0.15;
+    const auto fade = [weight](std::uint8_t value) {
+      const float fixed = static_cast<float>(
+          static_cast<double>(value) + (255.0 - value) * weight + 512.0);
+      return static_cast<std::uint8_t>((std::bit_cast<std::uint32_t>(fixed) >> 14u) & 0xffu);
+    };
+    color.b = fade(color.b); color.g = fade(color.g); color.r = fade(color.r);
+    color.a = fade(0u);
+  }
+  return color;
 }
 
 data::wmo::WmoVertexColor PrepareWmoPortalVertexColor(

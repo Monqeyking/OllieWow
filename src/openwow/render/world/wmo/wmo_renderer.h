@@ -137,6 +137,7 @@ struct WmoGroupGpu {
   float bounds_min[3]{};
   float bounds_max[3]{};
   uint32_t flags{0};
+  bool has_vertex_colors{false};
   bool composite_vertices{false};
   bool merged_resident{false};
   bool collision_valid{false};
@@ -155,9 +156,37 @@ enum class WmoLightingMode : std::uint8_t {
   Interior,
 };
 
-[[nodiscard]] WmoLightingMode ResolveRetailWmoLightingMode(
-    std::uint32_t group_flags, WmoBatchMesh::Region region,
-    std::uint32_t material_flags, bool unified_render_path) noexcept;
+// Pure production kernel shared directly with the standalone regression.
+[[nodiscard]] inline WmoLightingMode ResolveRetailWmoLightingMode(
+    const std::uint32_t group_flags, const WmoBatchMesh::Region region,
+    const std::uint32_t material_flags,
+    const bool unified_render_path) noexcept {
+  // Classic drawer selection depends on MOGP, not the MOHD unified flag.
+  // Retain the parameter for existing callers; both root paths use this law.
+  (void)unified_render_path;
+  const bool unlit = (material_flags & data::wmo::kMatUnlit) != 0u;
+  const bool window = (material_flags & data::wmo::kMatWindow) != 0u;
+  const bool group_exterior =
+      (group_flags &
+       (data::wmo::kMogpExterior | data::wmo::kMogpExteriorLit)) != 0u;
+  // Benilla models/wmo/group.rs:679-681,742-754: exterior honors UNLIT,
+  // ignores WINDOW, and does not use interior batch-section lighting.
+  if (group_exterior) {
+    return unlit ? WmoLightingMode::Unlit : WmoLightingMode::Outdoor;
+  }
+  if (region == WmoBatchMesh::Region::Interior) {
+    return WmoLightingMode::Unlit;
+  }
+  // Interior TRANS lit lane and EXT honor WINDOW, not material UNLIT.
+  return window ? WmoLightingMode::Window : WmoLightingMode::Outdoor;
+}
+
+// Benilla wow_model.wgsl:896-927: only an interior drawer has a TRANS lerp.
+[[nodiscard]] constexpr bool UsesClassicWmoTransitionBlend(
+    std::uint32_t group_flags, WmoBatchMesh::Region region) noexcept {
+  return region == WmoBatchMesh::Region::Transition &&
+      (group_flags & (data::wmo::kMogpExterior | data::wmo::kMogpExteriorLit)) == 0u;
+}
 
 enum WmoSubmitSkipReason : std::uint32_t {
   kWmoSubmitSkipNone = 0u,

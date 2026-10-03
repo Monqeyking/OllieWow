@@ -14,6 +14,7 @@
 #include "openwow/render/m2/m2_transparent_draw_order.h"
 #include "openwow/render/effects/spell_visuals/spell_visual_effects.h"
 #include "openwow/game/object_presentation_snapshot.h"
+#include "openwow/game/missile_release_clock.h"
 
 namespace openwow::data::dbc {
 class DbcLoader;
@@ -244,7 +245,9 @@ class SpellVisualRenderer {
       std::uint32_t deferred_impact_raw_flags = 0,
       std::uint64_t deferred_impact_owner_guid = 0,
       game::ObjectHandle caster_handle = {},
-      game::ObjectHandle target_handle = {});
+      game::ObjectHandle target_handle = {},
+      std::optional<game::MissileReleaseClock> release_clock = std::nullopt,
+      std::optional<std::array<float, 3>> target_fallback_offset = std::nullopt);
 
   void DestroyEffect(std::uint32_t effect_id);
 
@@ -280,6 +283,8 @@ class SpellVisualRenderer {
     float elapsed = 0.0f;
     float distance_traveled = 0.0f;
     float initial_distance = 0.0f;
+    std::optional<game::MissileReleaseClock> release_clock;
+    std::uint32_t last_update_tick = 0;
     float follow_ground_height = 0.25f;
     float follow_ground_drop_speed = 0.01f;
     float follow_ground_approach = 0.0f;
@@ -492,6 +497,7 @@ class SpellVisualRenderer {
   std::uint32_t next_effect_id_ = 1;
 
   std::vector<MissileFlight> missile_flights_;
+  std::vector<std::string> consumed_missile_keys_;
 
   std::vector<std::uint32_t> render_batch_ids_scratch_;
   std::vector<std::uint32_t> render_batch_draw_ordinals_scratch_;

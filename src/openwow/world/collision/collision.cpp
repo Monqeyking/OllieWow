@@ -625,12 +625,9 @@ std::optional<RayHit> CollisionManager::RaycastWmoFacets(
   const float ex = ox + ux * max_dist;
   const float ey = oy + uy * max_dist;
   const float ez = oz + uz * max_dist;
-  const std::array<float, 6> bounds{
-      std::min(ox, ex), std::min(oy, ey), std::min(oz, ez),
-      std::max(ox, ex), std::max(oy, ey), std::max(oz, ez)};
 
   std::optional<RayHit> best;
-  wmo_facet_gather_(bounds, [&](const CollisionFacetView& facet) {
+  const CollisionFacetVisitor visit = [&](const CollisionFacetView& facet) {
     float t = 0.0f;
     float normal[3];
     if (!RayIntersectsTriangle(ox, oy, oz, ux, uy, uz,
@@ -651,7 +648,49 @@ std::optional<RayHit> CollisionManager::RaycastWmoFacets(
     hit.normal[1] = normal[1];
     hit.normal[2] = normal[2];
     best = hit;
-  });
+  };
+
+  // De gather levert alle facetten in een kubus. De kubus om een lange, schuine
+  // straal (bijv. de muis-pick van 100 yard) is enorm, terwijl de straal zelf
+  // maar een dunne lijn daarin is: in Stormwind zijn dat tienduizenden facetten
+  // per frame, elk met drie matrixtransformaties, voor een pick die er maar een
+  // handvol raakt. Een lange, schuine straal gaan we daarom van dichtbij naar ver
+  // in korte stukken af en stoppen zodra er geen nabijere treffer meer kan zijn.
+  // Dat geeft hetzelfde resultaat: elke driehoek die de straal op afstand t
+  // snijdt, ligt in de kubus van het stuk waar t in valt.
+  // Verticale en korte stralen (grondproeven, cameracontrole) houden hun ene
+  // kubus: die is al dun.
+  const float ext_x = std::fabs(ex - ox);
+  const float ext_y = std::fabs(ey - oy);
+  const float ext_z = std::fabs(ez - oz);
+  const float ext_max = std::max({ext_x, ext_y, ext_z});
+  const float ext_mid =
+      ext_x + ext_y + ext_z - ext_max - std::min({ext_x, ext_y, ext_z});
+  constexpr float kObliqueExtent = 12.0f;
+  constexpr float kSegmentLength = 12.0f;
+  constexpr float kBoundsPad = 0.02f;
+
+  if (ext_mid <= kObliqueExtent) {
+    const std::array<float, 6> bounds{
+        std::min(ox, ex), std::min(oy, ey), std::min(oz, ez),
+        std::max(ox, ex), std::max(oy, ey), std::max(oz, ez)};
+    wmo_facet_gather_(bounds, visit);
+    return best;
+  }
+
+  for (float t0 = 0.0f; t0 < max_dist; t0 += kSegmentLength) {
+    if (best && best->distance <= t0) {
+      break;
+    }
+    const float t1 = std::min(t0 + kSegmentLength, max_dist);
+    const float ax = ox + ux * t0, ay = oy + uy * t0, az = oz + uz * t0;
+    const float bx = ox + ux * t1, by = oy + uy * t1, bz = oz + uz * t1;
+    const std::array<float, 6> bounds{
+        std::min(ax, bx) - kBoundsPad, std::min(ay, by) - kBoundsPad,
+        std::min(az, bz) - kBoundsPad, std::max(ax, bx) + kBoundsPad,
+        std::max(ay, by) + kBoundsPad, std::max(az, bz) + kBoundsPad};
+    wmo_facet_gather_(bounds, visit);
+  }
   return best;
 }
 

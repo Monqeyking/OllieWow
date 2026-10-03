@@ -92,7 +92,7 @@ constexpr int kDefaultCVarConsoleCategory = CVarSystem::kFallbackConsoleCategory
 // Classic Options.lua uses Vanilla-era names for audio and environment
 // settings. Resolve them centrally so reads, writes, defaults and renderer
 // consumers all hit the same registered CVar.
-constexpr std::array<std::pair<std::string_view, std::string_view>, 8>
+constexpr std::array<std::pair<std::string_view, std::string_view>, 12>
     kLegacyCVarAliases = {{
         {"MasterVolume", "Sound_MasterVolume"},
         {"SoundVolume", "Sound_SFXVolume"},
@@ -102,6 +102,10 @@ constexpr std::array<std::pair<std::string_view, std::string_view>, 8>
         {"EnableMusic", "Sound_EnableMusic"},
         {"EnableAmbience", "Sound_EnableAmbience"},
         {"smallCull", "environmentDetail"},
+        {"EmoteSounds", "Sound_EnableEmoteSounds"},
+        {"EnableErrorSpeech", "Sound_EnableErrorSpeech"},
+        {"SoundListenerAtCharacter", "Sound_ListenerAtCharacter"},
+        {"SoundZoneMusicNoDelay", "Sound_ZoneMusicNoDelay"},
     }};
 
 std::string_view CanonicalCVarName(const std::string_view name) {
@@ -2095,7 +2099,9 @@ void CVarSystem::RegisterDefaults() {
   // Keep the names available to the Vanilla UI while their renderer wiring is
   // completed separately.
   RegisterCVar("anisotropic", "1", F::Archive, "Anisotropic filtering level");
+  RegisterCVar("trilinear", "1", F::Archive, "Trilinear texture filtering");
   RegisterCVar("pixelShaders", "1", F::Archive, "Pixel shaders enabled");
+  RegisterCVar("M2UsePixelShaders", "1", F::Archive, "Model pixel shaders (phong shading) enabled");
   RegisterCVar("M2UseShaders", "1", F::Archive, "Vertex animation shaders enabled");
   RegisterCVar("UIFaster", "3", F::Archive, "UI acceleration option");
   RegisterCVar("textureCacheSize", "32", F::Archive, "Texture cache size in bytes");
@@ -2328,6 +2334,9 @@ void CVarSystem::RegisterDefaults() {
                            0.0f, 0.0f, 4);
       };
   register_unit_name_cvar("UnitNameOwn", "0", 0x0001);
+  // Vanilla 1.12 "show player names" (benilla cvars.rs: default 1). Onze client
+  // splitst dit in vijandelijke (0x10) en vriendelijke (0x80) spelernamen.
+  register_unit_name_cvar("UnitNamePlayer", "1", 0x0090);
   register_unit_name_cvar("UnitNameNPC", "0", 0x0002);
   register_unit_name_cvar("UnitNamePlayerGuild", "1", 0x0004);
   register_unit_name_cvar("UnitNamePlayerPVPTitle", "1", 0x0008);

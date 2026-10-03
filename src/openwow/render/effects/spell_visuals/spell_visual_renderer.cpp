@@ -3,6 +3,7 @@
 
 #include "openwow/data/formats/dbc/dbc_loader.h"
 #include "openwow/core/client_init.h"
+#include "openwow/runtime/time/game_clock.h"
 #include "openwow/foundation/hashing/retail_adler_seed.h"
 #include "openwow/game/spell_missile.h"
 #include "openwow/game/spell_missile_visual_create.h"
@@ -546,8 +547,38 @@ std::uint32_t SpellVisualRenderer::CreateMissileEffect(
     std::uint32_t deferred_impact_raw_flags,
     std::uint64_t deferred_impact_owner_guid,
     game::ObjectHandle caster_handle,
-    game::ObjectHandle target_handle) {
+    game::ObjectHandle target_handle,
+    std::optional<game::MissileReleaseClock> release_clock,
+    std::optional<std::array<float, 3>> target_fallback_offset) {
   if (!initialized_ || !start_pos || !end_pos) return 0;
+  // Aim is sampled again at consume, including the expired-on-release path.
+  MissileFlight aim;
+  aim.target_handle = target_handle;
+  aim.target_guid = target_guid;
+  aim.target_attachment_id = missile.target_attachment_id;
+  aim.target_attachment_uses_raw_index = missile.target_attachment_uses_raw_index;
+  aim.target_attachment_offset = missile.target_attachment_offset;
+  std::array<float, 3> live_end{end_pos[0], end_pos[1], end_pos[2]};
+  if (const auto* target = FindObject(target_handle); target != nullptr)
+    aim.target_fallback_offset = {end_pos[0] - target->x,
+                                 end_pos[1] - target->y, end_pos[2] - target->z};
+  if (target_fallback_offset.has_value()) aim.target_fallback_offset = *target_fallback_offset;
+  (void)ResolveMissileTargetPosition(aim, live_end.data());
+  end_pos = live_end.data();
+  const auto consume_tick = core::GameClock::GetTickCount32();
+  const bool expired_on_consume = release_clock.has_value() && release_clock->Expired(consume_tick);
+  if (expired_on_consume && impact_result != kMissileImpactReflect && speed > 0.0f) {
+    // The hand-ride consumed the whole GO travel window, so the fixed-GO clock is
+    // already past by the time the projectile leaves. Dropping the flight there
+    // makes a melee-range bolt vanish entirely; the projectile is always visible
+    // in the reference, just short. Re-anchor the clock at the release point so
+    // it still covers the real release-to-target distance at the spell's speed.
+    release_clock = game::MissileReleaseClock::FromGo(
+        consume_tick, {start_pos[0], start_pos[1], start_pos[2]},
+        {end_pos[0], end_pos[1], end_pos[2]}, speed);
+  }
+  // Expired reflection still needs the normal outbound-arrival -> return-leg
+  // transition. Keep its original speed and route it through an invisible flight.
 
   const bool is_local_player_caster =
       objects_ != nullptr && caster_handle.guid == objects_->local_player.guid;
@@ -589,7 +620,7 @@ std::uint32_t SpellVisualRenderer::CreateMissileEffect(
   kit_model.scale = missile.model_scale;
   kit_model.sound_kit_id = missile.sound_kit_id;
 
-  if (kit_model.model_path.empty()) {
+  if (kit_model.model_path.empty() && !release_clock.has_value()) {
     if (impact_kit_id != 0) {
       if (deferred_impact_policy ==
           game::SpellVisualDeferredImpactPolicy::kDestLocArea) {
@@ -611,7 +642,7 @@ std::uint32_t SpellVisualRenderer::CreateMissileEffect(
   const float missile_speed = speed;
   std::uint32_t first_effect_id = 0u;
 
-  for (std::uint32_t salvo_index = 0u; salvo_index < salvo_count;
+  for (std::uint32_t salvo_index = 0u; !expired_on_consume && salvo_index < salvo_count;
        ++salvo_index) {
     auto instance_result = CreateModelInstance(kit_model, start_pos);
     if (instance_result.status != m2::M2ResultStatus::kReady ||
@@ -638,6 +669,8 @@ std::uint32_t SpellVisualRenderer::CreateMissileEffect(
         deferred_impact_policy, deferred_impact_raw_flags,
         deferred_impact_owner_guid, caster_handle, target_handle);
     auto& flight = missile_flights_[flight_index];
+    flight.release_clock = release_clock;
+    flight.last_update_tick = consume_tick;
     flight.model_scale = kit_model.scale;
     auto& random = core::GetClientStartupAdlerSeedState();
     flight.random_motion = {
@@ -763,6 +796,8 @@ std::uint32_t SpellVisualRenderer::CreateMissileEffect(
       };
     }
 
+    if (target_fallback_offset.has_value()) flight.target_fallback_offset = *target_fallback_offset;
+
     SpellVisualModelInstance inst;
     inst.effect_id = effect_id;
     inst.model_id = instance_result.model_id;
@@ -814,6 +849,23 @@ std::uint32_t SpellVisualRenderer::CreateMissileEffect(
     }
   }
 
+  if (first_effect_id == 0u && release_clock.has_value()) {
+    // Readiness/resource failure cannot move a committed GO impact earlier.
+    // An invisible flight still owns the same homing deadline and handoff.
+    first_effect_id = NextEffectId();
+    const auto index = RegisterMissileFlight(first_effect_id, 0u,
+        missile_caster_guid, missile_cast_count, caster_guid, target_guid,
+        start_pos, end_pos, speed, spell_visual_id, spell_id, 0u, 0u, 1u,
+        impact_kit_id, impact_result, reflect_result, deferred_impact_policy,
+        deferred_impact_raw_flags, deferred_impact_owner_guid, caster_handle, target_handle);
+    auto& flight = missile_flights_[index];
+    flight.release_clock = release_clock;
+    flight.last_update_tick = consume_tick;
+    flight.target_attachment_id = missile.target_attachment_id;
+    flight.target_attachment_uses_raw_index = missile.target_attachment_uses_raw_index;
+    flight.target_attachment_offset = missile.target_attachment_offset;
+    flight.target_fallback_offset = aim.target_fallback_offset;
+  }
   if (first_effect_id == 0u && impact_kit_id != 0u) {
     if (deferred_impact_policy ==
         game::SpellVisualDeferredImpactPolicy::kDestLocArea) {
@@ -930,7 +982,13 @@ void SpellVisualRenderer::UpdateMissileFlights(float dt) {
     (void)ResolveMissileTargetPosition(flight, flight.end_position);
 
     const bool first_update = !flight.has_advanced;
-    const float frame_seconds = first_update ? 0.0f : std::max(dt, 0.0f);
+    const auto now_tick = core::GameClock::GetTickCount32();
+    const float frame_seconds = flight.release_clock.has_value()
+        ? static_cast<float>(now_tick - flight.last_update_tick) * 0.001f
+        : (first_update ? 0.0f : std::max(dt, 0.0f));
+    const float time_remaining = flight.release_clock.has_value()
+        ? flight.release_clock->RemainingSeconds(flight.last_update_tick) : 0.0f;
+    flight.last_update_tick = now_tick;
     flight.has_advanced = true;
     flight.elapsed += frame_seconds;
     const float dx = flight.end_position[0] - flight.current_position[0];
@@ -977,12 +1035,17 @@ void SpellVisualRenderer::UpdateMissileFlights(float dt) {
                                    flight.timed_natural_duration,
                                0.0f, 1.0f);
     } else {
-      travel = std::max(0.0f, flight.speed * frame_seconds);
-      arrived = !first_update &&
-                remaining <= std::max(travel, kMin3DDistance);
-      fraction =
-          arrived ? 1.0f
-                  : (remaining > kMin3DDistance ? travel / remaining : 0.0f);
+      if (flight.release_clock.has_value()) {
+        arrived = flight.release_clock->Expired(now_tick);
+        fraction = arrived ? 1.0f
+            : game::MissileHomingFraction(frame_seconds, time_remaining);
+        travel = remaining * fraction;
+      } else {
+        travel = std::max(0.0f, flight.speed * frame_seconds);
+        arrived = !first_update && remaining <= std::max(travel, kMin3DDistance);
+        fraction = arrived ? 1.0f
+            : (remaining > kMin3DDistance ? travel / remaining : 0.0f);
+      }
       flight.current_position[0] += dx * fraction;
       flight.current_position[1] += dy * fraction;
       flight.current_position[2] += dz * fraction;
@@ -1197,6 +1260,8 @@ void SpellVisualRenderer::UpdateMissileFlights(float dt) {
                       return_dz * return_dz);
         flight.distance_traveled = 0.0f;
         flight.elapsed = 0.0f;
+        // Reflection starts a separate return leg; the outbound GO deadline is consumed.
+        flight.release_clock.reset();
         flight.speed = flight.base_speed;
         flight.uses_timed_trajectory = false;
         flight.timed_initial_velocity = {};
@@ -1236,7 +1301,7 @@ void SpellVisualRenderer::UpdateMissileFlights(float dt) {
       DestroyM2Instance(flight.instance_id);
       model_instances_.erase(instance_id);
 
-      if (flight.impact_kit_id != 0) {
+      if (flight.impact_kit_id != 0 && flight.salvo_index == 0u) {
         if (flight.deferred_impact_policy ==
             game::SpellVisualDeferredImpactPolicy::kDestLocArea) {
           CreateDestLocAreaImpact(
@@ -1387,6 +1452,39 @@ void SpellVisualRenderer::ConsumePresentationEvent(
   SpawnPresentationModels(event, effect_id, duration);
 
   if (event.missile.has_value()) {
+    // Presentation replay must not dispatch a second flight/impact. Keep a
+    // bounded receipt window, scoped to the owner generation and GO identity.
+    if (event.missile_has_deadline) {
+      const auto key = std::to_string(event.owner.guid.GetRawValue()) + ":" +
+          std::to_string(event.owner.generation) + ":" + std::to_string(event.spell_id) + ":" +
+          std::to_string(event.missile_cast_count) + ":" + std::to_string(event.missile_go_tick) + ":" +
+          std::to_string(event.missile_target_guid) + ":" +
+          std::to_string(event.missile_target_position[0]) + ":" +
+          std::to_string(event.missile_target_position[1]) + ":" +
+          std::to_string(event.missile_target_position[2]);
+      if (std::find(consumed_missile_keys_.begin(), consumed_missile_keys_.end(), key) !=
+          consumed_missile_keys_.end()) return;
+      if (consumed_missile_keys_.size() >= 128u) consumed_missile_keys_.erase(consumed_missile_keys_.begin());
+      consumed_missile_keys_.push_back(key);
+    }
+    static unsigned consume_diagnostics = 0;
+    if (consume_diagnostics++ < 64u) {
+      const auto instance = owner_m2_instance_resolver_ ? owner_m2_instance_resolver_(event.owner) : 0u;
+      const auto root = m2_system_ != nullptr ? m2_system_->QueryModelWorldTransformMatrix(instance)
+                                            : m2::M2ModelWorldTransformMatrixQuery{};
+      const auto ready = m2_system_ != nullptr ? m2_system_->QueryInstanceReadiness(instance)
+                                             : m2::M2InstanceReadinessQuery{};
+      diagnostics::Log(diagnostics::LogLevel::kInfo,
+          "MissileConsume: caster=" + std::to_string(event.owner.guid.GetRawValue()) +
+          " target=" + std::to_string(event.missile_target_guid) + " spell=" + std::to_string(event.spell_id) +
+          " go=" + std::to_string(event.missile_go_tick) + " queue=" + std::to_string(event.missile_queue_tick) +
+          " release=" + std::to_string(event.missile_release_tick) + " consume=" + std::to_string(core::GameClock::GetTickCount32()) +
+          " deadline=" + std::to_string(event.missile_deadline_tick) + " instance=" + std::to_string(instance) +
+          " source=" + std::to_string(event.missile_source_position[0]) + "," + std::to_string(event.missile_source_position[1]) + "," + std::to_string(event.missile_source_position[2]) +
+          " unit=" + std::to_string(event.owner_position[0]) + "," + std::to_string(event.owner_position[1]) + "," + std::to_string(event.owner_position[2]) +
+          " root=" + std::to_string(root.matrix[12]) + "," + std::to_string(root.matrix[13]) + "," + std::to_string(root.matrix[14]) +
+          " root_ready=" + std::to_string(static_cast<unsigned>(root.status)) + " ready=" + std::to_string(static_cast<unsigned>(ready.status)));
+    }
     const auto caster_handle =
         event.owner.guid.IsEmpty()
             ? ResolveObjectHandle(event.missile_caster_guid)
@@ -1416,7 +1514,14 @@ void SpellVisualRenderer::ConsumePresentationEvent(
                               event.deferred_impact_raw_flags,
                               event.deferred_impact_owner_guid,
                               caster_handle,
-                              ResolveObjectHandle(event.missile_target_guid));
+                              event.missile_has_deadline ? event.missile_target_handle
+                                  : ResolveObjectHandle(event.missile_target_guid),
+                              event.missile_has_deadline
+                                  ? std::optional<game::MissileReleaseClock>{game::MissileReleaseClock{event.missile_go_tick, event.missile_deadline_tick}}
+                                  : std::nullopt,
+                              event.missile_has_deadline
+                                  ? std::optional<std::array<float, 3>>{event.missile_target_fallback_offset}
+                                  : std::nullopt);
   }
   StartEffectSound(effect_id, event);
   if (event.camera_shake_id != 0u && camera_shake_sink_) {
@@ -1438,6 +1543,10 @@ void SpellVisualRenderer::ConsumePresentationEvent(
 void SpellVisualRenderer::DestroyEffectsForObject(
     const game::ObjectHandle owner) {
   std::vector<std::uint32_t> to_remove;
+  for (const auto& flight : missile_flights_) {
+    if (flight.active && (flight.caster_handle == owner || flight.target_handle == owner))
+      to_remove.push_back(flight.effect_id);
+  }
   for (const auto& [_, inst] : model_instances_) {
     if (inst.parent_handle == owner) {
       to_remove.push_back(inst.effect_id);
@@ -1665,6 +1774,7 @@ m2::M2RenderFrameResult SpellVisualRenderer::Render(
 }
 
 void SpellVisualRenderer::Clear() {
+  consumed_missile_keys_.clear();
   while (!effect_sounds_.empty()) {
     StopEffectSound(effect_sounds_.begin()->first);
   }

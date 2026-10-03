@@ -309,48 +309,37 @@ ParseSpellFailedOther(const std::uint8_t* data, std::size_t len) {
 
 std::optional<SpellDelayedData>
 ParseSpellDelayed(const std::uint8_t* data, std::size_t len) {
-  if (!data || len == 0) return std::nullopt;
+  // Classic SMSG_SPELL_DELAYED: raw u64 caster + u32 pushback milliseconds.
+  if (!data || len != 12) return std::nullopt;
 
   SpellDelayedData result;
-  std::size_t off = 0;
-
-  off = ReadPackedGuid(data, len, off, result.caster_guid);
+  std::size_t off = ReadFullGuid(data, len, 0, result.caster_guid);
   if (off == 0) return std::nullopt;
   off = ReadU32(data, len, off, result.delay_time);
-  if (off == 0) return std::nullopt;
-
+  if (off != len) return std::nullopt;
   return result;
 }
 
 std::optional<ChannelStartData>
 ParseChannelStart(const std::uint8_t* data, std::size_t len) {
-  if (!data || len == 0) return std::nullopt;
+  // Classic MSG_CHANNEL_START: u32 spell + u32 duration, no wire GUID.
+  if (!data || len != 8) return std::nullopt;
 
   ChannelStartData result;
-  std::size_t off = 0;
-
-  off = ReadPackedGuid(data, len, off, result.caster_guid);
-  if (off == 0) return std::nullopt;
-  off = ReadU32(data, len, off, result.spell_id);
+  std::size_t off = ReadU32(data, len, 0, result.spell_id);
   if (off == 0) return std::nullopt;
   off = ReadU32(data, len, off, result.duration);
-  if (off == 0) return std::nullopt;
-
+  if (off != len) return std::nullopt;
   return result;
 }
 
 std::optional<ChannelUpdateData>
 ParseChannelUpdate(const std::uint8_t* data, std::size_t len) {
-  if (!data || len == 0) return std::nullopt;
+  // Classic MSG_CHANNEL_UPDATE: u32 remaining; zero closes the channel.
+  if (!data || len != 4) return std::nullopt;
 
   ChannelUpdateData result;
-  std::size_t off = 0;
-
-  off = ReadPackedGuid(data, len, off, result.caster_guid);
-  if (off == 0) return std::nullopt;
-  off = ReadU32(data, len, off, result.remaining);
-  if (off == 0) return std::nullopt;
-
+  if (ReadU32(data, len, 0, result.remaining) != len) return std::nullopt;
   return result;
 }
 

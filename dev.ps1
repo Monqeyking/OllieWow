@@ -148,6 +148,12 @@ try {
     }
   }
   $compile = @($cmds | Where-Object { $_ -match 'cl\.exe' -and $_ -match '\s-c\s' } | Sort-Object -Unique)
+  # Match the source-specific terrain /EHsc policy even while ninja's cached
+  # commands predate the CMake option (this fast path intentionally skips reconfigure).
+  $compile = @($compile | ForEach-Object {
+    if ($_ -match '(world_presentation_scene|terrain_renderer)\.cpp(\s|$)' -and
+        $_ -notmatch '\s/EHsc(\s|$)') { $_ + ' /EHsc' } else { $_ }
+  })
   if ($compileObjs.Count -gt 0 -and $compile.Count -eq 0) { throw "Geen compileercommando's gevonden." }
 
   $libs = New-Object System.Collections.Generic.HashSet[string]
