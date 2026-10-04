@@ -32,7 +32,7 @@ void main()
 
     if (u_wmoMaterialParams.w < 0.5) {
         float fogFactor = openwowLinearFogVisibility(u_wmoFogParams, v_viewDist);
-        color = mix(u_wmoFogColor.rgb, color, fogFactor);
+        color = mix(openwowFogRgb(u_wmoFogColor.rgb, u_wmoFogParams, v_viewDist), color, fogFactor);
     }
 
     gl_FragColor = vec4(color, alpha);

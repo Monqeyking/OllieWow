@@ -70,7 +70,7 @@ void main()
              specularScale * 4.0;
 
     float visibility = openwowLinearFogVisibility(u_liquidFogParams, v_viewDist);
-    color = mix(u_liquidFogColor.rgb, color, visibility);
+    color = mix(openwowFogRgb(u_liquidFogColor.rgb, u_liquidFogParams, v_viewDist), color, visibility);
     float alpha = base.a + fresnel * u_liquidMaterialParams(1).x;
     gl_FragColor = vec4(color, alpha);
 }

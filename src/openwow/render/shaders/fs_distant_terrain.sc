@@ -19,5 +19,5 @@ void main()
     }
 
     float fogVisibility = openwowLinearFogVisibility(u_distantTerrainFogParams, v_viewDepth);
-    gl_FragColor = vec4(mix(u_distantTerrainFogColor.rgb, vec3_splat(1.0), fogVisibility), 1.0);
+    gl_FragColor = vec4(mix(openwowFogRgb(u_distantTerrainFogColor.rgb, u_distantTerrainFogParams, v_viewDepth), vec3_splat(1.0), fogVisibility), 1.0);
 }

@@ -12,6 +12,6 @@ void main()
 
     vec3 color = v_primary.rgb * texture2D(s_liquid0, v_texcoord0).rgb;
     float visibility = openwowLinearFogVisibility(u_liquidFogParams, v_viewDist);
-    color = mix(u_liquidFogColor.rgb, color, visibility);
+    color = mix(openwowFogRgb(u_liquidFogColor.rgb, u_liquidFogParams, v_viewDist), color, visibility);
     gl_FragColor = vec4(color, 1.0);
 }

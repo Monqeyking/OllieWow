@@ -32,7 +32,7 @@ void main()
     if (u_particleFlags.y < 0.5)
     {
         float fogFactor = openwowLinearFogVisibility(u_fogParams, v_viewDist);
-        result.rgb = mix(u_fogColor.rgb, result.rgb, fogFactor);
+        result.rgb = mix(openwowFogRgb(u_fogColor.rgb, u_fogParams, v_viewDist), result.rgb, fogFactor);
     }
 
     gl_FragColor = result;

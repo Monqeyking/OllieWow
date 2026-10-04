@@ -41,6 +41,7 @@ bgfx renderer. The files that use them name the source in their header.
 | Source | Licence | Used for |
 | --- | --- | --- |
 | [Benilla](https://github.com/samwhosung/benilla) (`crates/benilla-formats/src/ground_effects.rs`) | MIT OR Apache-2.0 | Ground clutter placement algorithm (`src/openwow/render/world/doodads/ground_clutter.h`) |
+| Benilla Everwood graphics fork (`crates/benilla-assets/src/shaders/fog_hook.wgsl`, `LIGHTING.md`) | MIT OR Apache-2.0 | Modern fog model (technique, re-derived): exponential survival fitted to the 1.12 span, end fade, end-fog colour shift (`src/openwow/render/shaders/world_fog.sh`) |
 | Noggit Red (`ChunkAddDetailDoodads.cpp`) | Not yet confirmed | The 256-entry noise table in `ground_clutter.h`; it reproduces the original client's table |
 
 ## Trademarks

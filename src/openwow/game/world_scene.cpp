@@ -28,7 +28,10 @@
 #include "openwow/render/scene/blob_shadow.h"
 #include "openwow/render/scene/shadow_presentation_policy.h"
 #include "openwow/render/scene/m2_projected_texture_decal.h"
+#include "openwow/render/api/packed_color.h"
+#include "openwow/render/world/environment/modern_fog_uniforms.h"
 #include "openwow/ui/game/cvar_system.h"
+#include "openwow/world/environment/sky.h"
 #include "openwow/render/scene/chat_bubble.h"
 #include "openwow/render/effects/projectiles/missile_trajectory_renderer.h"
 #include "openwow/render/scene/nameplate_renderer.h"
@@ -66,6 +69,33 @@
 namespace openwow::game {
 
 namespace {
+
+// Moderne fog (cvar fogModel): zet de globale fog-uniforms voor dit frame. Het scene-fogeinde
+// markeert de spans die de nieuwe wet volgen; een interieur-WMO-paar blijft classic. De eindkleur
+// is Benilla's afgeleide band: de fogkleur voor 25 % richting de laagste skyring (SkySmog).
+void ApplyModernFogUniforms(const world::WorldPresentationSnapshot &snapshot) {
+  const render::ModernFogUniformHandles &handles = render::ModernFogUniforms();
+  if (!bgfx::isValid(handles.modern) || !bgfx::isValid(handles.end_color)) {
+    return;
+  }
+  const auto &environment = snapshot.environment;
+  const auto &cvars = ui::game::CVarSystem::Instance();
+  const bool modern = cvars.Exists("fogModel") && cvars.GetCVarBool("fogModel") &&
+                      !environment.indoors && environment.fog_end > 0.0f;
+
+  const float modern_params[4] = {modern ? environment.fog_end : 0.0f, 0.0f, 0.0f, 0.0f};
+  const auto smog = render::PackedArgbToUnitRgb(
+      snapshot.sky.colors[static_cast<std::size_t>(world::SkyColorSlot::kSkySmog)]);
+  constexpr float kEndFogLean = 0.25f;
+  const float end_color[4] = {
+      environment.fog_color[0] + (smog[0] - environment.fog_color[0]) * kEndFogLean,
+      environment.fog_color[1] + (smog[1] - environment.fog_color[1]) * kEndFogLean,
+      environment.fog_color[2] + (smog[2] - environment.fog_color[2]) * kEndFogLean,
+      environment.fog_end,
+  };
+  bgfx::setUniform(handles.modern, modern_params);
+  bgfx::setUniform(handles.end_color, end_color);
+}
 
 constexpr std::size_t kMaxQueuedSpellVisualM2Events = 4096u;
 constexpr std::size_t kMaxQueuedSpellVisualImpacts = 4096u;
@@ -1207,6 +1237,7 @@ void WorldScene::PrepareFrame(const render::api::RendererContext* renderer_conte
   presentation_snapshot_ = world_map_.PublishPresentationSnapshot(
       presentation_camera, render_camera.far_clip);
   presentation_snapshot_.shadows = shadow_settings_;
+  ApplyModernFogUniforms(presentation_snapshot_);
   ConsumeWorldPresentationCommands();
 
   const float far_clip_squared =

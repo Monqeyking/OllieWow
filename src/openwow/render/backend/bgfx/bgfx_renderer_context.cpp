@@ -11,6 +11,7 @@
 #include "openwow/render/platform/renderer_backend_selection.h"
 #include "openwow/render/resources/readback/pixel_readback.h"
 #include "openwow/render/ui/ui_shaders.h"
+#include "openwow/render/world/environment/modern_fog_uniforms.h"
 #include "openwow/foundation/diagnostics/logging.h"
 #include "openwow/runtime/scheduling/frame_job_system.h"
 
@@ -391,6 +392,7 @@ class BgfxRendererContext final : public api::RendererContext {
       s_renderer_context_active.store(false, std::memory_order_release);
       openwow::render::ui::InvalidateUiProgramCache();
       resources_.BeginDeviceRestart();
+      openwow::render::ResetModernFogUniforms();
       bgfx::shutdown();
       initialized_ = false;
       frame_active_ = false;
@@ -495,6 +497,8 @@ class BgfxRendererContext final : public api::RendererContext {
     s_renderer_device_restarting.store(false, std::memory_order_release);
     active_backend_ = FromBgfxRendererType(bgfx::getRendererType());
     capabilities_ = ReadRendererCapabilities(active_backend_);
+    // Vóór alle shaderprogramma's: bgfx koppelt user-uniforms alleen aan later gemaakte shaders.
+    openwow::render::CreateModernFogUniforms();
 
     desired_debug_ = {.diagnostics = create_info.debug};
     applied_debug_ = {};
@@ -525,6 +529,7 @@ class BgfxRendererContext final : public api::RendererContext {
       resources_.BeginDeviceRestart();
       resources_.DestroyAll();
       white_texture_ = {};
+      openwow::render::ResetModernFogUniforms();
       bgfx::shutdown();
     }
 #if defined(__APPLE__)

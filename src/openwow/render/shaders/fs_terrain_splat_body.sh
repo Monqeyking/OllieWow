@@ -80,5 +80,5 @@ void main()
                   * shadowModulate;
 
     float fogFactor = openwowLinearFogVisibility(u_terrainFogParams, v_viewDist);
-    gl_FragColor = vec4(mix(u_terrainFogColor.rgb, litColor, fogFactor), 1.0);
+    gl_FragColor = vec4(mix(openwowFogRgb(u_terrainFogColor.rgb, u_terrainFogParams, v_viewDist), litColor, fogFactor), 1.0);
 }

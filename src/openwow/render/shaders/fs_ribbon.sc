@@ -18,7 +18,7 @@ void main()
     if (color.a < 0.01) discard;
 
     float fogFactor = openwowLinearFogVisibility(u_fogParams, v_viewDist);
-    color.rgb = mix(u_fogColor.rgb, color.rgb, fogFactor);
+    color.rgb = mix(openwowFogRgb(u_fogColor.rgb, u_fogParams, v_viewDist), color.rgb, fogFactor);
 
     gl_FragColor = color;
 }
