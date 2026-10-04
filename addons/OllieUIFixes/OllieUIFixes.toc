@@ -1,0 +1,7 @@
+## Interface: 11200
+## Title: Ollie UI Fixes
+## Notes: Small layout fixes for the OllieCraft client.
+## Author: Ollie
+
+OllieUIFixes.lua
+OllieHDGraphics.lua
