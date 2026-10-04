@@ -287,4 +287,39 @@ BlpRgbaMipUpload BuildBlpRgbaMipUpload(
   return upload;
 }
 
+bool DropLeadingMips(BlpRgbaMipUpload& upload, const std::uint8_t count) {
+  if (count == 0u) {
+    return true;
+  }
+  if (upload.decoded_mip_count <= count || upload.mip_offsets.size() <= count ||
+      upload.mip_sizes.size() <= count) {
+    return false;
+  }
+  const std::uint32_t cut = upload.mip_offsets[count];
+  if (cut == 0u || cut >= upload.bytes.size()) {
+    return false;
+  }
+
+  upload.bytes.erase(upload.bytes.begin(),
+                     upload.bytes.begin() + static_cast<std::ptrdiff_t>(cut));
+  upload.mip_offsets.erase(upload.mip_offsets.begin(),
+                           upload.mip_offsets.begin() + count);
+  for (auto& offset : upload.mip_offsets) {
+    offset -= cut;
+  }
+  upload.mip_sizes.erase(upload.mip_sizes.begin(),
+                         upload.mip_sizes.begin() + count);
+
+  const auto dims =
+      data::BLPTextureLoader::GetMipDimensions(upload.width, upload.height, count);
+  upload.width = dims.first;
+  upload.height = dims.second;
+  upload.decoded_mip_count =
+      static_cast<std::uint8_t>(upload.decoded_mip_count - count);
+  if (upload.retail_mip_count > count) {
+    upload.retail_mip_count = static_cast<std::uint8_t>(upload.retail_mip_count - count);
+  }
+  return true;
+}
+
 }

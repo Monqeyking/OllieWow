@@ -15,12 +15,14 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <cstring>
 #include <exception>
 #include <iterator>
 #include <limits>
 #include <mutex>
 #include <optional>
+#include <string_view>
 #include <thread>
 #include <type_traits>
 #include <utility>
@@ -193,6 +195,23 @@ std::optional<RetailTgaLayout> InspectRetailTgaLayout(
           static_cast<std::uint8_t>(source_bytes[17u] & 0x0Fu),
       .is_cube = is_cube,
   };
+}
+
+// Vanilla "Texture Detail" (baseMip) geldt voor wereldtextures. UI-textures (Interface\) blijven
+// op volle resolutie, net als textures die te klein zijn om een halvering te verdragen.
+constexpr std::uint32_t kBaseMipMinExtent = 128u;
+
+bool IsInterfaceTexturePath(const std::string& path) {
+  constexpr std::string_view kPrefix = "interface";
+  if (path.size() <= kPrefix.size()) {
+    return false;
+  }
+  for (std::size_t i = 0; i < kPrefix.size(); ++i) {
+    if (std::tolower(static_cast<unsigned char>(path[i])) != kPrefix[i]) {
+      return false;
+    }
+  }
+  return path[kPrefix.size()] == '\\' || path[kPrefix.size()] == '/';
 }
 
 std::uint8_t CountMipLevels(std::uint32_t width,
@@ -509,8 +528,16 @@ PreparedTextureUpload DecodeTextureUpload(
         return prepared;
       }
 
-      prepared.width = blp.header.width;
-      prepared.height = blp.header.height;
+      if (const std::uint8_t base_mip =
+              WorldTextureBaseMip().load(std::memory_order_relaxed);
+          base_mip > 0u &&
+          std::min(blp.header.width, blp.header.height) >= kBaseMipMinExtent &&
+          !IsInterfaceTexturePath(path)) {
+        (void)DropLeadingMips(mip_upload, base_mip);
+      }
+
+      prepared.width = mip_upload.width;
+      prepared.height = mip_upload.height;
       prepared.complete_mip_chain = mip_upload.complete_mip_chain;
       const std::uint64_t upload_size = prepared.complete_mip_chain
                                             ? mip_upload.bytes.size()

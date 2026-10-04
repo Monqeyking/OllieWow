@@ -116,6 +116,8 @@
 #include "openwow/render/effects/spell_visuals/spell_visual_renderer.h"
 #include "openwow/render/m2/m2_resource_streamer.h"
 #include "openwow/render/m2/m2_system.h"
+#include "openwow/render/resources/textures/texture_mip_upload.h"
+#include "openwow/render/resources/textures/world_sampler_quality.h"
 #include "openwow/render/m2/m2_transparent_draw_order.h"
 #include "openwow/render/resources/textures/texture_manager.h"
 #include "openwow/render/scene/chat_bubble.h"
@@ -345,6 +347,21 @@ float ReadWeatherParticleDensity() {
   const auto weather_detail =
       static_cast<std::size_t>(std::clamp(cvars.GetCVarInt("weatherDensity"), 0, 3));
   return kRetailWeatherDensityScale[weather_detail];
+}
+
+// Vanilla-videoopties die al wel als CVar bestonden maar door geen renderer werden gelezen:
+// Anisotropic/Trilinear Filtering (wereldsamplers) en Texture Detail (baseMip: eerste mip die
+// de GPU krijgt; geldt voor textures die daarna worden geladen, dus ook tijdens het laden).
+void SyncWorldTextureQualityFromCVars() {
+  const auto &cvars = openwow::ui::game::CVarSystem::Instance();
+  auto &sampler_quality = render::WorldSamplerQuality();
+  sampler_quality.anisotropic.store(cvars.GetCVarInt("anisotropic") > 1,
+                                    std::memory_order_relaxed);
+  sampler_quality.trilinear.store(cvars.GetCVarBool("trilinear"),
+                                  std::memory_order_relaxed);
+  render::WorldTextureBaseMip().store(
+      static_cast<std::uint8_t>(std::clamp(cvars.GetCVarInt("baseMip"), 0, 1)),
+      std::memory_order_relaxed);
 }
 
 bool ReadUseWeatherShaders() {
@@ -2511,6 +2528,8 @@ bool GameLoop::Initialize(int screen_width, int screen_height) {
 void GameLoop::Tick(float dt) {
   if (!initialized_)
     return;
+
+  SyncWorldTextureQualityFromCVars();
 
   // Vast 8 per frame liet de wachtrij tijdens het laden vollopen (256/256) en
   // iconen pas laat verschijnen. Nu een tijdsbudget: ruim in het laadscherm,

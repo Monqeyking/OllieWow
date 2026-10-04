@@ -4,6 +4,7 @@
 
 #include <bgfx/bgfx.h>
 
+#include <atomic>
 #include <cstdint>
 #include <optional>
 #include <vector>
@@ -83,5 +84,17 @@ struct BlpRgbaMipUpload {
 
 BlpRgbaMipUpload BuildBlpRgbaMipUpload(const data::BLPTextureData& blp,
                                        BlockCompressionSupport gpu_support = {});
+
+// Vanilla "Texture Detail" (CVar `baseMip`): het eerste mip-niveau dat de GPU krijgt.
+// 0 = volledige resolutie, 1 = de bovenste mip overslaan (halve resolutie). Wordt elk
+// frame uit de CVar gezet; geldt voor textures die daarna worden geladen.
+[[nodiscard]] inline std::atomic<std::uint8_t>& WorldTextureBaseMip() noexcept {
+  static std::atomic<std::uint8_t> value{0};
+  return value;
+}
+
+// Laat de eerste `count` mips van een upload vallen, zodat het daaropvolgende niveau het
+// basisniveau wordt. Geeft false (en wijzigt niets) als er te weinig mips zijn.
+bool DropLeadingMips(BlpRgbaMipUpload& upload, std::uint8_t count);
 
 }
