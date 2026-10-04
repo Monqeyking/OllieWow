@@ -7,6 +7,10 @@
 
 namespace openwow::render {
 
+// Vanilla/Turtle heeft geen dynamische omgevingsshadow: terreinschaduw komt uit de ingebakken
+// MCSH (statisch in de wereld) en units krijgen een blob. De shadow map (extShadowQuality >= 3)
+// is WotLK-erfgoed en volgde de camera; daarom staat hij uit.
+inline constexpr bool kEnvironmentalShadowMapsEnabled = false;
 inline constexpr std::uint8_t kMinEnvironmentalShadowQuality = 3;
 
 inline constexpr std::uint16_t kEnvironmentalShadowMapLowRes = 1024;
@@ -29,7 +33,7 @@ ResolveShadowPresentationSettings(const int requested_quality, const bool map_sh
   const std::uint16_t resolution = quality >= 4u ? kEnvironmentalShadowMapHighRes
                                                  : kEnvironmentalShadowMapLowRes;
   return {
-      .enabled = map_shadows && projected_textures &&
+      .enabled = kEnvironmentalShadowMapsEnabled && map_shadows && projected_textures &&
                  quality >= kMinEnvironmentalShadowQuality,
       .quality = quality,
       .map_resolution = resolution,
@@ -41,7 +45,7 @@ ResolveShadowPresentationSettings(const int requested_quality, const bool map_sh
 static_assert(!ResolveShadowPresentationSettings(0, true, true).enabled);
 static_assert(!ResolveShadowPresentationSettings(1, true, true).enabled);
 static_assert(!ResolveShadowPresentationSettings(2, true, true).enabled);
-static_assert(ResolveShadowPresentationSettings(3, true, true).enabled);
+static_assert(!ResolveShadowPresentationSettings(3, true, true).enabled);
 static_assert(ResolveShadowPresentationSettings(3, true, true).map_resolution ==
               kEnvironmentalShadowMapLowRes);
 static_assert(ResolveShadowPresentationSettings(4, true, true).map_resolution ==
