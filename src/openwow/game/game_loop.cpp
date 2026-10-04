@@ -236,6 +236,18 @@ constexpr std::uint8_t kWorldParticleViewCount = 3;
 
 constexpr std::uint8_t kWorldPostProcessViewCount = 5;
 
+// Vanilla "nearclip": de originele client leest hem elk frame voor het cameravlak; bereik
+// 0.01..0.33 (pfUI's hdgraphic zet 0.06..0.30). Zonder cvar geldt de vaste waarde. De
+// cameracollision houdt zijn eigen afstand.
+float ResolveWorldCameraNearClip() {
+  const auto &cvars = openwow::ui::game::CVarSystem::Instance();
+  if (!cvars.Exists("nearclip")) {
+    return kWorldCameraNearClip;
+  }
+  const float near_clip = cvars.GetCVarFloat("nearclip");
+  return std::isfinite(near_clip) ? std::clamp(near_clip, 0.01f, 0.33f) : kWorldCameraNearClip;
+}
+
 float ResolveWorldCameraFarClip() {
   const auto &cvars = openwow::ui::game::CVarSystem::Instance();
   const float far_clip =
@@ -4602,7 +4614,7 @@ void GameLoop::RefreshLoadingWorldEntryState(float dt) {
   const auto &loading_camera = camera.ResolveFramePose({
       .aspect_ratio =
           static_cast<float>(screen_width_) / static_cast<float>(std::max(1, screen_height_)),
-      .near_plane = kWorldCameraNearClip,
+      .near_plane = ResolveWorldCameraNearClip(),
       .far_plane = ResolveWorldCameraFarClip(),
   });
   const auto &world_cvars = openwow::ui::game::CVarSystem::Instance();
@@ -5196,7 +5208,7 @@ void GameLoop::ResolveFrameCameraPose(const float dt) {
       static_cast<float>(screen_width_) / static_cast<float>(std::max(1, screen_height_));
   const world::CameraFrameContext frame{
       .aspect_ratio = aspect,
-      .near_plane = kWorldCameraNearClip,
+      .near_plane = ResolveWorldCameraNearClip(),
       .far_plane = ResolveWorldCameraFarClip(),
   };
 
