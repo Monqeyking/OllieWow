@@ -2106,6 +2106,10 @@ void CVarSystem::RegisterDefaults() {
   RegisterCVar("frillDensity", "16", F::Archive, "Detail doodad (ground clutter) density", 1.0f,
                256.0f);
   RegisterCVar("SmallCull", "0.04", F::Archive, "Small object cull size", 0.001f, 2.0f);
+  // OllieWoW-beeldcontrole in de eindcomposite (1/1/0 is het originele Vanilla-beeld).
+  RegisterCVar("gfxSaturation", "1.0", F::Archive, "Colour saturation (1 = original)", 0.0f, 2.0f);
+  RegisterCVar("gfxContrast", "1.0", F::Archive, "Contrast (1 = original)", 0.5f, 1.5f);
+  RegisterCVar("gfxDither", "0", F::Archive, "Dither strength against banding (0 = off)", 0.0f, 2.0f);
   RegisterCVar("pixelShaders", "1", F::Archive, "Pixel shaders enabled");
   RegisterCVar("M2UsePixelShaders", "1", F::Archive, "Model pixel shaders (phong shading) enabled");
   RegisterCVar("M2UseShaders", "1", F::Archive, "Vertex animation shaders enabled");

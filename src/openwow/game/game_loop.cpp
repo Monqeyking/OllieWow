@@ -332,6 +332,12 @@ bool PixelShadersEnabled() {
   return !cvars.Exists("pixelShaders") || cvars.GetCVarBool("pixelShaders");
 }
 
+// Leest een OllieWoW-grafiek-cvar; ontbreekt hij, dan geldt de neutrale waarde.
+float ReadGfxFloat(const openwow::ui::game::CVarSystem &cvars, const char *name, const float neutral,
+                   const float lo, const float hi) {
+  return cvars.Exists(name) ? std::clamp(cvars.GetCVarFloat(name), lo, hi) : neutral;
+}
+
 render::PostProcessSettings ReadPostProcessSettings() {
   const auto &cvars = openwow::ui::game::CVarSystem::Instance();
   const auto enabled = [&cvars](const char *name) {
@@ -345,6 +351,9 @@ render::PostProcessSettings ReadPostProcessSettings() {
       .rectangle_textures = enabled("ffxRectangle"),
       .multisample =
           static_cast<std::uint8_t>(std::clamp(cvars.GetCVarInt("gxMultisample"), 1, 16)),
+      .saturation = ReadGfxFloat(cvars, "gfxSaturation", 1.0f, 0.0f, 2.0f),
+      .contrast = ReadGfxFloat(cvars, "gfxContrast", 1.0f, 0.5f, 1.5f),
+      .dither = ReadGfxFloat(cvars, "gfxDither", 0.0f, 0.0f, 2.0f),
   };
 }
 

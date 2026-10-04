@@ -184,6 +184,9 @@ void PostProcess::Init(uint32_t width, uint32_t height, const PostProcessSetting
   death_requested_enabled_ = false;
   death_cvar_enabled_ = settings.enabled && settings.death_enabled;
   rectangle_textures_ = settings.rectangle_textures;
+  state_.saturation = settings.saturation;
+  state_.contrast = settings.contrast;
+  state_.dither = settings.dither;
   multisample_ = NormalizeMultisample(settings.multisample);
   state_.ffx_enabled = settings.enabled;
   state_.glow_enabled = settings.enabled && settings.glow_enabled;
@@ -307,6 +310,7 @@ void PostProcess::CreateResources() {
   u_compositeParams_ = bgfx::createUniform("u_compositeParams",  bgfx::UniformType::Vec4);
   u_colorGrade_      = bgfx::createUniform("u_colorGrade",       bgfx::UniformType::Vec4);
   u_sourceUvScale_   = bgfx::createUniform("u_sourceUvScale",    bgfx::UniformType::Vec4);
+  u_gradeExtra_      = bgfx::createUniform("u_gradeExtra",       bgfx::UniformType::Vec4);
 
   gpu_ready_ = false;
 
@@ -421,6 +425,7 @@ void PostProcess::DestroyResources() {
   destroyUni(u_compositeParams_);
   destroyUni(u_colorGrade_);
   destroyUni(u_sourceUvScale_);
+  destroyUni(u_gradeExtra_);
 }
 
 bool PostProcess::RenderFullscreenQuad(bgfx::ViewId view,
@@ -646,6 +651,13 @@ PostProcessApplyResult PostProcess::Apply(bgfx::ViewId base_view) {
                       state_.color_grade_b, state_.color_grade_a};
     bgfx::setUniform(u_colorGrade_, grade);
 
+    // Nullen = originele beeld, zodat een ontbrekende uniform nooit iets verandert.
+    const float grade_extra[4] = {state_.saturation - 1.0f, state_.contrast - 1.0f,
+                                  state_.dither, 0.0f};
+    if (bgfx::isValid(u_gradeExtra_)) {
+      bgfx::setUniform(u_gradeExtra_, grade_extra);
+    }
+
     const float source_uv_scale[4] = {
         scene_uv.x,
         scene_uv.y,
@@ -817,6 +829,13 @@ bgfx::ViewId PostProcess::ApplyToRect(bgfx::ViewId base_view, Rect dest_rect) {
     float grade[4] = {state_.color_grade_r, state_.color_grade_g,
                       state_.color_grade_b, state_.color_grade_a};
     bgfx::setUniform(u_colorGrade_, grade);
+
+    // Nullen = originele beeld, zodat een ontbrekende uniform nooit iets verandert.
+    const float grade_extra[4] = {state_.saturation - 1.0f, state_.contrast - 1.0f,
+                                  state_.dither, 0.0f};
+    if (bgfx::isValid(u_gradeExtra_)) {
+      bgfx::setUniform(u_gradeExtra_, grade_extra);
+    }
     const float source_uv_scale[4] = {
         scene_uv.x,
         scene_uv.y,
@@ -950,6 +969,9 @@ void PostProcess::SetSettings(const PostProcessSettings settings) {
   state_.glow_enabled = settings.enabled && settings.glow_enabled;
   death_cvar_enabled_ = settings.enabled && settings.death_enabled;
   rectangle_textures_ = settings.rectangle_textures;
+  state_.saturation = settings.saturation;
+  state_.contrast = settings.contrast;
+  state_.dither = settings.dither;
   const std::uint8_t next_multisample = NormalizeMultisample(settings.multisample);
   if (next_multisample != multisample_) {
     multisample_ = next_multisample;

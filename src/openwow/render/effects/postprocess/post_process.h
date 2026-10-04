@@ -104,6 +104,11 @@ struct PostProcessState {
   float color_grade_g = 1.0f;
   float color_grade_b = 1.0f;
   float color_grade_a = 1.0f;
+
+  // Eigen beeldcontrole (cvars gfxSaturation/gfxContrast/gfxDither); 1/1/0 is het originele beeld.
+  float saturation = 1.0f;
+  float contrast = 1.0f;
+  float dither = 0.0f;
 };
 
 struct PostProcessSettings {
@@ -112,6 +117,9 @@ struct PostProcessSettings {
   bool death_enabled{true};
   bool rectangle_textures{true};
   std::uint8_t multisample{1};
+  float saturation{1.0f};
+  float contrast{1.0f};
+  float dither{0.0f};
 };
 
 enum class PostProcessApplyOutcome : std::uint8_t {
@@ -338,6 +346,7 @@ private:
   bgfx::UniformHandle u_compositeParams_ = BGFX_INVALID_HANDLE;
   bgfx::UniformHandle u_colorGrade_      = BGFX_INVALID_HANDLE;
   bgfx::UniformHandle u_sourceUvScale_   = BGFX_INVALID_HANDLE;
+  bgfx::UniformHandle u_gradeExtra_      = BGFX_INVALID_HANDLE;
 };
 
 }
