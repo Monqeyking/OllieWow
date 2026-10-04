@@ -5,6 +5,7 @@
 #include "openwow/render/api/math/render_math_types.h"
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <unordered_map>
 #include <vector>
@@ -39,6 +40,14 @@ public:
   void Render(const world::WorldPresentationSnapshot &snapshot, std::uint8_t shadow_view,
               DoodadRenderer &doodads, TerrainRenderer &terrain);
 
+  // Extra schaduwwerpers naast de doodads (units en spelers): vult de M2-instance-id's van
+  // alles dat binnen `radius` van (x, y, z) schaduw moet werpen.
+  using ExtraCasterProvider = std::function<void(float x, float y, float z, float radius,
+                                                 std::vector<std::uint32_t> &out)>;
+  void SetExtraCasterProvider(ExtraCasterProvider provider) {
+    extra_caster_provider_ = std::move(provider);
+  }
+
 private:
   void ApplySettings(const world::WorldPresentationSnapshot &snapshot);
 
@@ -61,6 +70,8 @@ private:
   std::unique_ptr<ShadowRenderData> data_;
   std::vector<ShadowCasterEntry> casters_;
   std::vector<std::uint32_t> instance_ids_;
+  std::vector<std::uint32_t> extra_caster_ids_;
+  ExtraCasterProvider extra_caster_provider_;
 
   struct InstancedShadowGroup {
     std::uint32_t exemplar_instance_id{0};

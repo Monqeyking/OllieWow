@@ -5361,10 +5361,19 @@ void GameLoop::RenderWorld(float dt) {
       .far_clip = ResolveWorldCameraFarClip(),
   };
   const auto &cvars = openwow::ui::game::CVarSystem::Instance();
+  // OPENWOW_SHADOWS=1 zet de stabiele zon-schaduwkaart aan zonder de CVars aan te raken
+  // (extShadowQuality >= 3, mapShadows en projectedTextures aan). Standaard uit.
+  static const bool force_shadows = [] {
+    const char *value = std::getenv("OPENWOW_SHADOWS");
+    return value != nullptr && *value != '\0' && *value != '0';
+  }();
   world::ShadowPresentationSettings shadow_settings =
-      render::ResolveShadowPresentationSettings(cvars.GetCVarInt("extShadowQuality"),
-                                                cvars.GetCVarBool("mapShadows"),
-                                                cvars.GetCVarBool("projectedTextures"));
+      force_shadows
+          ? render::ResolveShadowPresentationSettings(
+                std::max(cvars.GetCVarInt("extShadowQuality"), 3), true, true)
+          : render::ResolveShadowPresentationSettings(cvars.GetCVarInt("extShadowQuality"),
+                                                      cvars.GetCVarBool("mapShadows"),
+                                                      cvars.GetCVarBool("projectedTextures"));
   world_scene_.SetShadowPresentationSettings(shadow_settings);
   world_scene_.SetSpecularEnabled(cvars.GetCVarBool("specular") && PixelShadersEnabled());
 

@@ -738,6 +738,13 @@ world::WorldPresentationAcknowledgment WorldPresentationScene::Consume(
   return acknowledgment;
 }
 
+void WorldPresentationScene::SetShadowExtraCasterProvider(
+    std::function<void(float, float, float, float, std::vector<std::uint32_t>&)> provider) {
+  if (shadows_) {
+    shadows_->SetExtraCasterProvider(std::move(provider));
+  }
+}
+
 void WorldPresentationScene::SetWeatherGroundHeightSampler(
     std::function<std::optional<float>(float x, float y, float z)> sampler) {
   if (weather_renderer_) {

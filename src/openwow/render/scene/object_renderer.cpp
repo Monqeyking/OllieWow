@@ -3986,6 +3986,28 @@ bool ObjectRenderer::IsM2RenderReady(const RenderInstance &inst) const {
   return readiness.status == m2::M2ResultStatus::kReady && readiness.render_ready;
 }
 
+void ObjectRenderer::CollectShadowCasterInstanceIds(const float x, const float y, const float z,
+                                                    const float radius,
+                                                    std::vector<std::uint32_t> &out) const {
+  const float radius_squared = radius * radius;
+  for (const auto &[handle, inst] : instances_) {
+    static_cast<void>(handle);
+    if (inst.m2_instance_id == 0u || !inst.visible || inst.is_mounted) {
+      continue;
+    }
+    if (inst.type_id != game::TypeID::kUnit && inst.type_id != game::TypeID::kPlayer) {
+      continue;
+    }
+    const float dx = inst.position[0] - x;
+    const float dy = inst.position[1] - y;
+    const float dz = inst.position[2] - z;
+    if (dx * dx + dy * dy + dz * dz > radius_squared) {
+      continue;
+    }
+    out.push_back(inst.m2_instance_id);
+  }
+}
+
 bool ObjectRenderer::PrepareInstanceBodyForSubmit(
     m2::M2InstanceFramePrepareScope &prepare, RenderInstance &inst,
     const PassBatchUniforms &pass_uniforms) {

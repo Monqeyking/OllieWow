@@ -710,6 +710,12 @@ WorldScene::WorldScene(render::TextureManager& texture_manager,
         game_object_m2_events_.push_back(event);
       });
 
+  // Units en spelers werpen schaduw in de stabiele zon-schaduwkaart (indien aan).
+  world_presentation_scene_.SetShadowExtraCasterProvider(
+      [this](const float x, const float y, const float z, const float radius,
+             std::vector<std::uint32_t>& out) {
+        object_renderer_->CollectShadowCasterInstanceIds(x, y, z, radius, out);
+      });
   object_renderer_->SetAreaSceneReadinessResolver(
       [this](const render::RenderInstance& instance)
           -> std::optional<render::AreaSceneReadinessState> {

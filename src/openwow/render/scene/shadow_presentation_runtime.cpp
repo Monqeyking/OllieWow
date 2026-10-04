@@ -1,6 +1,8 @@
 #include "openwow/render/scene/shadow_presentation_runtime.h"
+#include "openwow/foundation/diagnostics/logging.h"
 
 #include "openwow/render/world/doodads/doodad_renderer.h"
+#include "openwow/render/m2/m2_shadow_receiver.h"
 #include "openwow/render/m2/m2_system.h"
 #include "openwow/render/world/terrain/terrain_renderer.h"
 #include "openwow/world/coordinates/frustum.h"
@@ -130,6 +132,21 @@ void ShadowPresentationRuntime::Render(const world::WorldPresentationSnapshot &s
     return;
   }
   ApplySettings(snapshot);
+  {
+    // Korte statusregel (elke ~300 frames) zodat in een log zichtbaar is of de kaart echt draait.
+    static std::uint32_t status_frame = 0u;
+    if ((status_frame++ % 300u) == 0u) {
+      diagnostics::Log(diagnostics::LogLevel::kInfo,
+          "ShadowStatus: enabled=" + std::to_string(snapshot.shadows.enabled) +
+          " initialized=" + std::to_string(initialized_) +
+          " quality=" + std::to_string(snapshot.shadows.quality) +
+          " light=(" + std::to_string(snapshot.environment.light_direction[0]) + "," +
+          std::to_string(snapshot.environment.light_direction[1]) + "," +
+          std::to_string(snapshot.environment.light_direction[2]) + ")");
+    }
+  }
+  // Niet lezen terwijl de kaart beschreven wordt; aan het eind weer aan.
+  m2::ShadowReceiverSlot().store(nullptr, std::memory_order_release);
   if (!initialized_ || !snapshot.shadows.enabled) {
     InvalidateShadowReuse();
     terrain.SetShadowRenderData(nullptr);
@@ -142,7 +159,9 @@ void ShadowPresentationRuntime::Render(const world::WorldPresentationSnapshot &s
     std::copy_n(snapshot.camera.frustum_planes.begin() + plane * 4u, 4u,
                 camera_frustum.planes[plane].begin());
   }
-  const float max_distance_squared = snapshot.shadows.distance * snapshot.shadows.distance;
+  // Alleen wat de stabiele kaart (straal ~80 yd) kan raken, plus marge voor hoge werpers.
+  const float gather_radius = ShadowRenderData::RadiusForDistance(snapshot.shadows.distance) * 1.8f;
+  const float max_distance_squared = gather_radius * gather_radius;
   constexpr std::size_t kMinInstancedShadowGroupSize = 2u;
   casters_.clear();
   instance_ids_.clear();
@@ -222,6 +241,18 @@ void ShadowPresentationRuntime::Render(const world::WorldPresentationSnapshot &s
                                   instance_ids_.push_back(instance.m2_instance_id);
                                 });
 
+  if (extra_caster_provider_) {
+    extra_caster_ids_.clear();
+    extra_caster_provider_(camera[0], camera[1], camera[2], gather_radius, extra_caster_ids_);
+    for (const std::uint32_t id : extra_caster_ids_) {
+      // Units bewegen en animeren: dat frame hergebruiken we niet.
+      frame_key.reusable = false;
+      caster_hash = HashValue(caster_hash, id);
+      casters_.push_back(ShadowCasterEntry{.entityId = id, .isValid = true});
+      instance_ids_.push_back(id);
+    }
+  }
+
   bool has_instanced_groups = false;
   for (auto &[model_id, group] : instanced_groups_) {
     (void)model_id;
@@ -243,6 +274,7 @@ void ShadowPresentationRuntime::Render(const world::WorldPresentationSnapshot &s
     return;
   }
 
+  data_->SetCameraAnchor(snapshot.camera.position.data(), snapshot.camera.forward.data());
   if (!data_->PrepareShadowPass(
           snapshot.camera.view.data(), snapshot.camera.projection.data(),
           snapshot.camera.near_clip,
@@ -278,6 +310,7 @@ void ShadowPresentationRuntime::Render(const world::WorldPresentationSnapshot &s
   if (has_rendered_key_ && previous_frame_known && frame_key.reusable &&
       frame_key == rendered_key_) {
     terrain.SetShadowRenderData(data_.get());
+    m2::ShadowReceiverSlot().store(data_.get(), std::memory_order_release);
     return;
   }
 
@@ -299,9 +332,22 @@ void ShadowPresentationRuntime::Render(const world::WorldPresentationSnapshot &s
                                           group.records, m2::M2BatchUniforms{});
   }
 
+  {
+    static std::uint32_t caster_log_frame = 0u;
+    if ((caster_log_frame++ % 300u) == 0u) {
+      diagnostics::Log(diagnostics::LogLevel::kInfo,
+          "ShadowStatus: casters=" + std::to_string(instance_ids_.size()) +
+          " extra=" + std::to_string(extra_caster_ids_.size()) +
+          " center=(" + std::to_string(data_->GetShadowCenter()[0]) + "," +
+          std::to_string(data_->GetShadowCenter()[1]) + "," +
+          std::to_string(data_->GetShadowCenter()[2]) + ") radius=" +
+          std::to_string(data_->GetShadowRadius()));
+    }
+  }
   rendered_key_ = frame_key;
   has_rendered_key_ = previous_frame_known;
   terrain.SetShadowRenderData(data_.get());
+  m2::ShadowReceiverSlot().store(data_.get(), std::memory_order_release);
 }
 
 }

@@ -21,7 +21,7 @@ uniform vec4 u_terrainVsParams[14];
 
 #if BGFX_SHADER_TYPE_FRAGMENT
 
-uniform vec4 u_terrainFsParams[4];
+uniform vec4 u_terrainFsParams[5];
 
 #define u_terrainFogParams  u_terrainFsParams[0]
 
@@ -30,6 +30,9 @@ uniform vec4 u_terrainFsParams[4];
 #define u_terrainShadowMod  u_terrainFsParams[2]
 
 #define u_terrainColor      u_terrainFsParams[3]
+
+// x = dynamische schaduwkaart gebonden (0/1), yzw = ambient (rgb) dat in de schaduw overblijft.
+#define u_terrainShadowOn   u_terrainFsParams[4]
 
 #endif
 

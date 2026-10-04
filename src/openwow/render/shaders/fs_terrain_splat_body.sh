@@ -21,6 +21,8 @@ SAMPLER2D(s_terrainTex3, 3);
 
 SAMPLER2DARRAY(s_terrainAlpha, 4);
 
+#include "shadow_receive.sh"
+
 void main()
 {
     // Match Benilla's detailed-world farclip wall: terrain fragments beyond
@@ -69,7 +71,12 @@ void main()
     // for normal rendering while retaining the Vanilla MOD 1x terrain path.
     vec3 shadowModulate =
         mix(vec3_splat(1.0), bakedShadowModulate, u_terrainShadowMod.a);
-    vec3 litColor = blended.rgb * v_color0.rgb * u_terrainColor.rgb
+    // De zon wordt geblokkeerd in de schaduw; het ambient licht blijft. v_color0 is
+    // ambient + diffuse*N.L, dus in de schaduw valt het terug op het ambient.
+    float dynamicVisibility = u_terrainShadowOn.x > 0.5 ? dynamicShadowVisibility(v_worldPos) : 1.0;
+    vec3 ambientRgb = u_terrainShadowOn.yzw;
+    vec3 litLight = mix(min(v_color0.rgb, ambientRgb), v_color0.rgb, dynamicVisibility);
+    vec3 litColor = blended.rgb * litLight * u_terrainColor.rgb
                   * shadowModulate;
 
     float fogFactor = openwowLinearFogVisibility(u_terrainFogParams, v_viewDist);

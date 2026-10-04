@@ -1,3 +1,5 @@
+#include "openwow/render/m2/m2_shadow_receiver.h"
+#include "openwow/render/scene/shadow_data.h"
 #include "openwow/render/m2/m2_skinned_mesh.h"
 
 #include "openwow/render/m2/m2_public_types.h"
@@ -261,6 +263,27 @@ void M2SkinnedMesh::UploadBonePalette(
                   static_cast<std::uint16_t>(uploaded_matrix_count * 3u));
 }
 
+namespace {
+[[nodiscard]] constexpr bool ReceiveWorldShadows(
+    bool receive_world_shadows, bool has_global_receiver) noexcept {
+  return receive_world_shadows && has_global_receiver;
+}
+
+// Source-only truth-table fixture for per-draw opt-out and the no-global branch.
+static_assert(ReceiveWorldShadows(true, true));
+static_assert(!ReceiveWorldShadows(false, true));
+static_assert(!ReceiveWorldShadows(true, false));
+static_assert(!ReceiveWorldShadows(false, false));
+
+void BindShadowReceiver(const M2DrawEncoder &draw) {
+  if (const ShadowRenderData *const receiver =
+          ShadowReceiverSlot().load(std::memory_order_acquire);
+      receiver != nullptr) {
+    receiver->BindShadowState(draw.raw());
+  }
+}
+}  // namespace
+
 void M2SkinnedMesh::UploadPackedBatchUniforms(
     const M2DrawEncoder &draw, const M2BatchUniforms &uniforms,
     const bool upload_lighting_uniforms) const {
@@ -297,6 +320,11 @@ void M2SkinnedMesh::UploadPackedBatchUniforms(
   fragment_params[kM2FragmentParamMaterialFlags] = uniforms.material_flags;
   fragment_params[kM2FragmentParamFogParams] = uniforms.fog_params;
   fragment_params[kM2FragmentParamFogColor] = uniforms.fog_color;
+  fragment_params[kM2FragmentParamShadowOn] = RenderVec4{
+      ReceiveWorldShadows(uniforms.receive_world_shadows,
+                          ShadowReceiverSlot().load(std::memory_order_acquire) != nullptr)
+          ? 1.0f : 0.0f,
+      0.0f, 0.0f, 0.0f};
   draw.setUniform(shader.u_fragment_params, fragment_params.data(),
                   kM2FragmentParamCount);
 }
@@ -344,6 +372,7 @@ M2ResultStatus M2SkinnedMesh::SubmitSkinnedBatch(
 
   UploadBonePalette(draw, *palette_shader, bone_matrices,
                     SubmeshBoneIndexBound(submesh_index));
+  BindShadowReceiver(draw);
 
   if (selection.reads_lighting_uniforms) {
     draw.setUniform(shader.u_world_matrix, model_mtx.data());
@@ -402,6 +431,7 @@ M2ResultStatus M2SkinnedMesh::SubmitInstancedBatch(
 
   UploadBonePalette(draw, palette_shader, bone_matrices,
                     SubmeshBoneIndexBound(submesh_index));
+  BindShadowReceiver(draw);
   UploadPackedBatchUniforms(draw, uniforms, selection.reads_lighting_uniforms);
 
   if (uniforms.combiner_mode[2] > 0.5f) {

@@ -65,6 +65,9 @@ class WorldPresentationScene final {
               std::uint16_t screen_width, std::uint16_t screen_height,
               m2::M2TransparentDrawOrder& alpha_draw_order);
 
+  // Units en spelers die schaduw werpen (zie ShadowPresentationRuntime).
+  void SetShadowExtraCasterProvider(
+      std::function<void(float, float, float, float, std::vector<std::uint32_t>&)> provider);
   void SetWeatherGroundHeightSampler(
       std::function<std::optional<float>(float x, float y, float z)> sampler);
   void SetFileLoader(LoadFileCallback callback);

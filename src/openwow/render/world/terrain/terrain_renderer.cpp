@@ -176,8 +176,9 @@ inline constexpr std::size_t kFogParams = 0u;
 inline constexpr std::size_t kFogColor = 1u;
 inline constexpr std::size_t kShadowMod = 2u;
 inline constexpr std::size_t kColor = 3u;
-inline constexpr std::size_t kFrameConstantCount = 4u;
-inline constexpr std::size_t kCount = 4u;
+inline constexpr std::size_t kShadowOn = 4u;
+inline constexpr std::size_t kFrameConstantCount = 5u;
+inline constexpr std::size_t kCount = 5u;
 
 }
 
@@ -722,6 +723,12 @@ void TerrainRenderer::Render(uint8_t view_id, const WorldEnvironmentSnapshot &en
   fs_params[terrain_fs_param::kFogColor] = environment.fog.color;
   fs_params[terrain_fs_param::kShadowMod] = terrain_shadow_mod;
   fs_params[terrain_fs_param::kColor] = RenderVec4{1.0f, 1.0f, 1.0f, 1.0f};
+  // Dynamische schaduw: aan als er een kaart is; in de schaduw blijft het ambient over.
+  const bool dynamic_shadow = shadow_data_ != nullptr && shadow_data_->IsShadowMapValid() &&
+                              shadow_data_->IsEnabled();
+  fs_params[terrain_fs_param::kShadowOn] = RenderVec4{
+      dynamic_shadow ? 1.0f : 0.0f, environment.ambient[0], environment.ambient[1],
+      environment.ambient[2]};
 
   const auto make_batch_key = [&](const TerrainChunkGpu &gpu, const std::uint32_t lod,
                                   const TerrainProgramKind program) {

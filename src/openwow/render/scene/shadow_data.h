@@ -94,6 +94,18 @@ public:
     struct LightDir { float x, y, z; };
     [[nodiscard]] LightDir GetLightDirection() const;
 
+    // De straal (yd) van de stabiele schaduwkaart voor een gevraagde schaduwafstand.
+    // Eerder werd de kaart om de hele camerakegel gespannen (tot de farclip, 777 yd):
+    // ~1 yd per texel, en een middelpunt dat met de camerapitch meebewoog.
+    [[nodiscard]] static float RadiusForDistance(float distance) noexcept;
+    [[nodiscard]] float GetShadowRadius() const noexcept { return radius_; }
+    // Camerapositie en kijkrichting in wereldruimte; de kaart wordt hieromheen gelegd.
+    void SetCameraAnchor(const float position[3], const float forward[3]) noexcept {
+        for (int i = 0; i < 3; ++i) { anchor_pos_[i] = position[i]; anchor_fwd_[i] = forward[i]; }
+    }
+    // Het middelpunt van de laatst opgebouwde kaart (wereldruimte).
+    [[nodiscard]] const float* GetShadowCenter() const noexcept { return center_; }
+
     bool PrepareShadowPass(const float* camera_mtx,
                            const float* proj_mtx,
                            float cam_near,
@@ -126,6 +138,11 @@ private:
     float         distance_  = 40.0f;
     float         bias_      = 0.005f;
     float         split_lambda_ = 0.5f;
+    float         radius_    = 80.0f;
+    float         depth_range_ = 320.0f;
+    float         center_[3]{};
+    float         anchor_pos_[3]{};
+    float         anchor_fwd_[3]{0.0f, 1.0f, 0.0f};
 
     float lightX_    = 0.0f;
     float lightY_    = -1.0f;

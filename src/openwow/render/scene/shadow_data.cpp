@@ -51,64 +51,6 @@ void BuildShadowClipToTextureMatrix(float out_matrix[16]) {
   std::copy_n(matrix, 16, out_matrix);
 }
 
-void ExtractFrustumCorners(const float* proj_mtx,
-                           const float* view_mtx,
-                           float out_corners[8][3]) {
-
-  float vp[16];
-  bx::mtxMul(vp, view_mtx, proj_mtx);
-  float inv_vp[16];
-  bx::mtxInverse(inv_vp, vp);
-
-  const float ndc_corners[8][4] = {
-      {-1.0f,  1.0f, -1.0f, 1.0f},
-      { 1.0f,  1.0f, -1.0f, 1.0f},
-      { 1.0f, -1.0f, -1.0f, 1.0f},
-      {-1.0f, -1.0f, -1.0f, 1.0f},
-      {-1.0f,  1.0f,  1.0f, 1.0f},
-      { 1.0f,  1.0f,  1.0f, 1.0f},
-      { 1.0f, -1.0f,  1.0f, 1.0f},
-      {-1.0f, -1.0f,  1.0f, 1.0f},
-  };
-
-  for (int i = 0; i < 8; ++i) {
-    RenderVec4 p{};
-    for (int r = 0; r < 4; ++r) {
-      p[r] = inv_vp[r * 4 + 0] * ndc_corners[i][0]
-           + inv_vp[r * 4 + 1] * ndc_corners[i][1]
-           + inv_vp[r * 4 + 2] * ndc_corners[i][2]
-           + inv_vp[r * 4 + 3] * ndc_corners[i][3];
-    }
-    const float inv_w = 1.0f / p[3];
-    out_corners[i][0] = p[0] * inv_w;
-    out_corners[i][1] = p[1] * inv_w;
-    out_corners[i][2] = p[2] * inv_w;
-  }
-}
-
-void ComputeFrustumCenterAndRadius(const float corners[8][3],
-                                   float center[3],
-                                   float& radius) {
-  center[0] = 0.0f; center[1] = 0.0f; center[2] = 0.0f;
-  for (int i = 0; i < 8; ++i) {
-    center[0] += corners[i][0];
-    center[1] += corners[i][1];
-    center[2] += corners[i][2];
-  }
-  center[0] /= 8.0f;
-  center[1] /= 8.0f;
-  center[2] /= 8.0f;
-
-  radius = 0.0f;
-  for (int i = 0; i < 8; ++i) {
-    const float dx = corners[i][0] - center[0];
-    const float dy = corners[i][1] - center[1];
-    const float dz = corners[i][2] - center[2];
-    const float d = std::sqrt(dx * dx + dy * dy + dz * dz);
-    if (d > radius) radius = d;
-  }
-}
-
 }
 
 ShadowRenderData::ShadowRenderData()
@@ -237,7 +179,11 @@ void ShadowRenderData::BindShadowState(bgfx::Encoder* const encoder) const {
     draw.setUniform(backend_->shadow_matrix, light_view_proj_);
 
     const float inv_res = 1.0f / static_cast<float>(resolution_);
-    const RenderVec4 params{bias_, inv_res, 1.0f, 0.0f};
+    // bias_ is een diepte-bias in kaarteenheden (0,005 bij de oude kaart); hier in wereldeenheden
+    // omgerekend, zodat hij niet met de kaartgrootte meeschuift: 0,3 yd plus een texel.
+    const float texel_world = (2.0f * radius_) * inv_res;
+    const float bias_depth = (0.3f + texel_world) / std::max(depth_range_, 1.0f);
+    const RenderVec4 params{bias_depth, inv_res, 1.0f, radius_};
     draw.setUniform(backend_->shadow_parameters, params.data());
 }
 
@@ -306,20 +252,45 @@ ShadowRenderData::LightDir ShadowRenderData::GetLightDirection() const {
     return {lightX_, lightY_, lightZ_};
 }
 
+float ShadowRenderData::RadiusForDistance(const float distance) noexcept {
+    // 640 yd (de standaard) -> 80 yd straal; begrensd zodat de resolutie bruikbaar blijft.
+    return std::clamp(distance * 0.125f, 30.0f, 120.0f);
+}
+
 void ShadowRenderData::BuildLightMatrices(const float* camera_mtx,
                                           const float* proj_mtx,
                                           [[maybe_unused]] float cam_near,
                                           [[maybe_unused]] float cam_far,
                                           float out_light_view[16],
                                           float out_light_proj[16]) {
+    // Stabiele kaart: een vaste bol rond het camerastandpunt, niet rond de camerakegel.
+    // Het middelpunt hangt alleen af van de oogpositie en de horizontale kijkrichting,
+    // nooit van de pitch, en wordt in lichtruimte op het texelraster gesnapt. Daardoor
+    // blijft een schaduw op zijn plek in de wereld tijdens lopen, draaien en kijken.
+    static_cast<void>(camera_mtx);
+    static_cast<void>(proj_mtx);
+    const float* const eye = anchor_pos_;
+    float forward_x = anchor_fwd_[0];
+    float forward_y = anchor_fwd_[1];
+    const float forward_length = std::sqrt(forward_x * forward_x + forward_y * forward_y);
+    if (forward_length > 1e-4f) {
+        forward_x /= forward_length;
+        forward_y /= forward_length;
+    } else {
+        forward_x = 0.0f;
+        forward_y = 0.0f;
+    }
 
-    float corners[8][3];
-    ExtractFrustumCorners(proj_mtx, camera_mtx, corners);
+    radius_ = RadiusForDistance(distance_);
+    const float radius = radius_;
+    depth_range_ = radius * 4.0f;
 
-    float center[3];
-    float radius;
-    ComputeFrustumCenterAndRadius(corners, center, radius);
-    radius = std::max(radius, 1.0f);
+    // Ruim de helft van de kaart ligt voor de camera: daar kijk je naar.
+    float center[3] = {eye[0] + forward_x * radius * 0.35f,
+                       eye[1] + forward_y * radius * 0.35f, eye[2]};
+    center_[0] = center[0];
+    center_[1] = center[1];
+    center_[2] = center[2];
 
     const float light_dist = radius * 2.0f;
     float light_pos[3];
@@ -338,7 +309,7 @@ void ShadowRenderData::BuildLightMatrices(const float* camera_mtx,
                   reference_up,
                   bx::Handedness::Left);
 
-    const float ortho_size = radius * 1.5f;
+    const float ortho_size = radius;
     const float near_p = -radius * 2.0f;
     const float far_p  =  radius * 2.0f;
 

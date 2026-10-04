@@ -138,6 +138,8 @@ struct M2BatchUniforms {
   std::array<RenderVec4, kMaxM2Lights> light_attenuation{};
   std::array<RenderVec4, kMaxM2Lights> light_color{};
   RenderVec4 light_ambient{1.0f, 1.0f, 1.0f, 0.0f};
+  // Per-draw opt-out for isolated UI lighting; world draws retain shadow reception.
+  bool receive_world_shadows{true};
 };
 
 namespace detail {

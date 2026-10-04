@@ -557,6 +557,10 @@ public:
     mount_renderer_.SetWorldM2SceneState(scene_state);
   }
 
+  // M2-instance-id's van units en spelers binnen `radius` van (x, y, z): de schaduwwerpers.
+  void CollectShadowCasterInstanceIds(float x, float y, float z, float radius,
+                                      std::vector<std::uint32_t> &out) const;
+
   void RenderMounts(std::uint8_t view_id, const float *view_mtx, const float *proj_mtx,
                     const game::ObjectPresentationSnapshot &objects,
                     m2::M2TransparentDrawOrder &transparent_draw_order);

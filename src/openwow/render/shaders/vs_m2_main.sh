@@ -1,4 +1,5 @@
 
+uniform vec4 u_shadowParams;   // zelfde uniform als ShadowRenderData (x bias, y 1/res, z aan, w straal)
 uniform vec4 u_m2VertexParams[10];
 #define u_uvTransform      u_m2VertexParams[0]
 #define u_uvTransformRow1  u_m2VertexParams[1]
@@ -156,10 +157,15 @@ void main()
 #define M2_INSTANCE_COLOR vec4(1.0, 1.0, 1.0, 1.0)
 #endif
     vec4 materialVertex = a_color0 * u_materialColor * M2_INSTANCE_COLOR;
+    // Schaduwontvangst: v_shadowRatio = (licht zonder zon) / (licht met zon), per kanaal. De
+    // fragment-stap schaalt dat in de schaduw; zonder verlichting blijft het 1 (geen effect).
+    v_shadowPos = vec3_splat(0.0);
+    v_shadowRatio = vec3_splat(1.0);
 #if OPENWOW_M2_VS_LIGHTING_ENABLED
     OPENWOW_M2_VS_LIGHTING_GATE
     {
         vec3 lighting = u_m2LightAmbient.rgb;
+        vec3 sunLighting = vec3_splat(0.0);
         int lightCount = int(u_m2LightCount.x + 0.5);
         for (int index = 0; index < 4; ++index) {
             if (index >= lightCount) break;
@@ -182,8 +188,18 @@ void main()
                     : clamp(mu, 0.0, 1.0);
             }
             lighting += lightColor.rgb * strength;
+            if (lightColor.a <= 0.5) {
+                sunLighting += lightColor.rgb * strength;
+            }
         }
-        materialVertex.rgb *= clamp(lighting, 0.0, 1.0);
+        vec3 fullLighting = clamp(lighting, 0.0, 1.0);
+        vec3 shadowedLighting = clamp(lighting - sunLighting, 0.0, 1.0);
+        v_shadowRatio = clamp(shadowedLighting / max(fullLighting, vec3_splat(0.0001)),
+                              0.0, 1.0);
+        // Opzoekpositie langs de normaal verschoven (twee texels) tegen schaduwvlekken.
+        float shadowTexel = 2.0 * u_shadowParams.w * u_shadowParams.y;
+        v_shadowPos = worldPosition + worldNormal * (shadowTexel * 2.0);
+        materialVertex.rgb *= fullLighting;
     }
 #endif
     materialVertex.rgb = clamp(materialVertex.rgb + u_emissiveColor.rgb,
