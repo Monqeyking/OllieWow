@@ -6,6 +6,7 @@
 #include "openwow/render/m2/m2_resource_streamer.h"
 #include "openwow/render/m2/m2_transparent_draw_order.h"
 #include "openwow/render/m2/m2_system.h"
+#include "openwow/render/world/doodads/ground_clutter.h"
 #include "openwow/render/world/environment/spatial_point_light.h"
 #include "openwow/render/world/environment/world_model_lighting.h"
 #include "openwow/world/coordinates/frustum.h"
@@ -301,6 +302,15 @@ private:
   [[nodiscard]] bool PublishPreparedM2Instance(DoodadInstance &inst, std::uint32_t model_id,
                                                std::uint32_t instance_id);
   void ComputeModelMatrix(DoodadInstance &inst, const data::terrain::DoodadPlacement &placement);
+
+  // Vanilla ground clutter (detail doodads): gras, bloemen en steentjes, per terreinchunk gestrooid
+  // binnen 70 yd van de camera en geinstanceerd getekend. Zie ground_clutter.h.
+  void BuildClutterTile(const data::terrain::AdtFile &adt, std::int32_t tile_x, std::int32_t tile_y);
+  void ClearClutter();
+  void EnsureClutterCatalog();
+  void RenderGroundClutter(std::uint8_t view_id, const world::Frustum *frustum, float camera_x,
+                           float camera_y, const m2::M2BatchUniforms &world_uniforms,
+                           const m2::M2SharedBatchUniformsHandle &shared_uniforms);
   void ComputeWmoModelMatrix(DoodadInstance &inst, const data::wmo::WmoDoodadDef &def,
                              const RenderMatrix4x4 &wmo_model_matrix);
   enum class OwnerKind : std::uint8_t { Tile, Wmo };
@@ -409,6 +419,26 @@ private:
   LoadFileCallback load_file_;
 
   PrefixLoadFileCallback load_file_prefix_;
+
+  struct ClutterInstance {
+    std::uint16_t model{0};
+    RenderMatrix4x4 matrix{};
+  };
+  struct ClutterChunk {
+    clutter::ChunkSource source;
+    std::vector<ClutterInstance> instances;
+    std::uint32_t built_frill{std::numeric_limits<std::uint32_t>::max()};
+  };
+  struct ClutterModel {
+    std::uint32_t instance_id{0};
+    bool failed{false};
+  };
+  std::unordered_map<std::uint64_t, std::vector<ClutterChunk>> clutter_tiles_;
+  clutter::Catalog clutter_catalog_;
+  bool clutter_catalog_loaded_{false};
+  std::vector<ClutterModel> clutter_models_;
+  std::vector<std::vector<m2::M2InstancedDrawRecord>> clutter_records_scratch_;
+  std::vector<clutter::Placement> clutter_placement_scratch_;
 
   WorldM2SceneState world_m2_scene_state_{};
   world::EnvironmentDetailDistances environment_detail_{};

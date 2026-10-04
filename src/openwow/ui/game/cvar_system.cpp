@@ -2110,6 +2110,7 @@ void CVarSystem::RegisterDefaults() {
   RegisterCVar("gfxSaturation", "1.0", F::Archive, "Colour saturation (1 = original)", 0.0f, 2.0f);
   RegisterCVar("gfxContrast", "1.0", F::Archive, "Contrast (1 = original)", 0.5f, 1.5f);
   RegisterCVar("gfxDither", "0", F::Archive, "Dither strength against banding (0 = off)", 0.0f, 2.0f);
+  RegisterCVar("gfxClutter", "1", F::Archive, "Ground clutter (grass, flowers, pebbles); 0 = off", 0.0f, 1.0f);
   RegisterCVar("pixelShaders", "1", F::Archive, "Pixel shaders enabled");
   RegisterCVar("M2UsePixelShaders", "1", F::Archive, "Model pixel shaders (phong shading) enabled");
   RegisterCVar("M2UseShaders", "1", F::Archive, "Vertex animation shaders enabled");

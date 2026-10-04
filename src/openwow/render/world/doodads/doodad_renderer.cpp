@@ -1,5 +1,7 @@
 #include "openwow/render/world/doodads/doodad_renderer.h"
 
+#include "openwow/ui/game/cvar_system.h"
+
 #include "openwow/foundation/diagnostics/logging.h"
 #include "openwow/foundation/math/row_major_mat4x4.h"
 #include "openwow/render/api/math/render_matrix_math.h"
@@ -805,6 +807,7 @@ void DoodadRenderer::Clear() {
       ClearM2Instance(instance);
     }
   }
+  ClearClutter();
   tile_doodads_.clear();
   wmo_doodads_.clear();
   tile_doodad_uid_refs_.clear();
@@ -824,6 +827,7 @@ void DoodadRenderer::LoadFromAdt(const data::terrain::AdtFile &adt, std::int32_t
   const auto key = MakeTileKey(tile_x, tile_y);
 
   UnloadTile(tile_x, tile_y);
+  BuildClutterTile(adt, tile_x, tile_y);
 
   if (adt.referenced_doodad_indices.empty())
     return;
@@ -883,6 +887,7 @@ void DoodadRenderer::LoadFromAdt(const data::terrain::AdtFile &adt, std::int32_t
 
 void DoodadRenderer::UnloadTile(std::int32_t tile_x, std::int32_t tile_y) {
   const auto key = MakeTileKey(tile_x, tile_y);
+  clutter_tiles_.erase(key);
   const auto owner = tile_doodads_.find(key);
 
   if (const auto referenced = tile_referenced_uids_.find(key);
@@ -2243,6 +2248,11 @@ void DoodadRenderer::Render(std::uint8_t view_id, const float *view_mtx, const f
     }
   }
 
+  if (instancing_pass) {
+    RenderGroundClutter(view_id, frustum, camera_x, camera_y, world_uniforms,
+                        world_uniforms_lease.handle());
+  }
+
   if (pass_scope == m2::M2RenderPassScope::kOpaqueOnly &&
       render_queue_ready_for_transparent_) {
 
@@ -2633,4 +2643,251 @@ void DoodadRenderer::RebuildCollisionIndexLocked(const std::uint64_t fingerprint
     }
   }
 }
+namespace {
+
+constexpr std::uint32_t kClutterUnbuilt = std::numeric_limits<std::uint32_t>::max();
+
+RenderMatrix4x4 ClutterIdentityMatrix() {
+  RenderMatrix4x4 matrix{};
+  matrix[0] = 1.0f;
+  matrix[5] = 1.0f;
+  matrix[10] = 1.0f;
+  matrix[15] = 1.0f;
+  return matrix;
+}
+
+// Aantal cellen per chunk (Vanilla: frillDensity, 1..256, door de renderer verzadigd op 128).
+// cvar gfxClutter=0 zet het hele effect uit.
+std::uint32_t ReadClutterFrillDensity() {
+  const auto &cvars = openwow::ui::game::CVarSystem::Instance();
+  if (cvars.Exists("gfxClutter") && !cvars.GetCVarBool("gfxClutter")) {
+    return 0u;
+  }
+  const int frill = cvars.Exists("frillDensity") ? cvars.GetCVarInt("frillDensity") : 16;
+  return static_cast<std::uint32_t>(
+      std::clamp(frill, 0, static_cast<int>(clutter::kMaxFrillDensity)));
+}
+
+}  // namespace
+
+void DoodadRenderer::BuildClutterTile(const data::terrain::AdtFile &adt, const std::int32_t tile_x,
+                                      const std::int32_t tile_y) {
+  std::vector<ClutterChunk> chunks;
+  chunks.reserve(adt.chunks.size());
+  for (const auto &src : adt.chunks) {
+    ClutterChunk chunk;
+    clutter::ChunkSource &out = chunk.source;
+    out.tile_x = tile_x;
+    out.tile_y = tile_y;
+    out.index_x = src.header.index_x;
+    out.index_y = src.header.index_y;
+    out.base_x = src.header.position_x;
+    out.base_y = src.header.position_y;
+    out.base_z = src.header.position_z;
+    out.holes = static_cast<std::uint16_t>(src.holes & 0xFFFFu);
+
+    out.layer_count =
+        static_cast<std::uint8_t>(std::min<std::size_t>(src.layers.size(), out.layer_effect_ids.size()));
+    bool has_effect = false;
+    for (std::size_t i = 0; i < out.layer_count; ++i) {
+      const std::uint32_t effect = src.layers[i].effect_id;
+      // 0xFFFF is "geen effect" (de originele client slaat 0xFFFFFFFF op).
+      out.layer_effect_ids[i] = effect == 0xFFFFu ? clutter::kEmptySlot : effect;
+      has_effect = has_effect || effect != 0xFFFFu;
+    }
+    if (!has_effect) {
+      continue;  // geen laag met clutter: niets te strooien
+    }
+
+    // predominantTexture (MCNK 0x40, 2 bits per cel) en noEffectDoodad (0x50, 1 bit per cel),
+    // beide LSB eerst.
+    std::uint8_t no_effect_bytes[8];
+    std::memcpy(no_effect_bytes, &src.header.predtex, 4u);
+    std::memcpy(no_effect_bytes + 4, &src.header.num_effects_doodad, 4u);
+    for (std::size_t k = 0; k < 64u; ++k) {
+      out.pred_tex[k] =
+          static_cast<std::uint8_t>((src.header.low_quality_texmap[k / 4u] >> (2u * (k % 4u))) & 0x3u);
+      out.no_effect_doodad[k] = ((no_effect_bytes[k / 8u] >> (k % 8u)) & 0x1u) != 0u;
+    }
+
+    float min_height = std::numeric_limits<float>::max();
+    float max_height = std::numeric_limits<float>::lowest();
+    for (std::size_t i = 0; i < out.heights.size(); ++i) {
+      out.heights[i] = src.heights[i];
+      min_height = std::min(min_height, src.heights[i]);
+      max_height = std::max(max_height, src.heights[i]);
+    }
+    out.min_height = out.base_z + min_height;
+    out.max_height = out.base_z + max_height;
+    chunks.push_back(std::move(chunk));
+  }
+  if (!chunks.empty()) {
+    clutter_tiles_[MakeTileKey(tile_x, tile_y)] = std::move(chunks);
+  }
+}
+
+void DoodadRenderer::ClearClutter() {
+  clutter_tiles_.clear();
+  for (const ClutterModel &model : clutter_models_) {
+    if (model.instance_id != 0u) {
+      (void)m2_system_.DestroyInstance(model.instance_id);
+    }
+  }
+  clutter_models_.assign(clutter_catalog_.models.size(), ClutterModel{});
+  clutter_records_scratch_.clear();
+}
+
+void DoodadRenderer::EnsureClutterCatalog() {
+  if (clutter_catalog_loaded_ || !load_file_) {
+    return;
+  }
+  clutter_catalog_loaded_ = true;
+  const std::vector<std::uint8_t> textures = load_file_("DBFilesClient\\GroundEffectTexture.dbc");
+  const std::vector<std::uint8_t> doodads = load_file_("DBFilesClient\\GroundEffectDoodad.dbc");
+  clutter_catalog_ = clutter::BuildCatalog(textures, doodads);
+  clutter_models_.assign(clutter_catalog_.models.size(), ClutterModel{});
+  openwow::diagnostics::Log(
+      openwow::diagnostics::LogLevel::kInfo,
+      "DoodadRenderer: ground clutter catalog effects=" +
+          std::to_string(clutter_catalog_.effects.size()) +
+          " models=" + std::to_string(clutter_catalog_.models.size()) +
+          (clutter_catalog_.Empty() ? " (disabled: DBC layout or files unavailable)" : ""));
+}
+
+void DoodadRenderer::RenderGroundClutter(const std::uint8_t view_id, const world::Frustum *const frustum,
+                                         const float camera_x, const float camera_y,
+                                         const m2::M2BatchUniforms &world_uniforms,
+                                         const m2::M2SharedBatchUniformsHandle &shared_uniforms) {
+  if (clutter_tiles_.empty()) {
+    return;
+  }
+  const std::uint32_t frill = ReadClutterFrillDensity();
+  EnsureClutterCatalog();
+  if (frill == 0u || clutter_catalog_.Empty()) {
+    return;
+  }
+
+  clutter_records_scratch_.resize(clutter_catalog_.models.size());
+  for (auto &records : clutter_records_scratch_) {
+    records.clear();
+  }
+
+  constexpr float kChunkExtent = clutter::kChunkSize;
+  constexpr float kHorizonSquared = clutter::kHorizonYards * clutter::kHorizonYards;
+  constexpr float kFreeDistance = clutter::kHorizonYards + 40.0f;
+  constexpr float kFreeSquared = kFreeDistance * kFreeDistance;
+
+  for (auto &[tile_key, chunks] : clutter_tiles_) {
+    (void)tile_key;
+    for (ClutterChunk &chunk : chunks) {
+      const clutter::ChunkSource &source = chunk.source;
+      // Chunk-rechthoek: x en y lopen af van de basis (r en c tellen naar beneden).
+      const float min_x = source.base_x - kChunkExtent;
+      const float min_y = source.base_y - kChunkExtent;
+      const float dx = camera_x < min_x ? min_x - camera_x
+                                        : (camera_x > source.base_x ? camera_x - source.base_x : 0.0f);
+      const float dy = camera_y < min_y ? min_y - camera_y
+                                        : (camera_y > source.base_y ? camera_y - source.base_y : 0.0f);
+      const float distance_squared = dx * dx + dy * dy;
+      if (distance_squared > kHorizonSquared) {
+        if (distance_squared > kFreeSquared && !chunk.instances.empty()) {
+          chunk.instances.clear();
+          chunk.instances.shrink_to_fit();
+          chunk.built_frill = kClutterUnbuilt;
+        }
+        continue;
+      }
+      if (frustum != nullptr &&
+          !frustum->TestAABB(min_x, min_y, source.min_height - 1.0f, source.base_x, source.base_y,
+                             source.max_height + 2.0f)) {
+        continue;
+      }
+
+      if (chunk.built_frill != frill) {
+        clutter::ScatterChunk(source, clutter_catalog_, frill, clutter_placement_scratch_);
+        chunk.instances.clear();
+        chunk.instances.reserve(clutter_placement_scratch_.size());
+        for (const clutter::Placement &placement : clutter_placement_scratch_) {
+          const float cos_yaw = std::cos(placement.yaw) * placement.scale;
+          const float sin_yaw = std::sin(placement.yaw) * placement.scale;
+          ClutterInstance instance;
+          instance.model = placement.model;
+          instance.matrix[0] = cos_yaw;
+          instance.matrix[1] = sin_yaw;
+          instance.matrix[4] = -sin_yaw;
+          instance.matrix[5] = cos_yaw;
+          instance.matrix[10] = placement.scale;
+          instance.matrix[12] = placement.position[0];
+          instance.matrix[13] = placement.position[1];
+          instance.matrix[14] = placement.position[2];
+          instance.matrix[15] = 1.0f;
+          chunk.instances.push_back(instance);
+        }
+        chunk.built_frill = frill;
+      }
+
+      for (const ClutterInstance &instance : chunk.instances) {
+        if (instance.model < clutter_records_scratch_.size()) {
+          clutter_records_scratch_[instance.model].push_back(
+              {.transform = instance.matrix, .color = {1.0f, 1.0f, 1.0f, 1.0f}});
+        }
+      }
+    }
+  }
+
+  static const RenderMatrix4x4 kIdentity = ClutterIdentityMatrix();
+  for (std::size_t model_index = 0; model_index < clutter_records_scratch_.size(); ++model_index) {
+    const auto &records = clutter_records_scratch_[model_index];
+    if (records.empty() || model_index >= clutter_models_.size()) {
+      continue;
+    }
+    ClutterModel &slot = clutter_models_[model_index];
+    if (slot.failed) {
+      continue;
+    }
+    if (slot.instance_id == 0u) {
+      const auto load = m2_system_.LoadModelInstance(clutter_catalog_.models[model_index]);
+      if (m2::IsTerminalM2ResultStatus(load.status) || load.instance_id == 0u) {
+        if (load.status != m2::M2ResultStatus::kNotReady) {
+          slot.failed = true;
+          openwow::diagnostics::Log(
+              openwow::diagnostics::LogLevel::kWarn,
+              "DoodadRenderer: ground clutter model unavailable: " +
+                  clutter_catalog_.models[model_index]);
+        }
+        continue;
+      }
+      slot.instance_id = load.instance_id;
+    }
+
+    const m2::M2DoodadFrameRenderRequest request{
+        .instance_id = slot.instance_id,
+        .world_transform = &kIdentity,
+        .uniforms = nullptr,
+        .shared_uniforms = shared_uniforms,
+        .tint_rgba = {1.0f, 1.0f, 1.0f, 1.0f},
+        .alpha = 1.0f,
+        .world_transform_revision = 1u,
+    };
+    m2::M2ResultStatus state_status = m2::M2ResultStatus::kNotReady;
+    m2_system_.SetDoodadFrameRenderStates(std::span<const m2::M2DoodadFrameRenderRequest>(&request, 1u),
+                                          std::span<m2::M2ResultStatus>(&state_status, 1u));
+    if (state_status != m2::M2ResultStatus::kReady) {
+      if (m2::IsTerminalM2ResultStatus(state_status)) {
+        slot.failed = true;
+      }
+      continue;
+    }
+    const auto result =
+        m2_system_.RenderInstancedGroup(view_id, slot.instance_id, records, world_uniforms);
+    if (m2::IsTerminalM2ResultStatus(result.status)) {
+      slot.failed = true;
+      openwow::diagnostics::Log(
+          openwow::diagnostics::LogLevel::kWarn,
+          "DoodadRenderer: ground clutter model cannot be instanced: " +
+              clutter_catalog_.models[model_index] + " (" + result.detail + ")");
+    }
+  }
+}
+
 }

@@ -33,6 +33,16 @@ the MIT text is supplied alongside them.
 pieces — under their own permissive terms, noted in the headers of the files
 under `third_party/StormLib/src/`.
 
+## Referenced sources (algorithms and data; no source files bundled)
+
+These are ports of published algorithms or data tables, re-implemented in C++ for the
+bgfx renderer. The files that use them name the source in their header.
+
+| Source | Licence | Used for |
+| --- | --- | --- |
+| [Benilla](https://github.com/samwhosung/benilla) (`crates/benilla-formats/src/ground_effects.rs`) | MIT OR Apache-2.0 | Ground clutter placement algorithm (`src/openwow/render/world/doodads/ground_clutter.h`) |
+| Noggit Red (`ChunkAddDetailDoodads.cpp`) | Not yet confirmed | The 256-entry noise table in `ground_clutter.h`; it reproduces the original client's table |
+
 ## Trademarks
 
 World of Warcraft and Blizzard Entertainment are trademarks or registered
