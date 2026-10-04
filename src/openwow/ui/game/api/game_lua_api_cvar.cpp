@@ -318,4 +318,39 @@ CVarVoidResult SetBaseMip(CVarSystem& cvars, const CVarLuaNumber value) {
   return openwow::ui::lua::NoLuaResults{};
 }
 
+// Environment Detail (Options > Video). De originele client kent drie standen: SetWorldDetail
+// schrijft frillDensity (16/32/48) en SmallCull (0.07/0.04/0.01); GetWorldDetail leest alleen
+// SmallCull en antwoordt met de dichtstbijzijnde stand.
+double GetWorldDetail(CVarSystem& cvars) {
+  constexpr double kSmallCullStops[3] = {0.07, 0.04, 0.01};
+  const double small_cull = ReadNamedCVarFloat(cvars, "SmallCull");
+  std::size_t nearest = 0;
+  for (std::size_t stop = 1; stop < 3; ++stop) {
+    if (std::fabs(small_cull - kSmallCullStops[stop]) <
+        std::fabs(small_cull - kSmallCullStops[nearest])) {
+      nearest = stop;
+    }
+  }
+  return static_cast<double>(nearest);
+}
+
+CVarVoidResult SetWorldDetail(CVarSystem& cvars, const CVarLuaNumber value) {
+  constexpr int kFrillDensityStops[3] = {16, 32, 48};
+  constexpr double kSmallCullStops[3] = {0.07, 0.04, 0.01};
+  if (!value.value) {
+    return openwow::ui::lua::LuaUsageError{"Usage: SetWorldDetail(value)"};
+  }
+  // Afkappen richting nul, dan de grenzen van de originele client: -0.5 is stand 0, NaN weigert.
+  const double stop = std::trunc(*value.value);
+  if (!(stop >= 0.0 && stop < 3.0)) {
+    return openwow::ui::lua::LuaUsageError{"value must be in the range 0, 2"};
+  }
+  const auto index = static_cast<std::size_t>(stop);
+  char formatted_value[16];
+  std::snprintf(formatted_value, sizeof(formatted_value), "%d", kFrillDensityStops[index]);
+  cvars.SetRegisteredCVarValue("frillDensity", formatted_value);
+  std::snprintf(formatted_value, sizeof(formatted_value), "%f", kSmallCullStops[index]);
+  cvars.SetRegisteredCVarValue("SmallCull", formatted_value);
+  return openwow::ui::lua::NoLuaResults{};
+}
 }

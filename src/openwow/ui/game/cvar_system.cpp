@@ -2100,6 +2100,12 @@ void CVarSystem::RegisterDefaults() {
   // completed separately.
   RegisterCVar("anisotropic", "1", F::Archive, "Anisotropic filtering level");
   RegisterCVar("trilinear", "1", F::Archive, "Trilinear texture filtering");
+  // Vanilla Environment Detail: SetWorldDetail schrijft frillDensity (16/32/48) en SmallCull
+  // (0.07/0.04/0.01); pfUI's hdgraphic leest frillDensity en schrijft tot 256. Bereiken volgens
+  // de originele client: frillDensity 1..256, SmallCull 0.001..2.0.
+  RegisterCVar("frillDensity", "16", F::Archive, "Detail doodad (ground clutter) density", 1.0f,
+               256.0f);
+  RegisterCVar("SmallCull", "0.04", F::Archive, "Small object cull size", 0.001f, 2.0f);
   RegisterCVar("pixelShaders", "1", F::Archive, "Pixel shaders enabled");
   RegisterCVar("M2UsePixelShaders", "1", F::Archive, "Model pixel shaders (phong shading) enabled");
   RegisterCVar("M2UseShaders", "1", F::Archive, "Vertex animation shaders enabled");

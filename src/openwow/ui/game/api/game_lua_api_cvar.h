@@ -62,6 +62,8 @@ CVarVoidResult RegisterCVar(CVarSystem& cvars, CVarLuaString name,
 CVarVoidResult SetWaterDetail(CVarLuaNumber value);
 double GetBaseMip(CVarSystem& cvars);
 CVarVoidResult SetBaseMip(CVarSystem& cvars, CVarLuaNumber value);
+double GetWorldDetail(CVarSystem& cvars);
+CVarVoidResult SetWorldDetail(CVarSystem& cvars, CVarLuaNumber value);
 
 }
 
@@ -155,5 +157,9 @@ inline constexpr auto kGetBaseMip =
     openwow::ui::lua::bind<&GetBaseMip, kCVarLuaConversion>("GetBaseMip");
 inline constexpr auto kSetBaseMip =
     openwow::ui::lua::bind<&SetBaseMip, kCVarLuaConversion>("SetBaseMip");
+inline constexpr auto kGetWorldDetail =
+    openwow::ui::lua::bind<&GetWorldDetail, kCVarLuaConversion>("GetWorldDetail");
+inline constexpr auto kSetWorldDetail =
+    openwow::ui::lua::bind<&SetWorldDetail, kCVarLuaConversion>("SetWorldDetail");
 
 }

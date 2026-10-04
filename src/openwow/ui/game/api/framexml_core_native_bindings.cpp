@@ -167,6 +167,8 @@ constexpr openwow::ui::LuaGlobalBinding kSystemLuaBindings[] = {
     {"RegisterCVar", kRegisterCVar.handler},
     {"RegisterStaticConstants", LuaApi_RegisterStaticConstants},
     {"SetBaseMip", kSetBaseMip.handler},
+    {"GetWorldDetail", kGetWorldDetail.handler},
+    {"SetWorldDetail", kSetWorldDetail.handler},
     {"SetWaterDetail", kSetWaterDetail.handler},
     {"GetWaterDetail", LuaGetWaterDetailRetail},
     {"GetAddOnInfo", kGetAddOnInfo.handler},

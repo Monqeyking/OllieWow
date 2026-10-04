@@ -55,6 +55,8 @@
     {"framexml_core_direct", "SetTexLodBias"},
     {"framexml_core_direct", "SetBaseMip"},
     {"framexml_core_direct", "GetBaseMip"},
+    {"framexml_core_direct", "GetWorldDetail"},
+    {"framexml_core_direct", "SetWorldDetail"},
     {"framexml_core_direct", "ToggleTris"},
     {"framexml_core_direct", "TogglePortals"},
     {"framexml_core_direct", "ToggleCollision"},
