@@ -92,6 +92,15 @@ GlueFrameViews BuildGlueFrameGraph(openwow::render::api::FrameGraph& frame_graph
   views.model_view_end = ViewRangeEnd(scene);
   views.ui_view = ui.view_id;
   views.present_view = present.view_id;
+
+  // De wereldframe zet view-scissors (sky-portaalclip) op zijn eigen view-id's en bgfx houdt die vast
+  // tot ze gewist worden. De glue hergebruikt dezelfde id's voor model- en UI-views; zonder dit
+  // blijft na een uitlog het laatste portaalrechthoekje als clip staan.
+  for (std::uint32_t view = scene.view_id; view < ViewRangeEnd(scene); ++view) {
+    bgfx::setViewScissor(static_cast<bgfx::ViewId>(view), 0, 0, 0, 0);
+  }
+  bgfx::setViewScissor(static_cast<bgfx::ViewId>(ui.view_id), 0, 0, 0, 0);
+  bgfx::setViewScissor(static_cast<bgfx::ViewId>(present.view_id), 0, 0, 0, 0);
   return views;
 }
 

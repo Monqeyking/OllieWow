@@ -107,6 +107,10 @@ void UiRenderer::Begin(int view_id, int width, int height) {
   bgfx::setScissor(static_cast<std::uint16_t>(0), static_cast<std::uint16_t>(0),
                    static_cast<std::uint16_t>(width_),
                    static_cast<std::uint16_t>(height_));
+  // Ook de view-scissor wissen (0,0,0,0 = uit): de wereld zet er een op zijn sky-view (portaalclip)
+  // en bgfx houdt die per view-id vast. Een UI-view die dat id hergebruikt, wordt anders tot dat
+  // rechthoekje afgeknipt: het half lege karakterscherm na een uitlog.
+  bgfx::setViewScissor(bgfx_view_id, 0, 0, 0, 0);
 
   float view[16];
   float proj[16];
