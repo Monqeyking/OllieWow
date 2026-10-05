@@ -3,6 +3,7 @@ vec2 v_texcoord0   : TEXCOORD0 = vec2(0.0, 0.0);
 vec2 v_alphaUV     : TEXCOORD1 = vec2(0.0, 0.0);
 vec4 v_color0      : COLOR0    = vec4(1.0, 1.0, 1.0, 1.0);
 float v_viewDist   : TEXCOORD2 = 0.0;
+vec4 v_fogRay    : TEXCOORD6 = vec4(0.0, 0.0, 0.0, 0.0);
 vec3 v_worldPos    : TEXCOORD3 = vec3(0.0, 0.0, 0.0);
 vec4 v_layerSlice  : TEXCOORD4 = vec4(0.0, 0.0, 0.0, 0.0);
 float v_alphaSlice  : TEXCOORD5 = 0.0;

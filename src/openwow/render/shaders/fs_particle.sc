@@ -1,4 +1,4 @@
-$input v_color0, v_texcoord0, v_viewDist
+$input v_color0, v_texcoord0, v_viewDist, v_fogRay
 
 #include <bgfx_shader.sh>
 #include "world_fog.sh"
@@ -31,8 +31,8 @@ void main()
 
     if (u_particleFlags.y < 0.5)
     {
-        float fogFactor = openwowLinearFogVisibility(u_fogParams, v_viewDist);
-        result.rgb = mix(openwowFogRgb(u_fogColor.rgb, u_fogParams, v_viewDist), result.rgb, fogFactor);
+        float fogFactor = openwowLinearFogVisibility(u_fogParams, v_viewDist, v_fogRay);
+        result.rgb = mix(openwowFogRgb(u_fogColor.rgb, u_fogParams, v_viewDist, v_fogRay), result.rgb, fogFactor);
     }
 
     gl_FragColor = result;

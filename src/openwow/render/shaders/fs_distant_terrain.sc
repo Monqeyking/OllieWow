@@ -1,4 +1,4 @@
-$input v_viewDepth
+$input v_viewDepth, v_fogRay
 
 #include <bgfx_shader.sh>
 #include "world_fog.sh"
@@ -18,6 +18,6 @@ void main()
         discard;
     }
 
-    float fogVisibility = openwowLinearFogVisibility(u_distantTerrainFogParams, v_viewDepth);
-    gl_FragColor = vec4(mix(openwowFogRgb(u_distantTerrainFogColor.rgb, u_distantTerrainFogParams, v_viewDepth), vec3_splat(1.0), fogVisibility), 1.0);
+    float fogVisibility = openwowLinearFogVisibility(u_distantTerrainFogParams, v_viewDepth, v_fogRay);
+    gl_FragColor = vec4(mix(openwowFogRgb(u_distantTerrainFogColor.rgb, u_distantTerrainFogParams, v_viewDepth, v_fogRay), vec3_splat(1.0), fogVisibility), 1.0);
 }

@@ -1,4 +1,4 @@
-$input v_texcoord0, v_normal, v_color0, v_viewDist, v_envTexcoord, v_texcoord1, v_color1
+$input v_texcoord0, v_normal, v_color0, v_viewDist, v_envTexcoord, v_texcoord1, v_color1, v_fogRay
 
 #include <bgfx_shader.sh>
 #include "world_fog.sh"
@@ -31,8 +31,8 @@ void main()
     }
 
     if (u_wmoMaterialParams.w < 0.5) {
-        float fogFactor = openwowLinearFogVisibility(u_wmoFogParams, v_viewDist);
-        color = mix(openwowFogRgb(u_wmoFogColor.rgb, u_wmoFogParams, v_viewDist), color, fogFactor);
+        float fogFactor = openwowLinearFogVisibility(u_wmoFogParams, v_viewDist, v_fogRay);
+        color = mix(openwowFogRgb(u_wmoFogColor.rgb, u_wmoFogParams, v_viewDist, v_fogRay), color, fogFactor);
     }
 
     gl_FragColor = vec4(color, alpha);

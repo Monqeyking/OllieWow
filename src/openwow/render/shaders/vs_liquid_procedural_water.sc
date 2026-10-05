@@ -1,5 +1,5 @@
 $input a_position, a_normal, a_texcoord0, a_texcoord1
-$output v_procUv0, v_procUv1, v_procUv2, v_worldPosition, v_tangent, v_bitangent, v_surfaceNormal, v_viewDist
+$output v_procUv0, v_procUv1, v_procUv2, v_worldPosition, v_tangent, v_bitangent, v_surfaceNormal, v_viewDist, v_fogRay
 
 #include <bgfx_shader.sh>
 
@@ -95,6 +95,8 @@ void main()
     v_bitangent = bitangent;
     v_surfaceNormal = surfaceNormal;
     v_viewDist = openwowWorldFogDepth(
+        mul(u_modelView, worldPosition).xyz);
+    v_fogRay = openwowFogRay(
         mul(u_modelView, worldPosition).xyz);
     gl_Position = mul(u_modelViewProj, worldPosition);
 }

@@ -207,5 +207,6 @@ void main()
     v_color0 = materialVertex;
 
     v_viewDist = openwowWorldFogDepth(M2_MODEL_TO_VIEW(localPos).xyz);
+    v_fogRay = openwowFogRay(M2_MODEL_TO_VIEW(localPos).xyz);
 
 }

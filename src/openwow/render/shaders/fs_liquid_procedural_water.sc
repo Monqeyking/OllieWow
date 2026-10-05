@@ -1,4 +1,4 @@
-$input v_procUv0, v_procUv1, v_procUv2, v_worldPosition, v_tangent, v_bitangent, v_surfaceNormal, v_viewDist
+$input v_procUv0, v_procUv1, v_procUv2, v_worldPosition, v_tangent, v_bitangent, v_surfaceNormal, v_viewDist, v_fogRay
 
 #include <bgfx_shader.sh>
 
@@ -69,8 +69,8 @@ void main()
     color += u_liquidSpecular.rgb * specular * specularMask *
              specularScale * 4.0;
 
-    float visibility = openwowLinearFogVisibility(u_liquidFogParams, v_viewDist);
-    color = mix(openwowFogRgb(u_liquidFogColor.rgb, u_liquidFogParams, v_viewDist), color, visibility);
+    float visibility = openwowLinearFogVisibility(u_liquidFogParams, v_viewDist, v_fogRay);
+    color = mix(openwowFogRgb(u_liquidFogColor.rgb, u_liquidFogParams, v_viewDist, v_fogRay), color, visibility);
     float alpha = base.a + fresnel * u_liquidMaterialParams(1).x;
     gl_FragColor = vec4(color, alpha);
 }

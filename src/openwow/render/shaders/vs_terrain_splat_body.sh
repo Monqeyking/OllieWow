@@ -50,6 +50,8 @@ void main()
 
     v_viewDist = openwowWorldFogDepth(
         mul(u_modelView, vec4(a_position, 1.0)).xyz);
+    v_fogRay = openwowFogRay(
+        mul(u_modelView, vec4(a_position, 1.0)).xyz);
     v_worldPos = worldPosition;
 
 #if OPENWOW_TERRAIN_LAYER_ARRAY

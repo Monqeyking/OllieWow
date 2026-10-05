@@ -79,6 +79,6 @@ void main()
     vec3 litColor = blended.rgb * litLight * u_terrainColor.rgb
                   * shadowModulate;
 
-    float fogFactor = openwowLinearFogVisibility(u_terrainFogParams, v_viewDist);
-    gl_FragColor = vec4(mix(openwowFogRgb(u_terrainFogColor.rgb, u_terrainFogParams, v_viewDist), litColor, fogFactor), 1.0);
+    float fogFactor = openwowLinearFogVisibility(u_terrainFogParams, v_viewDist, v_fogRay);
+    gl_FragColor = vec4(mix(openwowFogRgb(u_terrainFogColor.rgb, u_terrainFogParams, v_viewDist, v_fogRay), litColor, fogFactor), 1.0);
 }

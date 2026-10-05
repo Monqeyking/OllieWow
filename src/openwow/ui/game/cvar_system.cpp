@@ -2112,6 +2112,7 @@ void CVarSystem::RegisterDefaults() {
   RegisterCVar("gfxDither", "0", F::Archive, "Dither strength against banding (0 = off)", 0.0f, 2.0f);
   RegisterCVar("gfxClutter", "1", F::Archive, "Ground clutter (grass, flowers, pebbles); 0 = off", 0.0f, 1.0f);
   RegisterCVar("fogModel", "0", F::Archive, "Fog model: 0 = original linear fog, 1 = modern (exponential, sun-tinted)", 0.0f, 1.0f);
+  RegisterCVar("fogSunGlow", "1", F::Archive, "Modern fog: strength of the sun-coloured lobe around the sun (0 = off)", 0.0f, 2.0f);
   RegisterCVar("pixelShaders", "1", F::Archive, "Pixel shaders enabled");
   RegisterCVar("M2UsePixelShaders", "1", F::Archive, "Model pixel shaders (phong shading) enabled");
   RegisterCVar("M2UseShaders", "1", F::Archive, "Vertex animation shaders enabled");

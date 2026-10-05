@@ -1,5 +1,5 @@
 $input a_position, a_color0, a_texcoord0
-$output v_texcoord0, v_primary, v_viewDist
+$output v_texcoord0, v_primary, v_viewDist, v_fogRay
 
 #include <bgfx_shader.sh>
 
@@ -14,5 +14,7 @@ void main()
                   u_liquidUvTransform0.zw;
     v_primary = a_color0;
     v_viewDist = openwowWorldFogDepth(
+        mul(u_modelView, worldPosition).xyz);
+    v_fogRay = openwowFogRay(
         mul(u_modelView, worldPosition).xyz);
 }

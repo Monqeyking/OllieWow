@@ -1,5 +1,5 @@
 $input a_position, a_normal, a_texcoord0, a_color0
-$output v_texcoord0, v_color0, v_viewDist, v_worldPos
+$output v_texcoord0, v_color0, v_viewDist, v_worldPos, v_fogRay
 
 #include <bgfx_shader.sh>
 #include "world_fog.sh"
@@ -46,5 +46,7 @@ void main()
     // donkerder waar de bake onder 0.5 zit: de discrete donkere plekken.
     v_color0 = vec4(clamp(lighting, 0.0, 1.0), a_color0.a);
     v_viewDist = openwowWorldFogDepth(
+        mul(u_modelView, vec4(a_position, 1.0)).xyz);
+    v_fogRay = openwowFogRay(
         mul(u_modelView, vec4(a_position, 1.0)).xyz);
 }

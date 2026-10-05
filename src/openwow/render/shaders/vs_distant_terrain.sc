@@ -1,5 +1,5 @@
 $input a_position
-$output v_viewDepth
+$output v_viewDepth, v_fogRay
 
 #include <bgfx_shader.sh>
 #include "world_fog.sh"
@@ -27,4 +27,5 @@ void main()
     gl_Position.z = (0.99999 + 0.000009 * normalizedDepth) * gl_Position.w;
 
     v_viewDepth = openwowWorldFogDepth(viewPosition.xyz);
+    v_fogRay = openwowFogRay(viewPosition.xyz);
 }

@@ -73,17 +73,36 @@ namespace {
 // Moderne fog (cvar fogModel): zet de globale fog-uniforms voor dit frame. Het scene-fogeinde
 // markeert de spans die de nieuwe wet volgen; een interieur-WMO-paar blijft classic. De eindkleur
 // is Benilla's afgeleide band: de fogkleur voor 25 % richting de laagste skyring (SkySmog).
-void ApplyModernFogUniforms(const world::WorldPresentationSnapshot &snapshot) {
+//
+// Stage 2: voorbij de referentie-farclip (777 yd) rekt het fogeinde van de zone mee met de
+// kijkafstand (tot de farclip zelf), de zon-fogkleur leunt naar de zonkleur rond de zon en
+// verdwijnt 's nachts, en de lucht-horizon krijgt dezelfde eindkleur (zie world_fog.sh). Het
+// rekken past het snapshot aan, zodat elke ontvanger hetzelfde (start, einde)-paar ziet.
+void ApplyModernFogUniforms(world::WorldPresentationSnapshot &snapshot) {
   const render::ModernFogUniformHandles &handles = render::ModernFogUniforms();
-  if (!bgfx::isValid(handles.modern) || !bgfx::isValid(handles.end_color)) {
+  if (!handles.Valid()) {
     return;
   }
-  const auto &environment = snapshot.environment;
+  auto &environment = snapshot.environment;
   const auto &cvars = ui::game::CVarSystem::Instance();
   const bool modern = cvars.Exists("fogModel") && cvars.GetCVarBool("fogModel") &&
                       !environment.indoors && environment.fog_end > 0.0f;
 
-  const float modern_params[4] = {modern ? environment.fog_end : 0.0f, 0.0f, 0.0f, 0.0f};
+  if (modern) {
+    constexpr float kReferenceFarClip = 777.0f;
+    const float far_clip = snapshot.camera.far_clip;
+    const float stretch = std::max(far_clip / kReferenceFarClip, 1.0f);
+    if (stretch > 1.0f) {
+      const float stretched_end = std::min(environment.fog_end * stretch, far_clip);
+      if (stretched_end > environment.fog_end) {
+        environment.fog_start *= stretched_end / environment.fog_end;
+        environment.fog_end = stretched_end;
+      }
+    }
+  }
+
+  const float modern_params[4] = {modern ? environment.fog_end : 0.0f, environment.fog_color[0],
+                                  environment.fog_color[1], environment.fog_color[2]};
   const auto smog = render::PackedArgbToUnitRgb(
       snapshot.sky.colors[static_cast<std::size_t>(world::SkyColorSlot::kSkySmog)]);
   constexpr float kEndFogLean = 0.25f;
@@ -93,8 +112,31 @@ void ApplyModernFogUniforms(const world::WorldPresentationSnapshot &snapshot) {
       environment.fog_color[2] + (smog[2] - environment.fog_color[2]) * kEndFogLean,
       environment.fog_end,
   };
+
+  // Zonlob: sterkte 0,25 (fogSunGlow schaalt), de kleur 40 % van de fogkleur naar het zonlicht,
+  // vanaf cos 0,4 rond de zon. De dagfactor loopt van 6 graden onder tot ~3 graden boven de horizon.
+  constexpr float kSunFogStrength = 0.25f;
+  constexpr float kSunFogLean = 0.4f;
+  constexpr float kSunFogAngle = 0.4f;
+  const float glow = cvars.Exists("fogSunGlow") ? std::clamp(cvars.GetCVarFloat("fogSunGlow"), 0.0f, 2.0f)
+                                                 : 1.0f;
+  const float sun_z = environment.light_direction[2];
+  const float day_t = std::clamp((sun_z + 0.1f) / 0.15f, 0.0f, 1.0f);
+  const float day = day_t * day_t * (3.0f - 2.0f * day_t);
+  const float sun_dir[4] = {environment.light_direction[0], environment.light_direction[1], sun_z,
+                            kSunFogAngle};
+  float sun_color[4];
+  for (std::size_t channel = 0; channel < 3u; ++channel) {
+    const float sun_light = std::clamp(environment.diffuse[channel], 0.0f, 1.0f);
+    sun_color[channel] =
+        environment.fog_color[channel] + (sun_light - environment.fog_color[channel]) * kSunFogLean;
+  }
+  sun_color[3] = modern ? std::clamp(kSunFogStrength * glow * day, 0.0f, 1.0f) : 0.0f;
+
   bgfx::setUniform(handles.modern, modern_params);
   bgfx::setUniform(handles.end_color, end_color);
+  bgfx::setUniform(handles.sun_dir, sun_dir);
+  bgfx::setUniform(handles.sun_color, sun_color);
 }
 
 constexpr std::size_t kMaxQueuedSpellVisualM2Events = 4096u;

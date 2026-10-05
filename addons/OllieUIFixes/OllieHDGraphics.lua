@@ -8,11 +8,11 @@ OHD.refreshing = false
 OHD.controls = {}
 
 local PRESETS = {
-  { name = "Classic", values = { fogModel = "0", gfxClutter = "1", frillDensity = "16",
+  { name = "Classic", values = { fogModel = "0", fogSunGlow = "1", gfxClutter = "1", frillDensity = "16",
       gfxSaturation = "1.0", gfxContrast = "1.0", gfxDither = "0" } },
-  { name = "HD", values = { fogModel = "1", gfxClutter = "1", frillDensity = "32",
+  { name = "HD", values = { fogModel = "1", fogSunGlow = "1", gfxClutter = "1", frillDensity = "32",
       gfxSaturation = "1.1", gfxContrast = "1.05", gfxDither = "1" } },
-  { name = "Ultra", values = { fogModel = "1", gfxClutter = "1", frillDensity = "64",
+  { name = "Ultra", values = { fogModel = "1", fogSunGlow = "1.2", gfxClutter = "1", frillDensity = "64",
       gfxSaturation = "1.15", gfxContrast = "1.08", gfxDither = "1" } },
 }
 
@@ -111,7 +111,7 @@ local function OHD_Build()
 
   local f = CreateFrame("Frame", "OllieHDGraphicsFrame", UIParent)
   f:SetWidth(320)
-  f:SetHeight(470)
+  f:SetHeight(516)
   f:SetFrameStrata("DIALOG")
   f:SetToplevel(true)
   f:SetMovable(true)
@@ -161,15 +161,16 @@ local function OHD_Build()
   h1:SetPoint("TOPLEFT", f, "TOPLEFT", 24, -108)
   h1:SetText("World")
   OHD_MakeCheck(f, "OllieHDGraphicsFog", "Modern fog", "fogModel", -124)
-  OHD_MakeCheck(f, "OllieHDGraphicsClutter", "Ground clutter (grass, flowers)", "gfxClutter", -150)
-  OHD_MakeSlider(f, "OllieHDGraphicsDensity", "Clutter density", 1, 128, 1, 0, "frillDensity", 16, -196)
+  OHD_MakeSlider(f, "OllieHDGraphicsSunGlow", "Sun glow in fog", 0, 2, 0.1, 1, "fogSunGlow", 1, -170)
+  OHD_MakeCheck(f, "OllieHDGraphicsClutter", "Ground clutter (grass, flowers)", "gfxClutter", -196)
+  OHD_MakeSlider(f, "OllieHDGraphicsDensity", "Clutter density", 1, 128, 1, 0, "frillDensity", 16, -242)
 
   local h2 = f:CreateFontString(nil, "ARTWORK", "GameFontNormal")
-  h2:SetPoint("TOPLEFT", f, "TOPLEFT", 24, -226)
+  h2:SetPoint("TOPLEFT", f, "TOPLEFT", 24, -272)
   h2:SetText("Image")
-  OHD_MakeSlider(f, "OllieHDGraphicsSaturation", "Saturation", 0.5, 1.5, 0.05, 2, "gfxSaturation", 1, -262)
-  OHD_MakeSlider(f, "OllieHDGraphicsContrast", "Contrast", 0.8, 1.3, 0.01, 2, "gfxContrast", 1, -312)
-  OHD_MakeSlider(f, "OllieHDGraphicsDither", "Dither (less banding)", 0, 2, 0.25, 2, "gfxDither", 0, -362)
+  OHD_MakeSlider(f, "OllieHDGraphicsSaturation", "Saturation", 0.5, 1.5, 0.05, 2, "gfxSaturation", 1, -308)
+  OHD_MakeSlider(f, "OllieHDGraphicsContrast", "Contrast", 0.8, 1.3, 0.01, 2, "gfxContrast", 1, -358)
+  OHD_MakeSlider(f, "OllieHDGraphicsDither", "Dither (less banding)", 0, 2, 0.25, 2, "gfxDither", 0, -408)
 
   local reset = CreateFrame("Button", "OllieHDGraphicsReset", f, "UIPanelButtonTemplate")
   reset:SetWidth(130)
@@ -204,25 +205,62 @@ function OllieHDGraphics_Toggle()
   f:Show()
 end
 
--- A button on the stock Video Options window. It is parented to OptionsFrame, so it shows and
--- hides together with it.
-local function OHD_AttachButton()
-  if OHD.button or not OptionsFrame then return end
-  local b = CreateFrame("Button", "OllieHDGraphicsButton", OptionsFrame, "UIPanelButtonTemplate")
-  b:SetWidth(130)
-  b:SetHeight(22)
-  b:SetPoint("TOPRIGHT", OptionsFrame, "BOTTOMRIGHT", 0, 2)
-  b:SetText("HD Graphics")
-  b:SetScript("OnClick", function() OllieHDGraphics_Toggle() end)
-  OHD.button = b
+-- Local Turtle OptionsFrame renders GameOptions rows with its own templates,
+-- shared label/control anchors and OPTIONS_OPTION_OFFSET. Keep this page in
+-- that layout instead of placing a separate button outside the window.
+local function OHD_AttachCategory()
+  if OHD.category or not GameOptions or not OptionsFrame then return end
+
+  -- Insert at the end of Video, before the next non-selectable section heading.
+  -- Do not rely on translated category names or fixed category indices.
+  local insertAt = nil
+  for i = 1, table.getn(GameOptions) do
+    if not GameOptions[i].options then
+      if insertAt then break end
+      insertAt = i + 1
+    elseif insertAt then
+      insertAt = i + 1
+    end
+  end
+  if not insertAt then return end
+
+  OLLIE_HD_FOG = "Modern fog"
+  OLLIE_HD_SUNGLOW = "Sun glow in fog"
+  OLLIE_HD_CLUTTER = "Ground clutter (grass, flowers)"
+  OLLIE_HD_DENSITY = "Clutter density"
+  OLLIE_HD_SATURATION = "Saturation"
+  OLLIE_HD_CONTRAST = "Contrast"
+  OLLIE_HD_DITHER = "Dither (less banding)"
+
+  local category = {
+    name = "HD Graphics",
+    options = {
+      { name = "OLLIE_HD_FOG", type = "checkbutton", cvar = "fogModel" },
+      { name = "OLLIE_HD_SUNGLOW", type = "slider", cvar = "fogSunGlow",
+        minval = 0, maxval = 2, step = 0.1, numberLabels = true },
+      { name = "OLLIE_HD_CLUTTER", type = "checkbutton", cvar = "gfxClutter" },
+      { name = "OLLIE_HD_DENSITY", type = "slider", cvar = "frillDensity",
+        minval = 1, maxval = 128, step = 1, numberLabels = true },
+      { name = "OLLIE_HD_SATURATION", type = "slider", cvar = "gfxSaturation",
+        minval = 0.5, maxval = 1.5, step = 0.05, numberLabels = true },
+      { name = "OLLIE_HD_CONTRAST", type = "slider", cvar = "gfxContrast",
+        minval = 0.8, maxval = 1.3, step = 0.01, numberLabels = true },
+      { name = "OLLIE_HD_DITHER", type = "slider", cvar = "gfxDither",
+        minval = 0, maxval = 2, step = 0.25, numberLabels = true },
+    },
+  }
+  table.insert(GameOptions, insertAt, category)
+  OHD.category = category
+  if OptionsFrame_UpdateCategories then OptionsFrame_UpdateCategories() end
 end
 
 SLASH_OLLIEHDGRAPHICS1 = "/hd"
 SLASH_OLLIEHDGRAPHICS2 = "/hdgraphics"
 SlashCmdList["OLLIEHDGRAPHICS"] = function() OllieHDGraphics_Toggle() end
 
-pcall(OHD_AttachButton)
+pcall(OHD_AttachCategory)
 
 local ev = CreateFrame("Frame")
+ev:RegisterEvent("VARIABLES_LOADED")
 ev:RegisterEvent("PLAYER_ENTERING_WORLD")
-ev:SetScript("OnEvent", function() pcall(OHD_AttachButton) end)
+ev:SetScript("OnEvent", function() pcall(OHD_AttachCategory) end)

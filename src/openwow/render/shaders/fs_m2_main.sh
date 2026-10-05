@@ -145,8 +145,8 @@ void main()
     }
 
     if (u_materialFlags.y < 0.5) {
-        float fogFactor = openwowLinearFogVisibility(u_fogParams, v_viewDist);
-        result.rgb = mix(openwowFogRgb(u_fogColor.rgb, u_fogParams, v_viewDist), result.rgb, fogFactor);
+        float fogFactor = openwowLinearFogVisibility(u_fogParams, v_viewDist, v_fogRay);
+        result.rgb = mix(openwowFogRgb(u_fogColor.rgb, u_fogParams, v_viewDist, v_fogRay), result.rgb, fogFactor);
     }
 
     gl_FragColor = clamp(result, 0.0, 1.0);

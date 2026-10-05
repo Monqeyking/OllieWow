@@ -1,6 +1,7 @@
 vec2 v_texcoord0 : TEXCOORD0 = vec2(0.0, 0.0);
 vec4 v_primary   : COLOR0    = vec4(1.0, 1.0, 1.0, 1.0);
 float v_viewDist : TEXCOORD1 = 0.0;
+vec4 v_fogRay    : TEXCOORD2 = vec4(0.0, 0.0, 0.0, 0.0);
 
 vec3 a_position  : POSITION;
 vec3 a_normal    : NORMAL;

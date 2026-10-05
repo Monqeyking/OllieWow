@@ -1,4 +1,4 @@
-$input v_texcoord0, v_color0, v_viewDist, v_worldPos
+$input v_texcoord0, v_color0, v_viewDist, v_worldPos, v_fogRay
 
 #include <bgfx_shader.sh>
 #include "world_fog.sh"
@@ -23,6 +23,6 @@ void main()
     // vermenigvuldiging is weg, dus de compensatie ook (referentie: MOD 1x).
     vec3 litColor = u_terrainColor.rgb * v_color0.rgb * shadowModulate;
 
-    float fogFactor = openwowLinearFogVisibility(u_terrainFogParams, v_viewDist);
-    gl_FragColor = vec4(mix(openwowFogRgb(u_terrainFogColor.rgb, u_terrainFogParams, v_viewDist), litColor, fogFactor), u_terrainColor.a);
+    float fogFactor = openwowLinearFogVisibility(u_terrainFogParams, v_viewDist, v_fogRay);
+    gl_FragColor = vec4(mix(openwowFogRgb(u_terrainFogColor.rgb, u_terrainFogParams, v_viewDist, v_fogRay), litColor, fogFactor), u_terrainColor.a);
 }
