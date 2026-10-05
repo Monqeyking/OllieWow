@@ -103,11 +103,12 @@ void ShadowPresentationRuntime::InvalidateShadowReuse() noexcept {
 
 void ShadowPresentationRuntime::ApplySettings(const world::WorldPresentationSnapshot &snapshot) {
   const auto &settings = snapshot.shadows;
-  // Dag/nacht: de zonhoogte (z van de richting naar de zon) stuurt de sterkte. Onder ~3 graden
-  // (nacht, schemering) geen schaduw: de kaart zou dan van onderaf of bijna vlak projecteren.
-  // Vol vanaf ~17 graden. Bij sterkte 0 slaan we de hele schaduwpass over.
+  // Dag/nacht: de zonhoogte (z van de richting naar de zon) stuurt de sterkte. Onder ~7 graden
+  // (nacht, schemering) geen schaduw: de kaart zou dan van onderaf of bijna vlak projecteren,
+  // en de schaduwen zijn dan veel langer dan de kaart. Vol vanaf ~24 graden. Bij sterkte 0
+  // slaan we de hele schaduwpass over.
   const float sun_height = snapshot.environment.light_direction[2];
-  const float day_t = std::clamp((sun_height - 0.05f) / 0.25f, 0.0f, 1.0f);
+  const float day_t = std::clamp((sun_height - 0.12f) / 0.28f, 0.0f, 1.0f);
   const float day = day_t * day_t * (3.0f - 2.0f * day_t);
   const float strength = std::clamp(settings.strength, 0.0f, 1.0f) * day;
   data_->SetStrength(strength);

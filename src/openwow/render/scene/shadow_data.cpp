@@ -289,7 +289,14 @@ void ShadowRenderData::BuildLightMatrices(const float* camera_mtx,
     // dan onafhankelijk van draaien, en een schaduw blijft op zijn plek in de wereld.
     static_cast<void>(forward_x);
     static_cast<void>(forward_y);
-    float center[3] = {eye[0], eye[1], eye[2]};
+    // Het middelpunt springt in stappen van 24 yd mee met het oog, in plaats van continu. De
+    // camera draait en zoomt in een baan van enkele tientallen yards rond de speler; zonder
+    // stappen schuift de rand van de kaart daarbij mee en lijkt een lange schaduw korter of
+    // langer te worden. Met stappen staat de rand vast zolang je binnen een cel blijft.
+    constexpr float kCenterStep = 24.0f;
+    float center[3] = {std::floor(eye[0] / kCenterStep + 0.5f) * kCenterStep,
+                       std::floor(eye[1] / kCenterStep + 0.5f) * kCenterStep,
+                       std::floor(eye[2] / kCenterStep + 0.5f) * kCenterStep};
     center_[0] = center[0];
     center_[1] = center[1];
     center_[2] = center[2];
