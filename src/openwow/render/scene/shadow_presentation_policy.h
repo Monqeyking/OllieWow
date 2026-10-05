@@ -28,12 +28,14 @@ static_assert(!BlobShadowsEnabled(5));
 
 [[nodiscard]] inline constexpr world::ShadowPresentationSettings
 ResolveShadowPresentationSettings(const int requested_quality, const bool map_shadows,
-                                  const bool projected_textures) noexcept {
+                                  const bool projected_textures,
+                                  const bool environmental_maps_enabled =
+                                      kEnvironmentalShadowMapsEnabled) noexcept {
   const auto quality = static_cast<std::uint8_t>(std::clamp(requested_quality, 0, 5));
   const std::uint16_t resolution = quality >= 4u ? kEnvironmentalShadowMapHighRes
                                                  : kEnvironmentalShadowMapLowRes;
   return {
-      .enabled = kEnvironmentalShadowMapsEnabled && map_shadows && projected_textures &&
+      .enabled = environmental_maps_enabled && map_shadows && projected_textures &&
                  quality >= kMinEnvironmentalShadowQuality,
       .quality = quality,
       .map_resolution = resolution,
@@ -53,6 +55,8 @@ static_assert(ResolveShadowPresentationSettings(4, true, true).map_resolution ==
 static_assert(ResolveShadowPresentationSettings(5, true, true).quality == 5u);
 static_assert(ResolveShadowPresentationSettings(5, true, true).distance ==
               kEnvironmentalShadowDistanceYards);
+static_assert(ResolveShadowPresentationSettings(3, true, true, true).enabled);
+static_assert(!ResolveShadowPresentationSettings(2, true, true, true).enabled);
 static_assert(!ResolveShadowPresentationSettings(5, false, true).enabled);
 static_assert(!ResolveShadowPresentationSettings(5, true, false).enabled);
 

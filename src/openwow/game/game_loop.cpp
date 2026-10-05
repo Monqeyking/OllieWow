@@ -5410,7 +5410,8 @@ void GameLoop::RenderWorld(float dt) {
   world::ShadowPresentationSettings shadow_settings =
       (force_shadows || (cvars.Exists("gfxShadows") && cvars.GetCVarBool("gfxShadows")))
           ? render::ResolveShadowPresentationSettings(
-                std::max(cvars.GetCVarInt("extShadowQuality"), 3), true, true)
+                std::max(cvars.GetCVarInt("extShadowQuality"), 3), true, true,
+                /*environmental_maps_enabled=*/true)
           : render::ResolveShadowPresentationSettings(cvars.GetCVarInt("extShadowQuality"),
                                                       cvars.GetCVarBool("mapShadows"),
                                                       cvars.GetCVarBool("projectedTextures"));
