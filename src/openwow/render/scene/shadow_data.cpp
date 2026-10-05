@@ -373,8 +373,12 @@ void ShadowRenderData::BuildLightMatrices(const float* camera_mtx,
                   bx::Handedness::Left);
 
     const float ortho_size = radius;
-    const float near_p = -radius * 2.0f;
-    const float far_p  =  radius * 2.0f;
+    // De lichtcamera staat 2R vanaf het middelpunt (naar de zon toe) en kijkt ernaartoe. Het
+    // dieptebereik loopt daarom van 0 tot 4R: 2R aan de zonkant van het middelpunt tot 2R erachter,
+    // waar de schaduwen vallen. Eerder was het -2R..+2R, waardoor het far-vlak precies door het
+    // middelpunt lag en alles aan de schaduwkant daarvan buiten de kaart viel (belicht).
+    const float near_p = 0.0f;
+    const float far_p  = radius * 4.0f;
 
     bx::mtxOrtho(out_light_proj,
                  -ortho_size, ortho_size,
