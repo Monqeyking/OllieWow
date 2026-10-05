@@ -321,6 +321,8 @@ class WorldScene final
       object_wmo_bindings_;
   std::uint64_t next_object_wmo_owner_{kFirstObjectWmoOwner};
   world::ShadowPresentationSettings shadow_settings_{};
+  std::array<float, 3> player_focus_{};
+  bool has_player_focus_{false};
 
   const openwow::data::dbc::DbcLoader* dbc_{nullptr};
   std::unique_ptr<render::ObjectRenderer>& object_renderer_;

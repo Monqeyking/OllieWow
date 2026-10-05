@@ -1283,6 +1283,8 @@ void WorldScene::PrepareFrame(const render::api::RendererContext* renderer_conte
   presentation_snapshot_ = world_map_.PublishPresentationSnapshot(
       presentation_camera, render_camera.far_clip);
   presentation_snapshot_.shadows = shadow_settings_;
+  presentation_snapshot_.camera.focus_position = player_focus_;
+  presentation_snapshot_.camera.has_focus = has_player_focus_;
   ApplyModernFogUniforms(presentation_snapshot_);
   ConsumeWorldPresentationCommands();
 
@@ -1595,6 +1597,8 @@ void WorldScene::LoadMap(std::uint32_t map_id, const std::string& map_name) {
 }
 
 void WorldScene::UpdatePlayerPosition(float x, float y, float z) {
+  player_focus_ = {x, y, z};
+  has_player_focus_ = true;
   world_map_.UpdatePlayerPosition(x, y, z);
   world_environment_.SetIndoors(
       !world_map_.IsOutdoorsAtPosition(x, y, z));

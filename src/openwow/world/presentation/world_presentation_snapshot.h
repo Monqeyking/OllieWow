@@ -23,6 +23,10 @@ struct CameraSnapshot {
   std::array<float, 24> frustum_planes{};
   float near_clip{0.5f};
   float far_clip{350.0f};
+  // Waar de speler staat (de schaduwkaart hangt hieraan; draaien en zoomen verplaatsen alleen de
+  // camera, niet de speler). has_focus is onwaar zolang er geen speler is.
+  std::array<float, 3> focus_position{};
+  bool has_focus{false};
 };
 
 struct WorldPresentationItem {

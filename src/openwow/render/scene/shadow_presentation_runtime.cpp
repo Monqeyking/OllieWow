@@ -163,6 +163,10 @@ void ShadowPresentationRuntime::Render(const world::WorldPresentationSnapshot &s
   }
 
   const auto &camera = snapshot.camera.position;
+  // De kaart en de verzameling hangen aan de speler, niet aan de camera: draaien en zoomen
+  // verplaatsen alleen de camera, dus de schaduwen blijven staan.
+  const auto &anchor =
+      snapshot.camera.has_focus ? snapshot.camera.focus_position : snapshot.camera.position;
   // Alleen wat de stabiele kaart (straal ~80 yd) kan raken, plus marge voor hoge werpers.
   const float gather_radius = ShadowRenderData::RadiusForDistance(snapshot.shadows.distance) * 1.8f;
   const float max_distance_squared = gather_radius * gather_radius;
@@ -182,9 +186,9 @@ void ShadowPresentationRuntime::Render(const world::WorldPresentationSnapshot &s
                                   if (instance.m2_instance_id == 0u || instance.alpha <= 0.0f) {
                                     return;
                                   }
-                                  const float dx = instance.bounding_center[0] - camera[0];
-                                  const float dy = instance.bounding_center[1] - camera[1];
-                                  const float dz = instance.bounding_center[2] - camera[2];
+                                  const float dx = instance.bounding_center[0] - anchor[0];
+                                  const float dy = instance.bounding_center[1] - anchor[1];
+                                  const float dz = instance.bounding_center[2] - anchor[2];
                                   if (dx * dx + dy * dy + dz * dz > max_distance_squared) {
                                     return;
                                   }
@@ -250,7 +254,7 @@ void ShadowPresentationRuntime::Render(const world::WorldPresentationSnapshot &s
 
   if (extra_caster_provider_) {
     extra_caster_ids_.clear();
-    extra_caster_provider_(camera[0], camera[1], camera[2], gather_radius, extra_caster_ids_);
+    extra_caster_provider_(anchor[0], anchor[1], anchor[2], gather_radius, extra_caster_ids_);
     for (const std::uint32_t id : extra_caster_ids_) {
       // Units bewegen en animeren: dat frame hergebruiken we niet.
       frame_key.reusable = false;
@@ -281,7 +285,7 @@ void ShadowPresentationRuntime::Render(const world::WorldPresentationSnapshot &s
     return;
   }
 
-  data_->SetCameraAnchor(snapshot.camera.position.data(), snapshot.camera.forward.data());
+  data_->SetCameraAnchor(anchor.data(), snapshot.camera.forward.data());
   if (!data_->PrepareShadowPass(
           snapshot.camera.view.data(), snapshot.camera.projection.data(),
           snapshot.camera.near_clip,
@@ -294,12 +298,9 @@ void ShadowPresentationRuntime::Render(const world::WorldPresentationSnapshot &s
   frame_key.caster_count = static_cast<std::uint32_t>(casters_.size());
   std::uint64_t hash = caster_hash;
   hash = HashValue(hash, snapshot.map_generation.value);
-  hash = HashValue(hash, snapshot.camera.view);
-  hash = HashValue(hash, snapshot.camera.projection);
-  hash = HashValue(hash, snapshot.camera.position);
-  hash = HashValue(hash, snapshot.camera.forward);
-  hash = HashValue(hash, snapshot.camera.near_clip);
-  hash = HashValue(hash, snapshot.camera.far_clip);
+  // De kaartinhoud hangt niet van de camera af (alleen van de speler, de casters en het licht):
+  // draaien en zoomen mogen het hergebruik niet breken.
+  hash = HashValue(hash, anchor);
   hash = HashValue(hash, snapshot.shadows.enabled);
   hash = HashValue(hash, snapshot.shadows.quality);
   hash = HashValue(hash, snapshot.shadows.map_resolution);
