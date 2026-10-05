@@ -133,10 +133,14 @@ void ApplyModernFogUniforms(world::WorldPresentationSnapshot &snapshot) {
   }
   sun_color[3] = modern ? std::clamp(kSunFogStrength * glow * day, 0.0f, 1.0f) : 0.0f;
 
-  bgfx::setUniform(handles.modern, modern_params);
-  bgfx::setUniform(handles.end_color, end_color);
-  bgfx::setUniform(handles.sun_dir, sun_dir);
-  bgfx::setUniform(handles.sun_color, sun_color);
+  // Bewaren in plaats van nu zetten: een bgfx-uniform bereikt alleen de draw in dezelfde encoder
+  // die erna volgt. De DrawEncoder-wrappers zetten deze waarden vlak voor elke submit.
+  render::ModernFogValues &values = render::ModernFogCurrentValues();
+  std::copy_n(modern_params, 4u, values.modern);
+  std::copy_n(end_color, 4u, values.end_color);
+  std::copy_n(sun_dir, 4u, values.sun_dir);
+  std::copy_n(sun_color, 4u, values.sun_color);
+  values.valid = true;
 }
 
 constexpr std::size_t kMaxQueuedSpellVisualM2Events = 4096u;

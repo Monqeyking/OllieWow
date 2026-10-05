@@ -1,6 +1,7 @@
 #include "openwow/render/effects/particles/particle_system.h"
 
 #include "openwow/render/resources/shaders/shader_registry.h"
+#include "openwow/render/world/environment/modern_fog_uniforms.h"
 #include "openwow/foundation/diagnostics/logging.h"
 
 #include <algorithm>
@@ -548,6 +549,7 @@ void ParticleSystem::Render(uint8_t view_id, const float* view_mtx,
     bgfx::setUniform(u_fog_params_, fog_.params.data());
     bgfx::setUniform(u_fog_color_, fog_.color.data());
     bgfx::setState(blend_state);
+    ApplyModernFogToEncoder(nullptr);
     bgfx::submit(view_id, program_);
 
     vb_offset += static_cast<uint32_t>(verts.size());

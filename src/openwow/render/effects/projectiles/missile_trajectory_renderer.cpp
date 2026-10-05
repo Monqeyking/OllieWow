@@ -5,6 +5,7 @@
 #include "openwow/render/backend/bgfx/bgfx_texture_lease.h"
 #include "openwow/render/resources/textures/texture_manager.h"
 #include "openwow/render/resources/shaders/shader_registry.h"
+#include "openwow/render/world/environment/modern_fog_uniforms.h"
 #include "openwow/foundation/diagnostics/logging.h"
 
 #include <algorithm>
@@ -211,6 +212,7 @@ void MissileTrajectoryRenderer::SetDrawUniforms(
   bgfx::setUniform(ribbon_color_, kWhite.data());
   bgfx::setUniform(fog_color_, fog.color.data());
   bgfx::setUniform(fog_params_, fog.params.data());
+  ApplyModernFogToEncoder(nullptr);
 }
 
 void MissileTrajectoryRenderer::SubmitSpellChains(

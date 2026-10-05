@@ -43,9 +43,47 @@ inline void CreateModernFogUniforms() {
   }
 }
 
+// De waarden van dit frame. Een bgfx-uniform geldt alleen voor de draw waaraan hij gehecht is (en
+// voor draws die erna in dezelfde encoder volgen), niet voor draws in andere encoders of views.
+// De waarden worden daarom hier bewaard (WorldScene zet ze per frame) en door de DrawEncoder-
+// wrappers vlak voor elke submit opnieuw gezet: ApplyModernFogToEncoder.
+struct ModernFogValues {
+  float modern[4]{};
+  float end_color[4]{};
+  float sun_dir[4]{};
+  float sun_color[4]{};
+  bool valid = false;
+};
+
+[[nodiscard]] inline ModernFogValues &ModernFogCurrentValues() noexcept {
+  static ModernFogValues values;
+  return values;
+}
+
+// Zet de vier fog-uniforms op de volgende draw van `encoder` (nullptr = de impliciete encoder).
+inline void ApplyModernFogToEncoder(bgfx::Encoder *encoder) {
+  const ModernFogValues &values = ModernFogCurrentValues();
+  const ModernFogUniformHandles &handles = ModernFogUniforms();
+  if (!values.valid || !handles.Valid()) {
+    return;
+  }
+  if (encoder != nullptr) {
+    encoder->setUniform(handles.modern, values.modern);
+    encoder->setUniform(handles.end_color, values.end_color);
+    encoder->setUniform(handles.sun_dir, values.sun_dir);
+    encoder->setUniform(handles.sun_color, values.sun_color);
+  } else {
+    bgfx::setUniform(handles.modern, values.modern);
+    bgfx::setUniform(handles.end_color, values.end_color);
+    bgfx::setUniform(handles.sun_dir, values.sun_dir);
+    bgfx::setUniform(handles.sun_color, values.sun_color);
+  }
+}
+
 // bgfx::shutdown vernietigt de uniforms zelf; hier laten we alleen de verouderde handles los.
 inline void ResetModernFogUniforms() noexcept {
   ModernFogUniforms() = ModernFogUniformHandles{};
+  ModernFogCurrentValues() = ModernFogValues{};
 }
 
 }  // namespace openwow::render

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "openwow/render/m2/m2_transparent_draw_order.h"
+#include "openwow/render/world/environment/modern_fog_uniforms.h"
 
 #include <bgfx/bgfx.h>
 
@@ -110,6 +111,7 @@ class M2DrawEncoder {
               std::uint8_t flags = BGFX_DISCARD_ALL) const {
     const std::uint32_t depth =
         sort_depth_ != nullptr ? sort_depth_->NextDrawDepth() : 0u;
+    ApplyModernFogToEncoder(encoder_);
     if (encoder_ != nullptr) {
       encoder_->submit(id, program, depth, flags);
     } else {

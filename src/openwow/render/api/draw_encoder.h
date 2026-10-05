@@ -1,5 +1,7 @@
 #pragma once
 
+#include "openwow/render/world/environment/modern_fog_uniforms.h"
+
 #include <bgfx/bgfx.h>
 
 #include <cstdint>
@@ -131,6 +133,7 @@ class DrawEncoder {
   void submit(bgfx::ViewId id, bgfx::ProgramHandle program,
               std::uint32_t depth = 0,
               std::uint8_t flags = BGFX_DISCARD_ALL) const {
+    ApplyModernFogToEncoder(encoder_);
     if (encoder_ != nullptr) {
       encoder_->submit(id, program, depth, flags);
     } else {
