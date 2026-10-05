@@ -2336,6 +2336,42 @@ void DoodadRenderer::CollectAdmittedWalk(const world::Frustum &frustum, const fl
   admitted_walk_consumable_ = true;
 }
 
+void DoodadRenderer::VisitInstancesAroundCamera(
+    const float camera_x, const float camera_y, const float camera_z,
+    const std::function<void(const DoodadInstance &, const DoodadAdmission &)> &visitor) {
+  if (!visitor) {
+    return;
+  }
+  const RenderVec3 no_forward{0.0f, 0.0f, 0.0f};
+  const auto visit_owner = [&](OwnedDoodads &owner,
+                               const std::array<std::uint16_t, 4> *const active_wmo_doodad_sets) {
+    ForEachAdmissionCandidate(
+        owner, nullptr, camera_x, camera_y, camera_z, environment_detail_,
+        [&](DoodadInstance &instance) {
+          if (active_wmo_doodad_sets != nullptr &&
+              !IsWmoDoodadSetSelected(instance, *active_wmo_doodad_sets)) {
+            return;
+          }
+          const DoodadAdmission admission = EvaluateDoodadAdmission(
+              instance, nullptr, camera_x, camera_y, camera_z, no_forward, environment_detail_);
+          if (admission.visible) {
+            visitor(instance, admission);
+          }
+        });
+  };
+  for (auto &[key, owner] : tile_doodads_) {
+    (void)key;
+    visit_owner(owner, nullptr);
+  }
+  for (auto &[owner_id, owner] : wmo_doodads_) {
+    (void)owner_id;
+    if (!owner.enabled) {
+      continue;
+    }
+    visit_owner(owner, &owner.active_wmo_doodad_sets);
+  }
+}
+
 void DoodadRenderer::VisitCollisionTriangles(
     const std::array<float, 6>& world_bounds,
     const std::function<void(const DoodadCollisionTriangle&)>& visitor,

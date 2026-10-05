@@ -15,7 +15,8 @@ inline constexpr std::uint8_t kMinEnvironmentalShadowQuality = 3;
 
 inline constexpr std::uint16_t kEnvironmentalShadowMapLowRes = 1024;
 inline constexpr std::uint16_t kEnvironmentalShadowMapHighRes = 2048;
-inline constexpr float kEnvironmentalShadowDistanceYards = 640.0f;
+// 960 yd geeft een kaartstraal van 120 yd rond de camera (zie ShadowRenderData::RadiusForDistance).
+inline constexpr float kEnvironmentalShadowDistanceYards = 960.0f;
 
 [[nodiscard]] inline constexpr bool BlobShadowsEnabled(
     const int ext_shadow_quality) noexcept {

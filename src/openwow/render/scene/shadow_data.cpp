@@ -285,9 +285,11 @@ void ShadowRenderData::BuildLightMatrices(const float* camera_mtx,
     const float radius = radius_;
     depth_range_ = radius * 4.0f;
 
-    // Ruim de helft van de kaart ligt voor de camera: daar kijk je naar.
-    float center[3] = {eye[0] + forward_x * radius * 0.35f,
-                       eye[1] + forward_y * radius * 0.35f, eye[2]};
+    // Het middelpunt ligt op het oog en volgt de kijkrichting niet: de dekking van de kaart is
+    // dan onafhankelijk van draaien, en een schaduw blijft op zijn plek in de wereld.
+    static_cast<void>(forward_x);
+    static_cast<void>(forward_y);
+    float center[3] = {eye[0], eye[1], eye[2]};
     center_[0] = center[0];
     center_[1] = center[1];
     center_[2] = center[2];

@@ -251,6 +251,13 @@ public:
     }
   }
 
+  // Alle doodads rond de camera die op afstand (LOD) zichtbaar zijn, zonder frustumtest en zonder
+  // de gedeelde admission-cache aan te raken. Voor de zon-schaduwkaart: een boom achter je werpt
+  // nog steeds schaduw in beeld.
+  void VisitInstancesAroundCamera(
+      float camera_x, float camera_y, float camera_z,
+      const std::function<void(const DoodadInstance &, const DoodadAdmission &)> &visitor);
+
   void VisitCollisionTriangles(
       const std::array<float, 6>& world_bounds,
       const std::function<void(const DoodadCollisionTriangle&)>& visitor,

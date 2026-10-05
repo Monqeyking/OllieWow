@@ -162,11 +162,6 @@ void ShadowPresentationRuntime::Render(const world::WorldPresentationSnapshot &s
   }
 
   const auto &camera = snapshot.camera.position;
-  world::Frustum camera_frustum{};
-  for (std::size_t plane = 0; plane < camera_frustum.planes.size(); ++plane) {
-    std::copy_n(snapshot.camera.frustum_planes.begin() + plane * 4u, 4u,
-                camera_frustum.planes[plane].begin());
-  }
   // Alleen wat de stabiele kaart (straal ~80 yd) kan raken, plus marge voor hoge werpers.
   const float gather_radius = ShadowRenderData::RadiusForDistance(snapshot.shadows.distance) * 1.8f;
   const float max_distance_squared = gather_radius * gather_radius;
@@ -178,8 +173,11 @@ void ShadowPresentationRuntime::Render(const world::WorldPresentationSnapshot &s
   ShadowFrameKey frame_key{};
   frame_key.reusable = true;
   std::uint64_t caster_hash = kFnv1aOffsetBasis;
-  doodads.VisitVisibleInstances(camera_frustum, camera[0], camera[1], camera[2],
-                                snapshot.camera.forward, [&](const DoodadInstance &instance) {
+  // Casters komen uit alle doodads rond de camera, niet alleen uit wat in beeld is: een schaduw
+  // hangt aan de wereld en mag niet verschijnen of verdwijnen als je de camera draait.
+  doodads.VisitInstancesAroundCamera(camera[0], camera[1], camera[2],
+                                [&](const DoodadInstance &instance, const DoodadAdmission &admission) {
+
                                   if (instance.m2_instance_id == 0u || instance.alpha <= 0.0f) {
                                     return;
                                   }
@@ -208,7 +206,7 @@ void ShadowPresentationRuntime::Render(const world::WorldPresentationSnapshot &s
                                   caster_hash = HashValue(caster_hash, instance.alpha);
                                   caster_hash = HashValue(caster_hash, instance.tint_color[3]);
                                   caster_hash = HashValue(
-                                      caster_hash, instance.admission_cache.distance_alpha);
+                                      caster_hash, admission.distance_alpha);
                                   caster_hash = HashValue(
                                       caster_hash, instance.wmo_color_is_ambient_substitute);
                                   caster_hash =
