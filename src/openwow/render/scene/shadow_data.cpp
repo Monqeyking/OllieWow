@@ -290,8 +290,19 @@ void ShadowRenderData::BuildLightMatrices(const float* camera_mtx,
     static_cast<void>(forward_x);
     static_cast<void>(forward_y);
     // Het anker is de speler (zie SetCameraAnchor): draaien en zoomen verplaatsen alleen de
-    // camera, dus de kaart blijft staan. Alleen lopen verschuift hem, in texelstappen (hieronder).
-    float center[3] = {eye[0], eye[1], eye[2]};
+    // camera, dus de kaart blijft staan. Het middelpunt zit bovendien vast aan een wereldrooster
+    // van 32 yd en blijft staan tot je meer dan 28 yd ervan af bent (dode zone). Een schaduw
+    // hangt aan de wereld: de rand van de kaart en de uitfade liggen zo op vaste plekken, en een
+    // boom wordt niet zwakker of korter omdat jij een stap zet.
+    constexpr float kCenterGrid = 32.0f;
+    constexpr float kCenterHold = 28.0f;
+    float center[3];
+    for (int axis = 0; axis < 3; ++axis) {
+        const bool keep = center_valid_ && std::fabs(eye[axis] - center_[axis]) <= kCenterHold;
+        center[axis] = keep ? center_[axis]
+                            : std::floor(eye[axis] / kCenterGrid + 0.5f) * kCenterGrid;
+    }
+    center_valid_ = true;
     center_[0] = center[0];
     center_[1] = center[1];
     center_[2] = center[2];
@@ -398,6 +409,7 @@ void ShadowRenderData::Reset() {
     lightX_     = 0.0f;
     lightY_     = -1.0f;
     lightZ_     = 0.0f;
+    center_valid_ = false;
     enabled_    = true;
     DestroyShadowMap();
 }

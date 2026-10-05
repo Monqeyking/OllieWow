@@ -146,6 +146,7 @@ private:
     float         radius_    = 80.0f;
     float         depth_range_ = 320.0f;
     float         center_[3]{};
+    bool          center_valid_ = false;
     float         anchor_pos_[3]{};
     float         anchor_fwd_[3]{0.0f, 1.0f, 0.0f};
 
