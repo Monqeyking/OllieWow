@@ -77,6 +77,9 @@ private:
   std::uint64_t far_rendered_hash_{0u};
   bool has_far_rendered_hash_{false};
   bool far_initialized_{false};
+  // Tellers voor de far-pass: een pass met nog niet klare modellen wordt (met tussenpozen)
+  // opnieuw geprobeerd in plaats van als af te gelden.
+  std::uint32_t far_retry_cooldown_{0u};
   std::vector<ShadowCasterEntry> casters_;
   std::vector<std::uint32_t> instance_ids_;
   std::vector<std::uint32_t> extra_caster_ids_;

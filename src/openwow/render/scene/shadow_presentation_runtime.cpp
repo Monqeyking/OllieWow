@@ -368,7 +368,12 @@ void ShadowPresentationRuntime::Render(const world::WorldPresentationSnapshot &s
       far_content = HashValue(far_content, snapshot.map_generation.value);
       far_content = HashMatrix(far_content, far_data_->GetLightView());
       far_content = HashMatrix(far_content, far_data_->GetLightProj());
-      if (!has_far_rendered_hash_ || far_content != far_rendered_hash_) {
+      const bool far_content_changed =
+          has_far_rendered_hash_ && far_content != far_rendered_hash_;
+      if (far_retry_cooldown_ > 0u) {
+        --far_retry_cooldown_;
+      }
+      if (far_content_changed || (!has_far_rendered_hash_ && far_retry_cooldown_ == 0u)) {
         far_data_->BeginShadowDepthPass(far_shadow_view);
         render_results_scratch_.resize(far_instance_ids_.size());
         m2_system_.RenderInstanceBatch(far_shadow_view, far_instance_ids_,
@@ -376,8 +381,20 @@ void ShadowPresentationRuntime::Render(const world::WorldPresentationSnapshot &s
                                        m2::M2RenderPassScope::kOpaqueOnly,
                                        m2_system_.frame_job_system(),
                                        kShadowCasterRenderMicroseconds, render_results_scratch_);
-        far_rendered_hash_ = far_content;
-        has_far_rendered_hash_ = true;
+        // Een model dat nog niet klaar is (kNotReady) laat een gat in de kaart. Dan noteren we
+        // de inhoud niet als getekend, zodat de pass over een paar frames opnieuw loopt.
+        const bool far_incomplete = std::any_of(
+            render_results_scratch_.begin(), render_results_scratch_.end(),
+            [](const m2::M2RenderInstanceResult &result) {
+              return result.status == m2::M2ResultStatus::kNotReady;
+            });
+        if (far_incomplete) {
+          has_far_rendered_hash_ = false;
+          far_retry_cooldown_ = 6u;
+        } else {
+          far_rendered_hash_ = far_content;
+          has_far_rendered_hash_ = true;
+        }
       }
       far_ready = true;
     }
