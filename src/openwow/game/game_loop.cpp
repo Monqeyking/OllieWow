@@ -5408,12 +5408,15 @@ void GameLoop::RenderWorld(float dt) {
     return value != nullptr && *value != '\0' && *value != '0';
   }();
   world::ShadowPresentationSettings shadow_settings =
-      force_shadows
+      (force_shadows || (cvars.Exists("gfxShadows") && cvars.GetCVarBool("gfxShadows")))
           ? render::ResolveShadowPresentationSettings(
                 std::max(cvars.GetCVarInt("extShadowQuality"), 3), true, true)
           : render::ResolveShadowPresentationSettings(cvars.GetCVarInt("extShadowQuality"),
                                                       cvars.GetCVarBool("mapShadows"),
                                                       cvars.GetCVarBool("projectedTextures"));
+  shadow_settings.strength = cvars.Exists("gfxShadowStrength")
+                                 ? std::clamp(cvars.GetCVarFloat("gfxShadowStrength"), 0.0f, 1.0f)
+                                 : 0.7f;
   world_scene_.SetShadowPresentationSettings(shadow_settings);
   world_scene_.SetSpecularEnabled(cvars.GetCVarBool("specular") && PixelShadersEnabled());
 

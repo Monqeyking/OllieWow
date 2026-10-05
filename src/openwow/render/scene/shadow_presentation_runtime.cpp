@@ -103,7 +103,15 @@ void ShadowPresentationRuntime::InvalidateShadowReuse() noexcept {
 
 void ShadowPresentationRuntime::ApplySettings(const world::WorldPresentationSnapshot &snapshot) {
   const auto &settings = snapshot.shadows;
-  data_->SetEnabled(settings.enabled);
+  // Dag/nacht: de zonhoogte (z van de richting naar de zon) stuurt de sterkte. Onder ~3 graden
+  // (nacht, schemering) geen schaduw: de kaart zou dan van onderaf of bijna vlak projecteren.
+  // Vol vanaf ~17 graden. Bij sterkte 0 slaan we de hele schaduwpass over.
+  const float sun_height = snapshot.environment.light_direction[2];
+  const float day_t = std::clamp((sun_height - 0.05f) / 0.25f, 0.0f, 1.0f);
+  const float day = day_t * day_t * (3.0f - 2.0f * day_t);
+  const float strength = std::clamp(settings.strength, 0.0f, 1.0f) * day;
+  data_->SetStrength(strength);
+  data_->SetEnabled(settings.enabled && strength > 0.01f);
   data_->SetQuality(ResolveQuality(settings.quality));
   data_->SetShadowDistance(std::max(settings.distance, 1.0f));
   data_->SetShadowBias(std::max(settings.depth_bias, 0.0f));
@@ -147,7 +155,7 @@ void ShadowPresentationRuntime::Render(const world::WorldPresentationSnapshot &s
   }
   // Niet lezen terwijl de kaart beschreven wordt; aan het eind weer aan.
   m2::ShadowReceiverSlot().store(nullptr, std::memory_order_release);
-  if (!initialized_ || !snapshot.shadows.enabled) {
+  if (!initialized_ || !data_->IsEnabled()) {
     InvalidateShadowReuse();
     terrain.SetShadowRenderData(nullptr);
     return;

@@ -2110,6 +2110,8 @@ void CVarSystem::RegisterDefaults() {
   RegisterCVar("gfxSaturation", "1.0", F::Archive, "Colour saturation (1 = original)", 0.0f, 2.0f);
   RegisterCVar("gfxContrast", "1.0", F::Archive, "Contrast (1 = original)", 0.5f, 1.5f);
   RegisterCVar("gfxDither", "0", F::Archive, "Dither strength against banding (0 = off)", 0.0f, 2.0f);
+  RegisterCVar("gfxShadows", "0", F::Archive, "Sun shadows (shadow map, fades out at night); 0 = off", 0.0f, 1.0f);
+  RegisterCVar("gfxShadowStrength", "0.7", F::Archive, "Sun shadow darkness (0..1)", 0.0f, 1.0f);
   RegisterCVar("gfxClutter", "1", F::Archive, "Ground clutter (grass, flowers, pebbles); 0 = off", 0.0f, 1.0f);
   RegisterCVar("fogModel", "0", F::Archive, "Fog model: 0 = original linear fog, 1 = modern (exponential, sun-tinted)", 0.0f, 1.0f);
   RegisterCVar("fogSunGlow", "1", F::Archive, "Modern fog: strength of the sun-coloured lobe around the sun (0 = off)", 0.0f, 2.0f);

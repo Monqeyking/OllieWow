@@ -97,6 +97,8 @@ struct ShadowPresentationSettings {
   std::uint16_t map_resolution{1024};
   float distance{80.0f};
   float depth_bias{0.005f};
+  // Gebruikersterkte (0..1); de dag/nacht-factor van de zon komt er in ShadowPresentationRuntime bij.
+  float strength{1.0f};
 };
 
 struct WorldPresentationSnapshot {

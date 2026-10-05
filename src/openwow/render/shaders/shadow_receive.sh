@@ -13,16 +13,12 @@ float sampleShadowMap(vec3 coord)
 }
 
 // 1 = belicht, 0 = in de schaduw (9 taps PCF, zachte uitfade aan de kaartrand).
+// u_shadowParams.z is de schaduwsterkte (0..1: gebruiker x dag/nacht); 0 geeft overal 1 terug.
 float dynamicShadowVisibility(vec3 worldPos)
 {
-    if (u_shadowParams.z < 0.5) {
-        return 1.0;
-    }
     vec4 shadowCoord = mul(u_shadowMtx, vec4(worldPos, 1.0));
     vec3 p = shadowCoord.xyz / shadowCoord.w;
-    if (p.x < 0.0 || p.x > 1.0 || p.y < 0.0 || p.y > 1.0 || p.z < 0.0 || p.z > 1.0) {
-        return 1.0;
-    }
+    float inside = (p.x >= 0.0 && p.x <= 1.0 && p.y >= 0.0 && p.y <= 1.0 && p.z >= 0.0 && p.z <= 1.0) ? 1.0 : 0.0;
     float texel = u_shadowParams.y;
     float depth = p.z - u_shadowParams.x;
     float lit = 0.0;
@@ -35,7 +31,9 @@ float dynamicShadowVisibility(vec3 worldPos)
     lit /= 9.0;
     float edge = max(abs(p.x - 0.5), abs(p.y - 0.5));
     float fade = clamp((edge - 0.40) / 0.10, 0.0, 1.0);
-    return mix(lit, 1.0, fade);
+    float visibility = mix(lit, 1.0, fade);
+    float strength = clamp(u_shadowParams.z, 0.0, 1.0);
+    return mix(1.0, visibility, strength * inside);
 }
 
 #endif

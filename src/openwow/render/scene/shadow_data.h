@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <cstdint>
 #include <memory>
 #include <span>
@@ -113,6 +114,10 @@ public:
 
     void BeginShadowDepthPass(std::uint8_t view_id);
 
+    // Schaduwsterkte 0..1 (u_shadowParams.z): 0 = geen schaduw, 1 = volledig.
+    void          SetStrength(float strength) { strength_ = std::clamp(strength, 0.0f, 1.0f); }
+    [[nodiscard]] float GetStrength() const noexcept { return strength_; }
+
     void          SetEnabled(bool enabled);
     [[nodiscard]] bool IsEnabled() const;
 
@@ -153,6 +158,7 @@ private:
     float light_proj_[16]{};
     float light_view_proj_[16]{};
 
+    float strength_     = 1.0f;
     bool enabled_       = true;
     bool shadow_map_valid_ = false;
 };

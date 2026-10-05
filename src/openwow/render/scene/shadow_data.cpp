@@ -183,7 +183,7 @@ void ShadowRenderData::BindShadowState(bgfx::Encoder* const encoder) const {
     // omgerekend, zodat hij niet met de kaartgrootte meeschuift: 0,3 yd plus een texel.
     const float texel_world = (2.0f * radius_) * inv_res;
     const float bias_depth = (0.3f + texel_world) / std::max(depth_range_, 1.0f);
-    const RenderVec4 params{bias_depth, inv_res, 1.0f, radius_};
+    const RenderVec4 params{bias_depth, inv_res, strength_, radius_};
     draw.setUniform(backend_->shadow_parameters, params.data());
 }
 
