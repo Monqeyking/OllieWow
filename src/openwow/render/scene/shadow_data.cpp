@@ -20,6 +20,10 @@ struct ShadowRenderData::BackendResources {
   bgfx::UniformHandle shadow_map_sampler = BGFX_INVALID_HANDLE;
   bgfx::UniformHandle shadow_matrix = BGFX_INVALID_HANDLE;
   bgfx::UniformHandle shadow_parameters = BGFX_INVALID_HANDLE;
+  // De verre cascade (slot 6) wordt door de near-data gebonden met deze eigen uniforms.
+  bgfx::UniformHandle far_sampler = BGFX_INVALID_HANDLE;
+  bgfx::UniformHandle far_matrix = BGFX_INVALID_HANDLE;
+  bgfx::UniformHandle far_parameters = BGFX_INVALID_HANDLE;
 };
 
 namespace {
@@ -123,10 +127,19 @@ bool ShadowRenderData::CreateShadowMap() {
         bgfx::createUniform("u_shadowMtx", bgfx::UniformType::Mat4);
     backend_->shadow_parameters =
         bgfx::createUniform("u_shadowParams", bgfx::UniformType::Vec4);
+    backend_->far_sampler =
+        bgfx::createUniform("s_shadowMapFar", bgfx::UniformType::Sampler);
+    backend_->far_matrix =
+        bgfx::createUniform("u_shadowMtxFar", bgfx::UniformType::Mat4);
+    backend_->far_parameters =
+        bgfx::createUniform("u_shadowParamsFar", bgfx::UniformType::Vec4);
 
     if (!bgfx::isValid(backend_->shadow_map_sampler) ||
         !bgfx::isValid(backend_->shadow_matrix) ||
-        !bgfx::isValid(backend_->shadow_parameters)) {
+        !bgfx::isValid(backend_->shadow_parameters) ||
+        !bgfx::isValid(backend_->far_sampler) ||
+        !bgfx::isValid(backend_->far_matrix) ||
+        !bgfx::isValid(backend_->far_parameters)) {
         openwow::diagnostics::Log(openwow::diagnostics::LogLevel::kWarn,
                            "ShadowRenderData: failed to create shadow uniforms");
         DestroyShadowMap();
@@ -160,6 +173,18 @@ void ShadowRenderData::DestroyShadowMap() {
         bgfx::destroy(backend_->shadow_parameters);
         backend_->shadow_parameters = BGFX_INVALID_HANDLE;
     }
+    if (bgfx::isValid(backend_->far_sampler)) {
+        bgfx::destroy(backend_->far_sampler);
+        backend_->far_sampler = BGFX_INVALID_HANDLE;
+    }
+    if (bgfx::isValid(backend_->far_matrix)) {
+        bgfx::destroy(backend_->far_matrix);
+        backend_->far_matrix = BGFX_INVALID_HANDLE;
+    }
+    if (bgfx::isValid(backend_->far_parameters)) {
+        bgfx::destroy(backend_->far_parameters);
+        backend_->far_parameters = BGFX_INVALID_HANDLE;
+    }
 
     shadow_map_valid_ = false;
 }
@@ -182,9 +207,32 @@ void ShadowRenderData::BindShadowState(bgfx::Encoder* const encoder) const {
     // bias_ is een diepte-bias in kaarteenheden (0,005 bij de oude kaart); hier in wereldeenheden
     // omgerekend, zodat hij niet met de kaartgrootte meeschuift: 0,3 yd plus een texel.
     const float texel_world = (2.0f * radius_) * inv_res;
-    const float bias_depth = (0.3f + texel_world) / std::max(depth_range_, 1.0f);
+    const float bias_depth = (0.3f + texel_world) * bias_scale_ / std::max(depth_range_, 1.0f);
     const RenderVec4 params{bias_depth, inv_res, strength_, radius_};
     draw.setUniform(backend_->shadow_parameters, params.data());
+
+    // Verre cascade op slot 6. Zonder (bruikbare) far-kaart: dezelfde textuur nogmaals met sterkte 0,
+    // zodat de sampler altijd een geldige textuur heeft en de shader de far-kaart negeert.
+    const ShadowRenderData* const far_map =
+        far_cascade_ != nullptr && far_cascade_->shadow_map_valid_ &&
+                bgfx::isValid(far_cascade_->backend_->shadow_depth_tex) && far_cascade_->strength_ > 0.0f
+            ? far_cascade_
+            : nullptr;
+    if (far_map != nullptr) {
+        draw.setTexture(6, backend_->far_sampler, far_map->backend_->shadow_depth_tex);
+        draw.setUniform(backend_->far_matrix, far_map->light_view_proj_);
+        const float far_inv_res = 1.0f / static_cast<float>(far_map->resolution_);
+        const float far_texel_world = (2.0f * far_map->radius_) * far_inv_res;
+        const float far_bias =
+            (0.3f + far_texel_world) * far_map->bias_scale_ / std::max(far_map->depth_range_, 1.0f);
+        const RenderVec4 far_params{far_bias, far_inv_res, far_map->strength_, far_map->radius_};
+        draw.setUniform(backend_->far_parameters, far_params.data());
+    } else {
+        draw.setTexture(6, backend_->far_sampler, backend_->shadow_depth_tex);
+        draw.setUniform(backend_->far_matrix, light_view_proj_);
+        const RenderVec4 off_params{0.0f, inv_res, 0.0f, radius_};
+        draw.setUniform(backend_->far_parameters, off_params.data());
+    }
 }
 
 void ShadowRenderData::AddCaster(ShadowCasterEntry entry) {
@@ -281,7 +329,7 @@ void ShadowRenderData::BuildLightMatrices(const float* camera_mtx,
         forward_y = 0.0f;
     }
 
-    radius_ = RadiusForDistance(distance_);
+    radius_ = radius_override_ > 0.0f ? radius_override_ : RadiusForDistance(distance_);
     const float radius = radius_;
     depth_range_ = radius * 4.0f;
 
@@ -294,8 +342,8 @@ void ShadowRenderData::BuildLightMatrices(const float* camera_mtx,
     // van 32 yd en blijft staan tot je meer dan 28 yd ervan af bent (dode zone). Een schaduw
     // hangt aan de wereld: de rand van de kaart en de uitfade liggen zo op vaste plekken, en een
     // boom wordt niet zwakker of korter omdat jij een stap zet.
-    constexpr float kCenterGrid = 32.0f;
-    constexpr float kCenterHold = 28.0f;
+    const float kCenterGrid = center_grid_;
+    const float kCenterHold = center_hold_;
     float center[3];
     for (int axis = 0; axis < 3; ++axis) {
         const bool keep = center_valid_ && std::fabs(eye[axis] - center_[axis]) <= kCenterHold;
@@ -348,7 +396,9 @@ bool ShadowRenderData::PrepareShadowPass(const float* camera_mtx,
                                          float cam_near,
                                          float cam_far) {
     if (!enabled_ || type_ != ShadowType::ShadowMap) return false;
-    if (!shadow_map_valid_ || casters_.empty()) {
+    // Ook zonder casters wordt de kaart opgebouwd (en leeg gewist): de far-cascade kan dan nog
+    // schaduw geven in een gebied waar de near-kaart niets heeft.
+    if (!shadow_map_valid_) {
         return false;
     }
 

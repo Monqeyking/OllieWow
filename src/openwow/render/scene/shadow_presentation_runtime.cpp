@@ -9,6 +9,7 @@
 #include "openwow/world/presentation/world_presentation_snapshot.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <type_traits>
 #include <vector>
@@ -53,7 +54,9 @@ constexpr std::int8_t kStaticInstancingClassTransparentResidue = 2;
 }
 
 ShadowPresentationRuntime::ShadowPresentationRuntime(m2::M2System& m2_system)
-    : m2_system_(m2_system), data_(std::make_unique<ShadowRenderData>()) {}
+    : m2_system_(m2_system),
+      data_(std::make_unique<ShadowRenderData>()),
+      far_data_(std::make_unique<ShadowRenderData>()) {}
 
 ShadowPresentationRuntime::~ShadowPresentationRuntime() { Shutdown(); }
 
@@ -80,6 +83,11 @@ void ShadowPresentationRuntime::Shutdown() {
   }
   data_->DestroyShadowMap();
   data_->ClearCasters();
+  far_data_->DestroyShadowMap();
+  far_data_->ClearCasters();
+  far_initialized_ = false;
+  far_instance_ids_.clear();
+  far_casters_.clear();
   casters_.clear();
   instance_ids_.clear();
   InvalidateShadowReuse();
@@ -99,6 +107,7 @@ void ShadowPresentationRuntime::ResetMap() {
 void ShadowPresentationRuntime::InvalidateShadowReuse() noexcept {
   has_rendered_key_ = false;
   has_previous_content_hash_ = false;
+  has_far_rendered_hash_ = false;
 }
 
 void ShadowPresentationRuntime::ApplySettings(const world::WorldPresentationSnapshot &snapshot) {
@@ -132,10 +141,55 @@ void ShadowPresentationRuntime::ApplySettings(const world::WorldPresentationSnap
     InvalidateShadowReuse();
     initialized_ = data_->CreateShadowMap();
   }
+
+  // Verre cascade: een tweede kaart (2048) over `far_distance` yd halve breedte, alleen als de
+  // gebruiker een bereik voorbij de near-kaart vraagt. De richting wordt vastgehouden tot de zon
+  // meer dan ~0,15 graden verschuift: een kaart die elk frame meedraait zou elk frame opnieuw
+  // getekend moeten worden.
+  const float near_radius = ShadowRenderData::RadiusForDistance(settings.distance);
+  const bool far_wanted = settings.enabled && strength > 0.01f &&
+                          settings.far_distance >= near_radius * 1.3f;
+  far_data_->SetStrength(strength);
+  if (far_wanted && !far_initialized_) {
+    far_data_->SetType(ShadowType::ShadowMap);
+    far_data_->SetEnabled(true);
+    far_data_->SetShadowMapResolution(2048);
+    far_initialized_ = far_data_->CreateShadowMap();
+    has_far_rendered_hash_ = false;
+  }
+  if (far_wanted && far_initialized_) {
+    const float lx = snapshot.environment.light_direction[0];
+    const float ly = snapshot.environment.light_direction[1];
+    const float lz = snapshot.environment.light_direction[2];
+    const float length = std::sqrt(lx * lx + ly * ly + lz * lz);
+    if (length > 1e-6f) {
+      const float nx = lx / length;
+      const float ny = ly / length;
+      const float nz = lz / length;
+      const float held = far_light_[0] * nx + far_light_[1] * ny + far_light_[2] * nz;
+      if (!has_far_light_ || held < 0.999999f) {
+        far_light_[0] = nx;
+        far_light_[1] = ny;
+        far_light_[2] = nz;
+        has_far_light_ = true;
+      }
+    }
+    far_data_->SetLightDirection(far_light_[0], far_light_[1], far_light_[2]);
+    far_data_->SetRadiusOverride(std::min(settings.far_distance, 500.0f));
+    far_data_->SetBiasScale(4.0f);
+    far_data_->SetCenterGrid(64.0f, 56.0f);
+    far_data_->SetShadowBias(std::max(settings.depth_bias, 0.0f));
+  }
+  if (!far_wanted && far_initialized_) {
+    far_data_->DestroyShadowMap();
+    far_initialized_ = false;
+    has_far_rendered_hash_ = false;
+  }
 }
 
 void ShadowPresentationRuntime::Render(const world::WorldPresentationSnapshot &snapshot,
-                                       const std::uint8_t shadow_view, DoodadRenderer &doodads,
+                                       const std::uint8_t shadow_view,
+                                       const std::uint8_t far_shadow_view, DoodadRenderer &doodads,
                                        TerrainRenderer &terrain) {
   if (!data_) {
     return;
@@ -174,6 +228,13 @@ void ShadowPresentationRuntime::Render(const world::WorldPresentationSnapshot &s
   casters_.clear();
   instance_ids_.clear();
   instanced_groups_.clear();
+  far_instance_ids_.clear();
+  far_casters_.clear();
+  const bool far_wanted = far_initialized_ && far_data_->IsEnabled();
+  // Verre werpers: grote, statische doodads (grootteklasse >= 2, vanaf ~4 yd) binnen de far-kaart.
+  const float far_gather = std::min(snapshot.shadows.far_distance, 500.0f) * 1.5f;
+  const float far_gather_squared = far_gather * far_gather;
+  std::uint64_t far_hash = kFnv1aOffsetBasis;
 
   ShadowFrameKey frame_key{};
   frame_key.reusable = true;
@@ -189,7 +250,12 @@ void ShadowPresentationRuntime::Render(const world::WorldPresentationSnapshot &s
                                   const float dx = instance.bounding_center[0] - anchor[0];
                                   const float dy = instance.bounding_center[1] - anchor[1];
                                   const float dz = instance.bounding_center[2] - anchor[2];
-                                  if (dx * dx + dy * dy + dz * dz > max_distance_squared) {
+                                  const float distance_squared = dx * dx + dy * dy + dz * dz;
+                                   const bool near_candidate = distance_squared <= max_distance_squared;
+                                   const bool far_candidate =
+                                       far_wanted && instance.distance_class >= 2u &&
+                                       distance_squared <= far_gather_squared;
+                                   if (!near_candidate && !far_candidate) {
                                     return;
                                   }
                                   if (instance.shadow_class_memo < 0) {
@@ -201,7 +267,19 @@ void ShadowPresentationRuntime::Render(const world::WorldPresentationSnapshot &s
                                     instance.shadow_class_memo =
                                         static_cast<std::int32_t>(shadow_class.shadow_class);
                                   }
-                                  const float radius =
+                                  if (far_candidate) {
+                                     far_instance_ids_.push_back(instance.m2_instance_id);
+                                     far_casters_.push_back(
+                                         ShadowCasterEntry{.entityId = instance.m2_instance_id,
+                                                           .isValid = true});
+                                     far_hash = HashValue(far_hash, instance.m2_instance_id);
+                                     far_hash = HashValue(far_hash, instance.m2_model_id);
+                                     far_hash = HashValue(far_hash, instance.model_matrix);
+                                   }
+                                   if (!near_candidate) {
+                                     return;
+                                   }
+                                   const float radius =
                                       instance.has_bounding_radius
                                           ? std::max(instance.bounding_radius, 0.01f)
                                           : std::max(instance.scale, 0.01f);
@@ -278,8 +356,36 @@ void ShadowPresentationRuntime::Render(const world::WorldPresentationSnapshot &s
     }
   }
 
+  // Verre cascade: bouw hem, en teken alleen opnieuw als zijn inhoud veranderde (de werpers zijn
+  // statisch; het licht staat vast tot de zon merkbaar verschuift).
+  bool far_ready = false;
+  if (far_wanted && !far_instance_ids_.empty()) {
+    far_data_->SetCasters(far_casters_);
+    far_data_->SetCameraAnchor(anchor.data(), snapshot.camera.forward.data());
+    if (far_data_->PrepareShadowPass(snapshot.camera.view.data(), snapshot.camera.projection.data(),
+                                     snapshot.camera.near_clip, snapshot.camera.far_clip)) {
+      std::uint64_t far_content = far_hash;
+      far_content = HashValue(far_content, snapshot.map_generation.value);
+      far_content = HashMatrix(far_content, far_data_->GetLightView());
+      far_content = HashMatrix(far_content, far_data_->GetLightProj());
+      if (!has_far_rendered_hash_ || far_content != far_rendered_hash_) {
+        far_data_->BeginShadowDepthPass(far_shadow_view);
+        render_results_scratch_.resize(far_instance_ids_.size());
+        m2_system_.RenderInstanceBatch(far_shadow_view, far_instance_ids_,
+                                       RenderMatrix4x4View{far_data_->GetLightView(), 16u},
+                                       m2::M2RenderPassScope::kOpaqueOnly,
+                                       m2_system_.frame_job_system(),
+                                       kShadowCasterRenderMicroseconds, render_results_scratch_);
+        far_rendered_hash_ = far_content;
+        has_far_rendered_hash_ = true;
+      }
+      far_ready = true;
+    }
+  }
+  data_->SetFarCascade(far_ready ? far_data_.get() : nullptr);
+
   data_->SetCasters(casters_);
-  if (instance_ids_.empty() && !has_instanced_groups) {
+  if (instance_ids_.empty() && !has_instanced_groups && !far_ready) {
     InvalidateShadowReuse();
     terrain.SetShadowRenderData(nullptr);
     return;
@@ -325,11 +431,13 @@ void ShadowPresentationRuntime::Render(const world::WorldPresentationSnapshot &s
   data_->BeginShadowDepthPass(shadow_view);
 
   render_results_scratch_.resize(instance_ids_.size());
-  m2_system_.RenderInstanceBatch(shadow_view, instance_ids_,
-                                 RenderMatrix4x4View{data_->GetLightView(), 16u},
-                                 m2::M2RenderPassScope::kOpaqueOnly, m2_system_.frame_job_system(),
-                                 kShadowCasterRenderMicroseconds,
-                                 render_results_scratch_);
+  if (!instance_ids_.empty()) {
+    m2_system_.RenderInstanceBatch(shadow_view, instance_ids_,
+                                   RenderMatrix4x4View{data_->GetLightView(), 16u},
+                                   m2::M2RenderPassScope::kOpaqueOnly,
+                                   m2_system_.frame_job_system(), kShadowCasterRenderMicroseconds,
+                                   render_results_scratch_);
+  }
 
   for (auto &[model_id, group] : instanced_groups_) {
     (void)model_id;
@@ -346,6 +454,7 @@ void ShadowPresentationRuntime::Render(const world::WorldPresentationSnapshot &s
       diagnostics::Log(diagnostics::LogLevel::kInfo,
           "ShadowStatus: casters=" + std::to_string(instance_ids_.size()) +
           " extra=" + std::to_string(extra_caster_ids_.size()) +
+          " far=" + std::to_string(far_instance_ids_.size()) +
           " center=(" + std::to_string(data_->GetShadowCenter()[0]) + "," +
           std::to_string(data_->GetShadowCenter()[1]) + "," +
           std::to_string(data_->GetShadowCenter()[2]) + ") radius=" +

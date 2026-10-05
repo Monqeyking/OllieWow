@@ -8,11 +8,11 @@ OHD.refreshing = false
 OHD.controls = {}
 
 local PRESETS = {
-  { name = "Classic", values = { fogModel = "0", fogSunGlow = "1", gfxShadows = "0", gfxShadowStrength = "0.7", gfxClutter = "1", frillDensity = "16",
+  { name = "Classic", values = { fogModel = "0", fogSunGlow = "1", gfxShadows = "0", gfxShadowStrength = "0.7", gfxShadowDistance = "120", gfxClutter = "1", frillDensity = "16",
       gfxSaturation = "1.0", gfxContrast = "1.0", gfxDither = "0" } },
-  { name = "HD", values = { fogModel = "1", fogSunGlow = "1", gfxShadows = "1", gfxShadowStrength = "0.7", gfxClutter = "1", frillDensity = "32",
+  { name = "HD", values = { fogModel = "1", fogSunGlow = "1", gfxShadows = "1", gfxShadowStrength = "0.7", gfxShadowDistance = "200", gfxClutter = "1", frillDensity = "32",
       gfxSaturation = "1.1", gfxContrast = "1.05", gfxDither = "1" } },
-  { name = "Ultra", values = { fogModel = "1", fogSunGlow = "1.2", gfxShadows = "1", gfxShadowStrength = "0.8", gfxClutter = "1", frillDensity = "64",
+  { name = "Ultra", values = { fogModel = "1", fogSunGlow = "1.2", gfxShadows = "1", gfxShadowStrength = "0.8", gfxShadowDistance = "400", gfxClutter = "1", frillDensity = "64",
       gfxSaturation = "1.15", gfxContrast = "1.08", gfxDither = "1" } },
 }
 
@@ -111,7 +111,7 @@ local function OHD_Build()
 
   local f = CreateFrame("Frame", "OllieHDGraphicsFrame", UIParent)
   f:SetWidth(320)
-  f:SetHeight(590)
+  f:SetHeight(636)
   f:SetFrameStrata("DIALOG")
   f:SetToplevel(true)
   f:SetMovable(true)
@@ -164,15 +164,16 @@ local function OHD_Build()
   OHD_MakeSlider(f, "OllieHDGraphicsSunGlow", "Sun glow in fog", 0, 2, 0.1, 1, "fogSunGlow", 1, -170)
   OHD_MakeCheck(f, "OllieHDGraphicsShadows", "Sun shadows (fade out at night)", "gfxShadows", -196)
   OHD_MakeSlider(f, "OllieHDGraphicsShadowStrength", "Shadow darkness", 0, 1, 0.05, 2, "gfxShadowStrength", 0.7, -242)
-  OHD_MakeCheck(f, "OllieHDGraphicsClutter", "Ground clutter (grass, flowers)", "gfxClutter", -268)
-  OHD_MakeSlider(f, "OllieHDGraphicsDensity", "Clutter density", 1, 128, 1, 0, "frillDensity", 16, -314)
+  OHD_MakeSlider(f, "OllieHDGraphicsShadowDistance", "Shadow distance (yd)", 120, 500, 20, 0, "gfxShadowDistance", 120, -288)
+  OHD_MakeCheck(f, "OllieHDGraphicsClutter", "Ground clutter (grass, flowers)", "gfxClutter", -314)
+  OHD_MakeSlider(f, "OllieHDGraphicsDensity", "Clutter density", 1, 128, 1, 0, "frillDensity", 16, -360)
 
   local h2 = f:CreateFontString(nil, "ARTWORK", "GameFontNormal")
-  h2:SetPoint("TOPLEFT", f, "TOPLEFT", 24, -344)
+  h2:SetPoint("TOPLEFT", f, "TOPLEFT", 24, -390)
   h2:SetText("Image")
-  OHD_MakeSlider(f, "OllieHDGraphicsSaturation", "Saturation", 0.5, 1.5, 0.05, 2, "gfxSaturation", 1, -380)
-  OHD_MakeSlider(f, "OllieHDGraphicsContrast", "Contrast", 0.8, 1.3, 0.01, 2, "gfxContrast", 1, -430)
-  OHD_MakeSlider(f, "OllieHDGraphicsDither", "Dither (less banding)", 0, 2, 0.25, 2, "gfxDither", 0, -480)
+  OHD_MakeSlider(f, "OllieHDGraphicsSaturation", "Saturation", 0.5, 1.5, 0.05, 2, "gfxSaturation", 1, -426)
+  OHD_MakeSlider(f, "OllieHDGraphicsContrast", "Contrast", 0.8, 1.3, 0.01, 2, "gfxContrast", 1, -476)
+  OHD_MakeSlider(f, "OllieHDGraphicsDither", "Dither (less banding)", 0, 2, 0.25, 2, "gfxDither", 0, -526)
 
   local reset = CreateFrame("Button", "OllieHDGraphicsReset", f, "UIPanelButtonTemplate")
   reset:SetWidth(130)
@@ -230,6 +231,7 @@ local function OHD_AttachCategory()
   OLLIE_HD_SUNGLOW = "Sun glow in fog"
   OLLIE_HD_SHADOWS = "Sun shadows (fade out at night)"
   OLLIE_HD_SHADOWSTRENGTH = "Shadow darkness"
+  OLLIE_HD_SHADOWDISTANCE = "Shadow distance (yd)"
   OLLIE_HD_CLUTTER = "Ground clutter (grass, flowers)"
   OLLIE_HD_DENSITY = "Clutter density"
   OLLIE_HD_SATURATION = "Saturation"
@@ -245,6 +247,8 @@ local function OHD_AttachCategory()
       { name = "OLLIE_HD_SHADOWS", type = "checkbutton", cvar = "gfxShadows" },
       { name = "OLLIE_HD_SHADOWSTRENGTH", type = "slider", cvar = "gfxShadowStrength",
         minval = 0, maxval = 1, step = 0.05, numberLabels = true },
+      { name = "OLLIE_HD_SHADOWDISTANCE", type = "slider", cvar = "gfxShadowDistance",
+        minval = 120, maxval = 500, step = 20, numberLabels = true },
       { name = "OLLIE_HD_CLUTTER", type = "checkbutton", cvar = "gfxClutter" },
       { name = "OLLIE_HD_DENSITY", type = "slider", cvar = "frillDensity",
         minval = 1, maxval = 128, step = 1, numberLabels = true },

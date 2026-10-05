@@ -1,24 +1,36 @@
-// Gedeelde schaduwontvangst voor de dynamische zon-schaduwkaart (stabiel, rond de camera).
-// Slot 5 + u_shadowMtx/u_shadowParams worden door ShadowRenderData::BindShadowState gebonden.
+// Gedeelde schaduwontvangst voor de dynamische zon-schaduwkaart (stabiel, rond de speler).
+// Slot 5 + u_shadowMtx/u_shadowParams (near) en slot 6 + u_shadowMtxFar/u_shadowParamsFar (far)
+// worden door ShadowRenderData::BindShadowState gebonden.
 #ifndef OPENWOW_SHADOW_RECEIVE_SH
 #define OPENWOW_SHADOW_RECEIVE_SH
 
 SAMPLER2DSHADOW(s_shadowMap, 5);
+SAMPLER2DSHADOW(s_shadowMapFar, 6);
 uniform mat4 u_shadowMtx;
-uniform vec4 u_shadowParams;   // x = bias (genormaliseerde diepte), y = 1/resolutie, z = aan, w = straal
+uniform vec4 u_shadowParams;   // x = bias (genormaliseerde diepte), y = 1/resolutie, z = sterkte (0..1), w = straal
+uniform mat4 u_shadowMtxFar;
+uniform vec4 u_shadowParamsFar; // idem voor de verre kaart; z = 0 betekent: geen verre kaart
 
 float sampleShadowMap(vec3 coord)
 {
     return shadow2D(s_shadowMap, coord);
 }
 
-// 1 = belicht, 0 = in de schaduw (9 taps PCF, zachte uitfade aan de kaartrand).
-// u_shadowParams.z is de schaduwsterkte (0..1: gebruiker x dag/nacht); 0 geeft overal 1 terug.
+float sampleShadowMapFar(vec3 coord)
+{
+    return shadow2D(s_shadowMapFar, coord);
+}
+
+// 1 = belicht, 0 = in de schaduw. Twee cascades: de near-kaart (scherp, 9 taps PCF) en
+// daarbuiten de far-kaart (grover, 5 taps); aan de rand van de near-kaart gaat de ene zacht over
+// in de andere, en aan de rand van de far-kaart in "belicht". Zonder far-kaart (sterkte 0) is dit
+// het gedrag van alleen de near-kaart. Geen early returns.
 float dynamicShadowVisibility(vec3 worldPos)
 {
-    vec4 shadowCoord = mul(u_shadowMtx, vec4(worldPos, 1.0));
-    vec3 p = shadowCoord.xyz / shadowCoord.w;
-    float inside = (p.x >= 0.0 && p.x <= 1.0 && p.y >= 0.0 && p.y <= 1.0 && p.z >= 0.0 && p.z <= 1.0) ? 1.0 : 0.0;
+    // Near.
+    vec4 nearCoord = mul(u_shadowMtx, vec4(worldPos, 1.0));
+    vec3 p = nearCoord.xyz / nearCoord.w;
+    float nearInside = (p.x >= 0.0 && p.x <= 1.0 && p.y >= 0.0 && p.y <= 1.0 && p.z >= 0.0 && p.z <= 1.0) ? 1.0 : 0.0;
     float texel = u_shadowParams.y;
     float depth = p.z - u_shadowParams.x;
     float lit = 0.0;
@@ -30,10 +42,28 @@ float dynamicShadowVisibility(vec3 worldPos)
     }
     lit /= 9.0;
     float edge = max(abs(p.x - 0.5), abs(p.y - 0.5));
-    float fade = clamp((edge - 0.40) / 0.10, 0.0, 1.0);
-    float visibility = mix(lit, 1.0, fade);
-    float strength = clamp(u_shadowParams.z, 0.0, 1.0);
-    return mix(1.0, visibility, strength * inside);
+    float nearWeight = (1.0 - clamp((edge - 0.40) / 0.10, 0.0, 1.0)) * nearInside;
+    float nearStrength = clamp(u_shadowParams.z, 0.0, 1.0);
+    float nearVisibility = mix(1.0, lit, nearStrength);
+
+    // Far.
+    vec4 farCoord = mul(u_shadowMtxFar, vec4(worldPos, 1.0));
+    vec3 q = farCoord.xyz / farCoord.w;
+    float farInside = (q.x >= 0.0 && q.x <= 1.0 && q.y >= 0.0 && q.y <= 1.0 && q.z >= 0.0 && q.z <= 1.0) ? 1.0 : 0.0;
+    float farTexel = u_shadowParamsFar.y;
+    float farDepth = q.z - u_shadowParamsFar.x;
+    float farLit = sampleShadowMapFar(vec3(q.x, q.y, farDepth))
+                 + sampleShadowMapFar(vec3(q.x + farTexel, q.y, farDepth))
+                 + sampleShadowMapFar(vec3(q.x - farTexel, q.y, farDepth))
+                 + sampleShadowMapFar(vec3(q.x, q.y + farTexel, farDepth))
+                 + sampleShadowMapFar(vec3(q.x, q.y - farTexel, farDepth));
+    farLit *= 0.2;
+    float farEdge = max(abs(q.x - 0.5), abs(q.y - 0.5));
+    float farWeight = (1.0 - clamp((farEdge - 0.38) / 0.12, 0.0, 1.0)) * farInside;
+    float farStrength = clamp(u_shadowParamsFar.z, 0.0, 1.0);
+    float farVisibility = mix(1.0, farLit, farStrength * farWeight);
+
+    return mix(farVisibility, nearVisibility, nearWeight);
 }
 
 #endif

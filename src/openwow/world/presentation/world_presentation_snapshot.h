@@ -103,6 +103,8 @@ struct ShadowPresentationSettings {
   float depth_bias{0.005f};
   // Gebruikersterkte (0..1); de dag/nacht-factor van de zon komt er in ShadowPresentationRuntime bij.
   float strength{1.0f};
+  // Verre cascade: halve breedte (yd) van de grovere tweede kaart; 0 of kleiner dan de near-kaart = uit.
+  float far_distance{0.0f};
 };
 
 struct WorldPresentationSnapshot {

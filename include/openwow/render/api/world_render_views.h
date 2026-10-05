@@ -6,6 +6,7 @@ namespace openwow::render {
 
 struct WorldRenderViews {
   std::uint8_t shadow{};
+  std::uint8_t shadow_far{};
   std::uint8_t sky{};
   std::uint8_t scene{};
   std::uint8_t wmo{};

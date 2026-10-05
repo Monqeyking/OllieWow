@@ -79,6 +79,19 @@ public:
 
     void BindShadowState(bgfx::Encoder* encoder = nullptr) const;
 
+    // Verre cascade: een tweede, grovere kaart die de ontvangers voorbij de near-kaart lezen
+    // (slot 6). nullptr = geen verre kaart; BindShadowState zet dan sterkte 0 voor de far-kaart.
+    void SetFarCascade(const ShadowRenderData* far_cascade) noexcept { far_cascade_ = far_cascade; }
+    // Vaste kaartstraal (yd) in plaats van de straal uit de schaduwafstand; 0 = uit.
+    void SetRadiusOverride(float radius) noexcept { radius_override_ = std::max(radius, 0.0f); }
+    // Zwaardere diepte-bias voor de grove far-kaart (meer wereldeenheden per texel).
+    void SetBiasScale(float scale) noexcept { bias_scale_ = std::max(scale, 0.0f); }
+    // Rooster (yd) waaraan het kaartmiddelpunt vastzit en de dode zone waarbinnen het blijft staan.
+    void SetCenterGrid(float grid, float hold) noexcept {
+        center_grid_ = std::max(grid, 1.0f);
+        center_hold_ = std::max(hold, 0.0f);
+    }
+
     void AddCaster(ShadowCasterEntry entry);
     void RemoveCaster(std::uint32_t entityId);
     void SetCasters(std::span<const ShadowCasterEntry> casters);
@@ -160,6 +173,11 @@ private:
     float light_view_proj_[16]{};
 
     float strength_     = 1.0f;
+    const ShadowRenderData* far_cascade_ = nullptr;
+    float radius_override_ = 0.0f;
+    float bias_scale_ = 1.0f;
+    float center_grid_ = 32.0f;
+    float center_hold_ = 28.0f;
     bool enabled_       = true;
     bool shadow_map_valid_ = false;
 };

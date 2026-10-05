@@ -1108,7 +1108,7 @@ void WorldPresentationScene::Render(
 
     render_sky();
     encode_distant_terrain(nullptr);
-    shadows_->Render(snapshot, views.shadow, *doodads_, *terrain_);
+    shadows_->Render(snapshot, views.shadow, views.shadow_far, *doodads_, *terrain_);
     encode_detailed_terrain(nullptr);
     resolve_wmo_placements();
     encode_wmo(nullptr);
@@ -1118,7 +1118,7 @@ void WorldPresentationScene::Render(
     return;
   }
 
-  shadows_->Render(snapshot, views.shadow, *doodads_, *terrain_);
+  shadows_->Render(snapshot, views.shadow, views.shadow_far, *doodads_, *terrain_);
   resolve_wmo_placements();
 
   core::FrameJobSystem* const jobs = m2_system_.frame_job_system();

@@ -228,6 +228,7 @@ bool CanPerformInventoryMutation() {
 constexpr float kWorldCameraNearClip = openwow::world::kWorldCameraNearClipDistance;
 constexpr float kWorldCameraFallbackFarClip = 350.0f;
 constexpr std::uint8_t kStandStateSit = 1;
+constexpr std::uint16_t kWorldShadowViewCount = 2;
 constexpr std::uint8_t kWorldSceneOpaqueViewCount = 5;
 
 constexpr std::uint8_t kWorldSceneAlphaViewCount = 4;
@@ -506,7 +507,8 @@ void BuildWorldFrameGraph(openwow::render::api::FrameGraph &graph, std::uint16_t
 
   const rapi::RenderExtent extent{width, height};
   graph.Reset();
-  graph.AddPass(rapi::FrameGraphPassId::ShadowDepth, extent);
+  // Twee schaduwviews: de near-kaart en de verre cascade (zie ShadowPresentationRuntime).
+  graph.AddPass(rapi::FrameGraphPassId::ShadowDepth, extent, kWorldShadowViewCount);
   graph.AddPass(rapi::FrameGraphPassId::Reflection, extent);
   graph.AddPass(rapi::FrameGraphPassId::Refraction, extent);
   graph.AddPass(rapi::FrameGraphPassId::SceneOpaque, extent, kWorldSceneOpaqueViewCount);
@@ -600,6 +602,8 @@ ResolveWorldSceneRenderViews(const openwow::render::api::RendererContext *render
           openwow::render::WorldRenderViews{
               .shadow =
                   ResolveFrameGraphView(renderer_context, rapi::FrameGraphPassId::ShadowDepth, 0),
+              .shadow_far = ResolveFrameGraphView(
+                  renderer_context, rapi::FrameGraphPassId::ShadowDepth, 1, 1),
               .sky = ResolveFrameGraphView(renderer_context, rapi::FrameGraphPassId::SceneOpaque, 0,
                                            scene_opaque),
               .scene = ResolveFrameGraphView(renderer_context, rapi::FrameGraphPassId::SceneOpaque,
@@ -5418,6 +5422,10 @@ void GameLoop::RenderWorld(float dt) {
   shadow_settings.strength = cvars.Exists("gfxShadowStrength")
                                  ? std::clamp(cvars.GetCVarFloat("gfxShadowStrength"), 0.0f, 1.0f)
                                  : 0.7f;
+  shadow_settings.far_distance =
+      cvars.Exists("gfxShadowDistance")
+          ? std::clamp(cvars.GetCVarFloat("gfxShadowDistance"), 0.0f, 500.0f)
+          : 0.0f;
   world_scene_.SetShadowPresentationSettings(shadow_settings);
   world_scene_.SetSpecularEnabled(cvars.GetCVarBool("specular") && PixelShadersEnabled());
 

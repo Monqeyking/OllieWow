@@ -38,7 +38,7 @@ public:
   void ResetMap();
 
   void Render(const world::WorldPresentationSnapshot &snapshot, std::uint8_t shadow_view,
-              DoodadRenderer &doodads, TerrainRenderer &terrain);
+              std::uint8_t far_shadow_view, DoodadRenderer &doodads, TerrainRenderer &terrain);
 
   // Extra schaduwwerpers naast de doodads (units en spelers): vult de M2-instance-id's van
   // alles dat binnen `radius` van (x, y, z) schaduw moet werpen.
@@ -68,6 +68,15 @@ private:
 
   m2::M2System &m2_system_;
   std::unique_ptr<ShadowRenderData> data_;
+  // Verre cascade: een grovere tweede kaart met alleen de grote werpers (zie Render).
+  std::unique_ptr<ShadowRenderData> far_data_;
+  std::vector<std::uint32_t> far_instance_ids_;
+  std::vector<ShadowCasterEntry> far_casters_;
+  float far_light_[3]{0.0f, 0.0f, 1.0f};
+  bool has_far_light_{false};
+  std::uint64_t far_rendered_hash_{0u};
+  bool has_far_rendered_hash_{false};
+  bool far_initialized_{false};
   std::vector<ShadowCasterEntry> casters_;
   std::vector<std::uint32_t> instance_ids_;
   std::vector<std::uint32_t> extra_caster_ids_;
