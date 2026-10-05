@@ -9,6 +9,7 @@
 #include "openwow/world/presentation/world_presentation_snapshot.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <type_traits>
@@ -388,6 +389,40 @@ void ShadowPresentationRuntime::Render(const world::WorldPresentationSnapshot &s
             [](const m2::M2RenderInstanceResult &result) {
               return result.status == m2::M2ResultStatus::kNotReady;
             });
+        {
+          // Meting: hoeveel werpers klaar zijn en waarom de rest niet (log elke ~60e far-pass).
+          static std::uint32_t far_pass_counter = 0u;
+          std::array<std::uint32_t, 32> reasons{};
+          std::uint32_t not_ready = 0u;
+          std::uint32_t drawn = 0u;
+          for (const m2::M2RenderInstanceResult &result : render_results_scratch_) {
+            if (result.submitted_draw_count > 0u) {
+              ++drawn;
+            }
+            if (result.status != m2::M2ResultStatus::kReady) {
+              ++not_ready;
+              const auto reason = static_cast<std::size_t>(result.reason);
+              ++reasons[std::min<std::size_t>(reason, reasons.size() - 1u)];
+            }
+          }
+          if (far_incomplete || (far_pass_counter++ % 60u) == 0u) {
+            std::string detail;
+            for (std::size_t index = 0; index < reasons.size(); ++index) {
+              if (reasons[index] != 0u) {
+                detail += std::string(" ") +
+                          m2::M2ResultReasonName(static_cast<m2::M2ResultReason>(index)) + "=" +
+                          std::to_string(reasons[index]);
+              }
+            }
+            diagnostics::Log(diagnostics::LogLevel::kInfo,
+                "ShadowFar: pass casters=" + std::to_string(far_instance_ids_.size()) +
+                " drawn=" + std::to_string(drawn) + " notReady=" + std::to_string(not_ready) +
+                " incomplete=" + std::to_string(far_incomplete) + " reasons:" + detail +
+                " center=(" + std::to_string(far_data_->GetShadowCenter()[0]) + "," +
+                std::to_string(far_data_->GetShadowCenter()[1]) + ") radius=" +
+                std::to_string(far_data_->GetShadowRadius()));
+          }
+        }
         if (far_incomplete) {
           has_far_rendered_hash_ = false;
           far_retry_cooldown_ = 6u;
