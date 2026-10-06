@@ -123,6 +123,7 @@ void ShadowPresentationRuntime::ApplySettings(const world::WorldPresentationSnap
   const float strength = std::clamp(settings.strength, 0.0f, 1.0f) * day;
   data_->SetStrength(strength);
   data_->SetEnabled(settings.enabled && strength > 0.01f);
+  data_->SetDebugMode(settings.debug_mode);
   data_->SetQuality(ResolveQuality(settings.quality));
   data_->SetShadowDistance(std::max(settings.distance, 1.0f));
   data_->SetShadowBias(std::max(settings.depth_bias, 0.0f));
@@ -391,7 +392,6 @@ void ShadowPresentationRuntime::Render(const world::WorldPresentationSnapshot &s
             });
         {
           // Meting: hoeveel werpers klaar zijn en waarom de rest niet (log elke ~60e far-pass).
-          static std::uint32_t far_pass_counter = 0u;
           std::array<std::uint32_t, 32> reasons{};
           std::uint32_t not_ready = 0u;
           std::uint32_t drawn = 0u;
@@ -405,7 +405,7 @@ void ShadowPresentationRuntime::Render(const world::WorldPresentationSnapshot &s
               ++reasons[std::min<std::size_t>(reason, reasons.size() - 1u)];
             }
           }
-          if (far_incomplete || (far_pass_counter++ % 60u) == 0u) {
+          if (far_incomplete) {
             std::string detail;
             for (std::size_t index = 0; index < reasons.size(); ++index) {
               if (reasons[index] != 0u) {
@@ -436,21 +436,6 @@ void ShadowPresentationRuntime::Render(const world::WorldPresentationSnapshot &s
     }
   }
   data_->SetFarCascade(far_ready ? far_data_.get() : nullptr);
-  {
-    // Tijdelijke meting (Error, want de client logt standaard alleen Error): toestand elke ~120 frames.
-    static std::uint32_t far_status_frame = 0u;
-    if ((far_status_frame++ % 120u) == 0u) {
-      diagnostics::Log(diagnostics::LogLevel::kError,
-          "ShadowFar: status wanted=" + std::to_string(far_wanted) +
-          " initialized=" + std::to_string(far_initialized_) +
-          " farIds=" + std::to_string(far_instance_ids_.size()) +
-          " nearIds=" + std::to_string(instance_ids_.size()) +
-          " ready=" + std::to_string(far_ready) +
-          " farDistance=" + std::to_string(snapshot.shadows.far_distance) +
-          " strength=" + std::to_string(data_->GetStrength()));
-    }
-  }
-
   data_->SetCasters(casters_);
   if (instance_ids_.empty() && !has_instanced_groups && !far_ready) {
     InvalidateShadowReuse();

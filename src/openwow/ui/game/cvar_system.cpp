@@ -2112,6 +2112,7 @@ void CVarSystem::RegisterDefaults() {
   RegisterCVar("gfxDither", "0", F::Archive, "Dither strength against banding (0 = off)", 0.0f, 2.0f);
   RegisterCVar("gfxShadows", "0", F::Archive, "Sun shadows (shadow map, fades out at night); 0 = off", 0.0f, 1.0f);
   RegisterCVar("gfxShadowStrength", "0.7", F::Archive, "Sun shadow darkness (0..1)", 0.0f, 1.0f);
+  RegisterCVar("gfxShadowDebug", "0", F::None, "Shadow debug: 1 = far map only, 2 = near map only, 3 = show map coverage", 0.0f, 3.0f);
   RegisterCVar("gfxShadowDistance", "120", F::Archive, "Sun shadow distance in yards; above 120 adds a coarser far shadow map (120 = near map only)", 120.0f, 500.0f);
   RegisterCVar("gfxClutter", "1", F::Archive, "Ground clutter (grass, flowers, pebbles); 0 = off", 0.0f, 1.0f);
   RegisterCVar("fogModel", "0", F::Archive, "Fog model: 0 = original linear fog, 1 = modern (exponential, sun-tinted)", 0.0f, 1.0f);

@@ -63,7 +63,17 @@ float dynamicShadowVisibility(vec3 worldPos)
     float farStrength = clamp(u_shadowParamsFar.z, 0.0, 1.0);
     float farVisibility = mix(1.0, farLit, farStrength * farWeight);
 
-    return mix(farVisibility, nearVisibility, nearWeight);
+    // Debug (u_shadowParamsFar.w): 1 = alleen far, 2 = alleen near, 3 = dekking als grijstinten.
+    float debugMode = u_shadowParamsFar.w;
+    float combined = mix(farVisibility, nearVisibility, nearWeight);
+    float onlyFar = farVisibility;
+    float onlyNear = mix(1.0, nearVisibility, nearWeight);
+    float coverage = mix(mix(1.0, 0.8, farWeight), 0.5, nearWeight);
+    float result = combined;
+    result = debugMode > 0.5 && debugMode < 1.5 ? onlyFar : result;
+    result = debugMode > 1.5 && debugMode < 2.5 ? onlyNear : result;
+    result = debugMode > 2.5 ? coverage : result;
+    return result;
 }
 
 #endif

@@ -86,6 +86,8 @@ public:
     void SetRadiusOverride(float radius) noexcept { radius_override_ = std::max(radius, 0.0f); }
     // Zwaardere diepte-bias voor de grove far-kaart (meer wereldeenheden per texel).
     void SetBiasScale(float scale) noexcept { bias_scale_ = std::max(scale, 0.0f); }
+    // Debugmodus voor de ontvangers (u_shadowParamsFar.w): 0 uit, 1 far, 2 near, 3 dekking.
+    void SetDebugMode(int mode) noexcept { debug_mode_ = mode; }
     // Rooster (yd) waaraan het kaartmiddelpunt vastzit en de dode zone waarbinnen het blijft staan.
     void SetCenterGrid(float grid, float hold) noexcept {
         center_grid_ = std::max(grid, 1.0f);
@@ -176,6 +178,7 @@ private:
     const ShadowRenderData* far_cascade_ = nullptr;
     float radius_override_ = 0.0f;
     float bias_scale_ = 1.0f;
+    int debug_mode_ = 0;
     float center_grid_ = 32.0f;
     float center_hold_ = 28.0f;
     bool enabled_       = true;

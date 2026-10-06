@@ -5426,6 +5426,8 @@ void GameLoop::RenderWorld(float dt) {
       cvars.Exists("gfxShadowDistance")
           ? std::clamp(cvars.GetCVarFloat("gfxShadowDistance"), 0.0f, 500.0f)
           : 0.0f;
+  shadow_settings.debug_mode =
+      cvars.Exists("gfxShadowDebug") ? static_cast<int>(cvars.GetCVarFloat("gfxShadowDebug")) : 0;
   world_scene_.SetShadowPresentationSettings(shadow_settings);
   world_scene_.SetSpecularEnabled(cvars.GetCVarBool("specular") && PixelShadersEnabled());
 

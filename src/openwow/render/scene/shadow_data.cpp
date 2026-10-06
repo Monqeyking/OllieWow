@@ -225,12 +225,13 @@ void ShadowRenderData::BindShadowState(bgfx::Encoder* const encoder) const {
         const float far_texel_world = (2.0f * far_map->radius_) * far_inv_res;
         const float far_bias =
             (0.3f + far_texel_world) * far_map->bias_scale_ / std::max(far_map->depth_range_, 1.0f);
-        const RenderVec4 far_params{far_bias, far_inv_res, far_map->strength_, far_map->radius_};
+        const RenderVec4 far_params{far_bias, far_inv_res, far_map->strength_,
+                                    static_cast<float>(debug_mode_)};
         draw.setUniform(backend_->far_parameters, far_params.data());
     } else {
         draw.setTexture(6, backend_->far_sampler, backend_->shadow_depth_tex);
         draw.setUniform(backend_->far_matrix, light_view_proj_);
-        const RenderVec4 off_params{0.0f, inv_res, 0.0f, radius_};
+        const RenderVec4 off_params{0.0f, inv_res, 0.0f, static_cast<float>(debug_mode_)};
         draw.setUniform(backend_->far_parameters, off_params.data());
     }
 }
