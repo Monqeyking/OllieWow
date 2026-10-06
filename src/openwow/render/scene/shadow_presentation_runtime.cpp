@@ -414,7 +414,8 @@ void ShadowPresentationRuntime::Render(const world::WorldPresentationSnapshot &s
                           std::to_string(reasons[index]);
               }
             }
-            diagnostics::Log(diagnostics::LogLevel::kInfo,
+            // Tijdelijk Warn: de client schrijft Info niet weg (zie logging min_level).
+            diagnostics::Log(diagnostics::LogLevel::kWarn,
                 "ShadowFar: pass casters=" + std::to_string(far_instance_ids_.size()) +
                 " drawn=" + std::to_string(drawn) + " notReady=" + std::to_string(not_ready) +
                 " incomplete=" + std::to_string(far_incomplete) + " reasons:" + detail +
@@ -435,6 +436,20 @@ void ShadowPresentationRuntime::Render(const world::WorldPresentationSnapshot &s
     }
   }
   data_->SetFarCascade(far_ready ? far_data_.get() : nullptr);
+  {
+    // Tijdelijke meting (Warn, want Info wordt niet weggeschreven): toestand elke ~120 frames.
+    static std::uint32_t far_status_frame = 0u;
+    if ((far_status_frame++ % 120u) == 0u) {
+      diagnostics::Log(diagnostics::LogLevel::kWarn,
+          "ShadowFar: status wanted=" + std::to_string(far_wanted) +
+          " initialized=" + std::to_string(far_initialized_) +
+          " farIds=" + std::to_string(far_instance_ids_.size()) +
+          " nearIds=" + std::to_string(instance_ids_.size()) +
+          " ready=" + std::to_string(far_ready) +
+          " farDistance=" + std::to_string(snapshot.shadows.far_distance) +
+          " strength=" + std::to_string(data_->GetStrength()));
+    }
+  }
 
   data_->SetCasters(casters_);
   if (instance_ids_.empty() && !has_instanced_groups && !far_ready) {
