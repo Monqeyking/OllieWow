@@ -80,6 +80,15 @@ private:
   // Tellers voor de far-pass: een pass met nog niet klare modellen wordt (met tussenpozen)
   // opnieuw geprobeerd in plaats van als af te gelden.
   std::uint32_t far_retry_cooldown_{0u};
+  // De positie van een M2-instance wordt normaal pas door de gewone render vastgelegd, en alleen
+  // voor doodads die de camera toelaat. Het schaduwpass legt zelf vast wat het nog niet kent.
+  struct AdoptedTransform {
+    std::uint64_t revision{0u};
+    std::uint32_t model_id{0u};
+  };
+  std::unordered_map<std::uint32_t, AdoptedTransform> adopted_transforms_;
+  std::vector<m2::M2DoodadFrameRenderRequest> adopt_requests_;
+  std::vector<m2::M2ResultStatus> adopt_statuses_;
   std::vector<ShadowCasterEntry> casters_;
   std::vector<std::uint32_t> instance_ids_;
   std::vector<std::uint32_t> extra_caster_ids_;

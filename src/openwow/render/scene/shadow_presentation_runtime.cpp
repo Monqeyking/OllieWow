@@ -20,6 +20,10 @@ namespace {
 
 constexpr double kShadowCasterRenderMicroseconds = 1.15;
 
+// Standaard batch-uniforms voor een schaduwwerper die de gewone render nog niet kent: de
+// schaduwpass schrijft alleen diepte, dus verlichting doet er niet toe.
+const m2::M2BatchUniforms kShadowCasterUniforms{};
+
 ShadowQuality ResolveQuality(const std::uint8_t quality) {
   return static_cast<ShadowQuality>(
       std::min<std::uint8_t>(quality,
@@ -86,6 +90,7 @@ void ShadowPresentationRuntime::Shutdown() {
   data_->ClearCasters();
   far_data_->DestroyShadowMap();
   far_data_->ClearCasters();
+  adopted_transforms_.clear();
   far_initialized_ = false;
   far_instance_ids_.clear();
   far_casters_.clear();
@@ -232,6 +237,7 @@ void ShadowPresentationRuntime::Render(const world::WorldPresentationSnapshot &s
   instanced_groups_.clear();
   far_instance_ids_.clear();
   far_casters_.clear();
+  adopt_requests_.clear();
   const bool far_wanted = far_initialized_ && far_data_->IsEnabled();
   // Verre werpers: grote, statische doodads (grootteklasse >= 2, vanaf ~4 yd) binnen de far-kaart.
   const float far_gather = std::min(snapshot.shadows.far_distance, 500.0f) * 1.5f;
@@ -269,7 +275,26 @@ void ShadowPresentationRuntime::Render(const world::WorldPresentationSnapshot &s
                                     instance.shadow_class_memo =
                                         static_cast<std::int32_t>(shadow_class.shadow_class);
                                   }
-                                  if (far_candidate) {
+                                  {
+                                     // Positie vastleggen voor een werper die de gewone render nog
+                                     // nooit heeft gezien; anders staat hij op de modelstandaard.
+                                     const auto adopted =
+                                         adopted_transforms_.find(instance.m2_instance_id);
+                                     if (adopted == adopted_transforms_.end() ||
+                                         adopted->second.revision != instance.model_matrix_revision ||
+                                         adopted->second.model_id != instance.m2_model_id) {
+                                       adopted_transforms_[instance.m2_instance_id] = {
+                                           instance.model_matrix_revision, instance.m2_model_id};
+                                       m2::M2DoodadFrameRenderRequest request;
+                                       request.instance_id = instance.m2_instance_id;
+                                       request.world_transform = &instance.model_matrix;
+                                       request.uniforms = &kShadowCasterUniforms;
+                                       request.world_transform_revision =
+                                           instance.model_matrix_revision;
+                                       adopt_requests_.push_back(request);
+                                     }
+                                   }
+                                   if (far_candidate) {
                                      far_instance_ids_.push_back(instance.m2_instance_id);
                                      far_casters_.push_back(
                                          ShadowCasterEntry{.entityId = instance.m2_instance_id,
@@ -331,6 +356,17 @@ void ShadowPresentationRuntime::Render(const world::WorldPresentationSnapshot &s
                                   }
                                   instance_ids_.push_back(instance.m2_instance_id);
                                 });
+
+  if (!adopt_requests_.empty()) {
+    adopt_statuses_.resize(adopt_requests_.size());
+    m2_system_.SetDoodadFrameRenderStates(adopt_requests_, adopt_statuses_);
+    // Een niet-gelukte adoptie (bv. tijdelijk niet klaar) opnieuw proberen.
+    for (std::size_t index = 0; index < adopt_requests_.size(); ++index) {
+      if (adopt_statuses_[index] != m2::M2ResultStatus::kReady) {
+        adopted_transforms_.erase(adopt_requests_[index].instance_id);
+      }
+    }
+  }
 
   if (extra_caster_provider_) {
     extra_caster_ids_.clear();
