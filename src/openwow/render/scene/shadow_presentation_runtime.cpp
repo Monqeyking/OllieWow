@@ -414,8 +414,8 @@ void ShadowPresentationRuntime::Render(const world::WorldPresentationSnapshot &s
                           std::to_string(reasons[index]);
               }
             }
-            // Tijdelijk Warn: de client schrijft Info niet weg (zie logging min_level).
-            diagnostics::Log(diagnostics::LogLevel::kWarn,
+            // Tijdelijk Error: de client logt standaard alleen Error (composition/main.cpp InitLogging).
+            diagnostics::Log(diagnostics::LogLevel::kError,
                 "ShadowFar: pass casters=" + std::to_string(far_instance_ids_.size()) +
                 " drawn=" + std::to_string(drawn) + " notReady=" + std::to_string(not_ready) +
                 " incomplete=" + std::to_string(far_incomplete) + " reasons:" + detail +
@@ -437,10 +437,10 @@ void ShadowPresentationRuntime::Render(const world::WorldPresentationSnapshot &s
   }
   data_->SetFarCascade(far_ready ? far_data_.get() : nullptr);
   {
-    // Tijdelijke meting (Warn, want Info wordt niet weggeschreven): toestand elke ~120 frames.
+    // Tijdelijke meting (Error, want de client logt standaard alleen Error): toestand elke ~120 frames.
     static std::uint32_t far_status_frame = 0u;
     if ((far_status_frame++ % 120u) == 0u) {
-      diagnostics::Log(diagnostics::LogLevel::kWarn,
+      diagnostics::Log(diagnostics::LogLevel::kError,
           "ShadowFar: status wanted=" + std::to_string(far_wanted) +
           " initialized=" + std::to_string(far_initialized_) +
           " farIds=" + std::to_string(far_instance_ids_.size()) +
